@@ -146,8 +146,7 @@ services:
       start_period: 40s
 
   # ========================================================================
-  # React Frontend + Nginx
-  # ========================================================================
+   # React Frontend + Nginx
   frontend:
     build:
       context: ./frontend
@@ -162,8 +161,7 @@ services:
         VITE_FIREBASE_MEASUREMENT_ID: ${VITE_FIREBASE_MEASUREMENT_ID}
         VITE_API_URL: ${VITE_API_URL}
     container_name: scan-app-frontend
-    ports:
-      - "8081:80"
+    network_mode: host
     depends_on:
       backend:
         condition: service_healthy
@@ -172,7 +170,7 @@ services:
 
     # Health check
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1/health"]
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8081/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -187,10 +185,6 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-
-    # Networking
-    networks:
-      - app-network
 
 # ============================================================================
 # NETWORKS

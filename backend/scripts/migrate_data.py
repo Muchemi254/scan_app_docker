@@ -121,6 +121,7 @@ async def migrate_receipts(pool, db):
                                         INSERT INTO line_items (receipt_id, sort_order, name,
                                             quantity, price, tax, is_zero_rated, discount)
                                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                                        ON CONFLICT (receipt_id, sort_order) DO NOTHING
                                     """, rid, idx,
                                         item.get("name", "N/A"),
                                         float(item.get("quantity", 1)),

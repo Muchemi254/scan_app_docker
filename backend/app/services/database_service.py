@@ -267,6 +267,7 @@ class DatabaseService:
                         INSERT INTO line_items (receipt_id, sort_order, name, quantity,
                             price, tax, is_zero_rated, discount)
                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                            ON CONFLICT (receipt_id, sort_order) DO NOTHING
                         """,
                         [
                             (
@@ -464,6 +465,7 @@ class DatabaseService:
                             INSERT INTO line_items (receipt_id, sort_order, name, quantity,
                                 price, tax, is_zero_rated, discount)
                             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                            ON CONFLICT (receipt_id, sort_order) DO NOTHING
                             """,
                             [
                                 (

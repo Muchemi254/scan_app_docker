@@ -61,6 +61,7 @@ def upgrade() -> None:
         sa.Column("discount", sa.Numeric(5, 2), nullable=True),
     )
     op.create_index("idx_line_items_receipt", "line_items", ["receipt_id", "sort_order"])
+    op.create_unique_constraint("uq_line_items_receipt_sort", "line_items", ["receipt_id", "sort_order"])
 
     # ── audit_logs ────────────────────────────────────────────────────────
     op.create_table(
