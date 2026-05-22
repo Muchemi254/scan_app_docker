@@ -229,24 +229,26 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
                 <div className="flex items-center justify-between gap-1">
                   <span className="font-medium text-sm truncate text-gray-900">{receipt.supplier}</span>
                   <span
-                className={`shrink-0 w-2 h-2 rounded-full ${isComplete(receipt) ? 'bg-green-500' : 'bg-red-500'}`}
-                title={isComplete(receipt) ? 'Processed' : 'Needs review'}
-              />
-            </div>
-            
-            <div className="flex flex-col gap-0.5 mt-1">
-              <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                <Calendar className="h-3 w-3 shrink-0" />
-                <span>{receipt.receiptDate}</span>
-              </div>
-              {receipt.scannedAt && (
-                <div className="flex items-center gap-1.5 text-[10px] text-gray-400">
-                  <Clock className="h-2.5 w-2.5 shrink-0" />
-                  <span>Scanned: {new Date(receipt.scannedAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</span>
+                    className={`shrink-0 w-2 h-2 rounded-full ${isComplete(receipt) ? 'bg-green-500' : 'bg-red-500'}`}
+                    title={isComplete(receipt) ? 'Processed' : 'Needs review'}
+                  />
                 </div>
-              )}
+
+                <div className="flex flex-col gap-0.5 mt-1">
+                  <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                    <Calendar className="h-3 w-3 shrink-0" />
+                    <span>{receipt.receiptDate}</span>
+                  </div>
+                  {receipt.scannedAt && (
+                    <div className="flex items-center gap-1.5 text-[10px] text-gray-400">
+                      <Clock className="h-2.5 w-2.5 shrink-0" />
+                      <span>Scanned: {new Date(receipt.scannedAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}</span>
+                    </div>
+                  )}
+                </div>
+                <div className="text-sm text-blue-600 font-bold mt-2 leading-none">KES {Number(receipt.totalAmount).toLocaleString()}</div>
+              </div>
             </div>
-            <div className="text-sm text-blue-600 font-bold mt-2 leading-none">KES {Number(receipt.totalAmount).toLocaleString()}</div>
           </div>
         ))}
       </div>
