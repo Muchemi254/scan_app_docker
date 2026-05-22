@@ -439,27 +439,31 @@ class DatabaseService:
                 set_parts.append(f"receipt_date = ${p_idx}")
                 params.append(rd)
                 p_idx += 1
-        if receipt_data.get("category") is not None:
+        # Skip empty strings for optional fields — prevents blanking out data
+        def _provided(val):
+            return val is not None and val != ""
+
+        if receipt_data.get("category") is not None and _provided(receipt_data["category"]):
             set_parts.append(f"category = ${p_idx}")
             params.append(receipt_data["category"])
             p_idx += 1
-        if receipt_data.get("invoiceNumber") is not None:
+        if receipt_data.get("invoiceNumber") is not None and _provided(receipt_data["invoiceNumber"]):
             set_parts.append(f"invoice_number = ${p_idx}")
             params.append(receipt_data["invoiceNumber"])
             p_idx += 1
-        if receipt_data.get("kraPin") is not None:
+        if receipt_data.get("kraPin") is not None and _provided(receipt_data["kraPin"]):
             set_parts.append(f"kra_pin = ${p_idx}")
             params.append(receipt_data["kraPin"])
             p_idx += 1
-        if receipt_data.get("buyerKraPin") is not None:
+        if receipt_data.get("buyerKraPin") is not None and _provided(receipt_data["buyerKraPin"]):
             set_parts.append(f"buyer_kra_pin = ${p_idx}")
             params.append(receipt_data["buyerKraPin"])
             p_idx += 1
-        if receipt_data.get("cuInvoice") is not None:
+        if receipt_data.get("cuInvoice") is not None and _provided(receipt_data["cuInvoice"]):
             set_parts.append(f"cu_invoice = ${p_idx}")
             params.append(receipt_data["cuInvoice"])
             p_idx += 1
-        if receipt_data.get("batchTitle") is not None:
+        if receipt_data.get("batchTitle") is not None and _provided(receipt_data["batchTitle"]):
             set_parts.append(f"batch_title = ${p_idx}")
             params.append(receipt_data["batchTitle"])
             p_idx += 1
