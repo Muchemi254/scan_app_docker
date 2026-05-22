@@ -1,0 +1,192 @@
+services:
+  # ========================================================================
+  # Redis — batch state store
+  # ========================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: scan-app-redis
+    restart: unless-stopped
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+    networks:
+      - app-network
+
+  # ========================================================================
+  # FastAPI Backend
+  # ========================================================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: scan-app-backend
+    ports:
+      - "8003:8000"
+    volumes:
+      # Mount Firebase service account JSON file
+      - ./firebaseservice.json:/app/firebaseservice.json:ro
+      # Persist SQLite review batch database across container rebuilds
+      - review_batch_data:/app/data
+    environment:
+      # SQLite database path for review batches
+      REVIEW_BATCH_DB_PATH: /app/data/review_batches.db
+      # Firebase Configuration - Uses service account JSON file mounted at /app/firebaseservice.json
+      FIREBASE_CREDENTIALS_PATH: /app/firebaseservice.json
+
+      # Gemini API
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+
+      # Security
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+      ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: 30
+
+      # API
+      API_TITLE: "Scan App API"
+      API_VERSION: "1.0.0"
+      HOST: "0.0.0.0"
+      PORT: 8000
+
+      # Redis
+      REDIS_URL: redis://redis:6379/0
+
+      # Features
+      ENABLE_DOCS: "true"
+
+      # Logging
+      LOG_LEVEL: INFO
+
+    depends_on:
+      - redis
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # Networking
+    networks:
+      - app-network
+
+  # ========================================================================
+  # Celery Worker
+  # ========================================================================
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: scan-app-worker
+    command: celery -A app.core.celery_app worker --loglevel=info
+    volumes:
+      - ./firebaseservice.json:/app/firebaseservice.json:ro
+    environment:
+      FIREBASE_CREDENTIALS_PATH: /app/firebaseservice.json
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      - redis
+      - backend
+    networks:
+      - app-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "celery", "-A", "app.core.celery_app", "inspect", "ping", "-d", "celery@$HOSTNAME"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ========================================================================
+  # React Frontend + Nginx
+  # ========================================================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_FIREBASE_API_KEY: ${VITE_FIREBASE_API_KEY}
+        VITE_FIREBASE_AUTH_DOMAIN: ${VITE_FIREBASE_AUTH_DOMAIN}
+        VITE_FIREBASE_PROJECT_ID: ${VITE_FIREBASE_PROJECT_ID}
+        VITE_FIREBASE_STORAGE_BUCKET: ${VITE_FIREBASE_STORAGE_BUCKET}
+        VITE_FIREBASE_MESSAGING_SENDER_ID: ${VITE_FIREBASE_MESSAGING_SENDER_ID}
+        VITE_FIREBASE_APP_ID: ${VITE_FIREBASE_APP_ID}
+        VITE_FIREBASE_MEASUREMENT_ID: ${VITE_FIREBASE_MEASUREMENT_ID}
+        VITE_API_URL: ${VITE_API_URL}
+    container_name: scan-app-frontend
+    ports:
+      - "8081:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    # No runtime env vars needed — Vite bakes them in at build time.
+    # VITE_API_URL defaults to /api/v1 (relative, works from any IP).
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # Networking
+    networks:
+      - app-network
+
+# ============================================================================
+# NETWORKS
+# ============================================================================
+networks:
+  app-network:
+    driver: bridge
+
+# ============================================================================
+# VOLUMES (if needed for persistent data)
+# ============================================================================
+volumes:
+  review_batch_data:
+    driver: local
+
+# ============================================================================
+# NOTES
+# ============================================================================
+#
+# Start services:
+#   docker-compose up -d
+#
+# View logs:
+#   docker-compose logs -f backend
+#   docker-compose logs -f frontend
+#
+# Stop services:
+#   docker-compose down
+#
+# Rebuild images:
+#   docker-compose build --no-cache
+#
+# Access:
+#   Frontend: http://localhost
+#   Backend API: http://localhost:8003
+#   API Docs: http://localhost:8003/docs
+#
