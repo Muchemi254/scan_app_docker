@@ -56,12 +56,13 @@ export interface ImportResult {
 }
 
 export const backupApi = {
-  /** Create and download a backup */
-  async exportBackup(): Promise<void> {
+  /** Create and download a backup with progress callback */
+  async exportBackup(onProgress?: (pct: number, status: string) => void): Promise<void> {
     const authorization = await getAuthHeader();
     const userId = getUserId();
     const url = `${API_BASE_URL}/users/${userId}/backup/export`;
 
+    onProgress?.(5, 'Connecting...');
     const response = await fetch(url, {
       method: 'POST',
       headers: { Authorization: authorization },
@@ -72,7 +73,28 @@ export const backupApi = {
       throw new Error(err.detail || 'Export failed');
     }
 
-    const blob = await response.blob();
+    const contentLength = response.headers.get('Content-Length');
+    const total = contentLength ? parseInt(contentLength) : 0;
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error('No response body');
+
+    onProgress?.(10, 'Downloading...');
+    const chunks: Uint8Array[] = [];
+    let received = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      received += value.length;
+      if (total > 0) {
+        const pct = Math.round(10 + (received / total) * 80);
+        onProgress?.(pct, `Downloading ${(received / 1024 / 1024).toFixed(1)} MB...`);
+      }
+    }
+
+    onProgress?.(95, 'Finalizing...');
+    const blob = new Blob(chunks);
     const disposition = response.headers.get('Content-Disposition') || '';
     const match = disposition.match(/filename="?(.+?)"?$/);
     const filename = match ? match[1] : 'scanapp_backup.tar.gz';
@@ -82,6 +104,7 @@ export const backupApi = {
     a.download = filename;
     a.click();
     URL.revokeObjectURL(url_blob);
+    onProgress?.(100, 'Complete');
   },
 
   /** List all backups */

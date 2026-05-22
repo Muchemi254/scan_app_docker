@@ -21,6 +21,7 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
   const [backups, setBackups] = useState<BackupEntry[]>([]);
   const [loadingBackups, setLoadingBackups] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState({ pct: 0, status: '' });
   const [importFile, setImportFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<BackupPreview | null>(null);
   const [previewing, setPreviewing] = useState(false);
@@ -28,6 +29,7 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
   const [conflictMode, setConflictMode] = useState<string>('skip');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  const [importStep, setImportStep] = useState<string>('');  // '' | 'uploading' | 'previewing' | 'importing' | 'done'
   const [error, setError] = useState('');
   const [showDetail, setShowDetail] = useState(false);
 
@@ -47,7 +49,9 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
   useEffect(() => { if (userId) loadBackups(); }, [userId, loadBackups]);
 
   const handleExport = async () => {
-    try { setExporting(true); setError(''); await backupApi.exportBackup(); await loadBackups(); }
+    try { setExporting(true); setError(''); setExportProgress({pct:0,status:'Starting...'});
+      await backupApi.exportBackup((pct, status) => setExportProgress({pct, status}));
+      await loadBackups(); }
     catch (e) { setError(e instanceof Error ? e.message : 'Export failed'); }
     finally { setExporting(false); }
   };
@@ -56,13 +60,16 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
     setImportFile(file);
     setImportResult(null);
     setSelectedIds(new Set());
+    setImportStep('previewing');
     try {
       setPreviewing(true);
       const p = await backupApi.previewBackup(file);
       setPreview(p);
       setError('');
+      setImportStep('');
     } catch (e) {
       setPreview(null);
+      setImportStep('');
       setError(e instanceof Error ? e.message : 'Preview failed');
     } finally {
       setPreviewing(false);
@@ -73,11 +80,14 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
     if (!importFile) return;
     try {
       setImporting(true);
+      setImportStep('importing');
       const ids = selectedIds.size > 0 ? Array.from(selectedIds) : undefined;
       const result = await backupApi.importBackup(importFile, conflictMode, ids);
       setImportResult(result);
+      setImportStep('done');
       setError('');
     } catch (e) {
+      setImportStep('');
       setError(e instanceof Error ? e.message : 'Import failed');
     } finally {
       setImporting(false);
@@ -154,6 +164,14 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
               <Download className="h-4 w-4" />
               {exporting ? 'Creating backup...' : 'Export Full Backup'}
             </button>
+            {exporting && (
+              <div className="space-y-1">
+                <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                  <div className="h-full bg-blue-500 rounded-full transition-all duration-300" style={{ width: `${exportProgress.pct}%` }} />
+                </div>
+                <p className="text-xs text-gray-500">{exportProgress.status} ({exportProgress.pct}%)</p>
+              </div>
+            )}
           </div>
 
           {/* Import */}
@@ -191,6 +209,31 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
                 </button>
               )}
             </label>
+
+            {/* Import step indicator */}
+            {importStep && (
+              <div className="space-y-1">
+                <div className="flex items-center gap-3 text-sm">
+                  {importStep === 'importing' ? (
+                    <RefreshCw className="h-4 w-4 animate-spin text-blue-500" />
+                  ) : importStep === 'done' ? (
+                    <CheckCircle className="h-4 w-4 text-green-500" />
+                  ) : importStep === 'previewing' ? (
+                    <RefreshCw className="h-4 w-4 animate-spin text-amber-500" />
+                  ) : null}
+                  <span className="text-gray-600">
+                    {importStep === 'previewing' && 'Analyzing backup file...'}
+                    {importStep === 'importing' && 'Importing receipts and images...'}
+                    {importStep === 'done' && 'Import complete!'}
+                  </span>
+                </div>
+                {importStep === 'importing' && (
+                  <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                    <div className="h-full bg-green-500 rounded-full animate-pulse" style={{ width: '100%' }} />
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Preview loading */}
             {previewing && (
