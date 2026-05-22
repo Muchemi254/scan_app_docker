@@ -20,8 +20,16 @@ def _row_to_task(row) -> Task:
     d["id"] = str(d["id"])
     d["task_type"] = d["task_type"]
     d["status"] = d["status"]
-    d["metadata"] = d.get("metadata") or {}
-    d["results"] = d.get("results") or {}
+    metadata = d.get("metadata") or {}
+    if isinstance(metadata, str):
+        import json
+        metadata = json.loads(metadata)
+    d["metadata"] = metadata
+    results = d.get("results") or {}
+    if isinstance(results, str):
+        import json
+        results = json.loads(results)
+    d["results"] = results
     return Task(**d)
 
 
@@ -46,13 +54,13 @@ class TaskService:
                     total_items, completed_items, current_step, total_steps,
                     percentage, message, error, metadata, results,
                     created_at, updated_at, started_at, completed_at)
-                VALUES ($1, $2, $3, $4, $5, $6, 0, 0, $7, 0, $8, NULL, $9::jsonb, '{}'::jsonb,
+                VALUES ($1, $2, $3, $4, $5, $6, 0, 0, $7, 0, $8, NULL, $9, '{}',
                         $10, $10, NULL, NULL)
                 """,
                 task_id, user_id, task_type.value, batch_title,
                 TaskStatus.QUEUED.value, total_items, total_items,
                 "Task created, waiting to start",
-                json.dumps(metadata or {}, default=str),
+                metadata or {},
                 now,
             )
         logger.info("Created task %s for user %s", task_id, user_id)
@@ -157,12 +165,12 @@ class TaskService:
             await conn.execute(
                 """
                 UPDATE tasks
-                SET results = results || $3::jsonb,
+                SET results = results || $3,
                     updated_at = $4
                 WHERE id = $1 AND user_id = $2
                 """,
                 task_id, user_id,
-                json.dumps({result_key: result_data}, default=str),
+                {result_key: result_data},
                 datetime.now(timezone.utc),
             )
             return True

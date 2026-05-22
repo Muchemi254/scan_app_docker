@@ -45,19 +45,17 @@ class AuditService:
     ) -> str:
         entry_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
-        changes_json = json.dumps(
-            [c.model_dump() for c in changes] if changes else [],
-            default=str,
-        )
+        changes_data = [c.model_dump() for c in changes] if changes else []
 
         pool = await get_pool()
         async with pool.acquire() as conn:
             await conn.execute(
                 """
                 INSERT INTO audit_logs (id, receipt_id, user_id, action, changed_by, timestamp, changes)
-                VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
                 """,
-                entry_id, receipt_id, user_id, action.value, changed_by, now, changes_json,
+                entry_id, receipt_id, user_id, action.value, changed_by, now,
+                changes_data,
             )
         logger.info("Audit: %s receipt %s by %s", action.value, receipt_id, changed_by)
         return entry_id
@@ -80,6 +78,9 @@ class AuditService:
             )
             results = []
             for r in rows:
+                changes = r["changes"]
+                if isinstance(changes, str):
+                    changes = json.loads(changes) if changes else []
                 results.append({
                     "id": str(r["id"]),
                     "receipt_id": str(r["receipt_id"]),
@@ -87,7 +88,7 @@ class AuditService:
                     "action": r["action"],
                     "changed_by": r["changed_by"],
                     "timestamp": r["timestamp"],
-                    "changes": r["changes"] or [],
+                    "changes": changes or [],
                 })
             return results
 

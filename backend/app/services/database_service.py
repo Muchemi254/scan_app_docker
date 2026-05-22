@@ -14,8 +14,8 @@ as /receipt-images/{id} routes served by the existing image proxy.
 """
 
 import logging
+import json
 import os
-import uuid
 import re
 from datetime import datetime, timezone, date
 from decimal import Decimal
@@ -186,28 +186,30 @@ class DatabaseService:
             )
             if not row:
                 return None
+            configs = row["configs"]
+            if isinstance(configs, str):
+                configs = json.loads(configs)
             return {
                 "provider": row["provider"],
                 "model_id": row["model_id"],
-                "configs": row["configs"] or {},
+                "configs": configs or {},
             }
 
     @staticmethod
     async def update_user_settings(user_id: str, settings_key: str, data: Dict[str, Any]) -> bool:
         pool = await get_pool()
-        import json
         async with pool.acquire() as conn:
             await conn.execute(
                 """
                 INSERT INTO user_ai_settings (user_id, provider, model_id, configs)
-                VALUES ($1, $2, $3, $4::jsonb)
+                VALUES ($1, $2, $3, $4)
                 ON CONFLICT (user_id)
-                DO UPDATE SET provider = $2, model_id = $3, configs = $4::jsonb
+                DO UPDATE SET provider = $2, model_id = $3, configs = $4
                 """,
                 user_id,
                 data.get("provider", "gemini"),
                 data.get("model_id", "gemini-3-flash-preview"),
-                json.dumps(data.get("configs", {})),
+                data.get("configs", {}),
             )
             return True
 
