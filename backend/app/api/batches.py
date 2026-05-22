@@ -157,6 +157,10 @@ async def _process_batch(batch_id: str, user_id: str, batch_title: str) -> None:
                     await batch_service.update_item(batch_id, idx, item_status, receipt_id=receipt_id, message=msg)
                 except Exception as item_exc:
                     logger.error(f"Batch {batch_id} item {idx} failed: {item_exc}")
+                    # Clean up orphaned images
+                    if settings.USE_POSTGRES:
+                        from app.services.database_service import delete_receipt_images
+                        delete_receipt_images(pre_id)
                     await batch_service.update_item(batch_id, idx, "failed", message=str(item_exc)[:200])
 
         except asyncio.CancelledError:
