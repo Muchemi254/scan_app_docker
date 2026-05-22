@@ -45,7 +45,7 @@ class AuditService:
     ) -> str:
         entry_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
-        changes_data = json.dumps([c.model_dump() for c in changes] if changes else [])
+        changes_data = json.dumps([c.model_dump() for c in changes] if changes else [], default=str)
 
         pool = await get_pool()
         async with pool.acquire() as conn:
