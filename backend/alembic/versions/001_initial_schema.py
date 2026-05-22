@@ -30,6 +30,7 @@ def upgrade() -> None:
         sa.Column("category", sa.Text(), nullable=True),
         sa.Column("invoice_number", sa.Text(), nullable=True),
         sa.Column("kra_pin", sa.Text(), nullable=True),
+        sa.Column("buyer_kra_pin", sa.Text(), nullable=True),
         sa.Column("cu_invoice", sa.Text(), nullable=True),
         sa.Column("batch_title", sa.Text(), nullable=True),
         sa.Column("image_filename", sa.Text(), nullable=True),

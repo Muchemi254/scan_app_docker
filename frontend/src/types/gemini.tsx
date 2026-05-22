@@ -24,6 +24,7 @@ export interface ReceiptData {
   receiptDate: string;
   cuInvoice?: string;
   kraPin?: string;
+  buyerKraPin?: string;
   invoiceNumber?: string;
   items: ReceiptItem[];
   category?: string;

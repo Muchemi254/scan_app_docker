@@ -124,6 +124,7 @@ def _receipt_row_to_dict(
         "category": row.get("category"),
         "invoiceNumber": row.get("invoice_number"),
         "kraPin": row.get("kra_pin"),
+        "buyerKraPin": row.get("buyer_kra_pin"),
         "cuInvoice": row.get("cu_invoice"),
         "batchTitle": row.get("batch_title"),
         "imageUrl": image_url,
@@ -237,9 +238,9 @@ class DatabaseService:
                 row = await conn.fetchrow(
                     """
                     INSERT INTO receipts (id, user_id, status, supplier, total_amount, tax_amount,
-                        receipt_date, category, invoice_number, kra_pin, cu_invoice,
+                        receipt_date, category, invoice_number, kra_pin, buyer_kra_pin, cu_invoice,
                         batch_title, image_filename, scanned_at, created_at, updated_at)
-                    VALUES (COALESCE($16, gen_random_uuid()), $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+                    VALUES (COALESCE($17, gen_random_uuid()), $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
                     RETURNING id
                     """,
                     user_id,
@@ -251,6 +252,7 @@ class DatabaseService:
                     receipt_data.get("category"),
                     receipt_data.get("invoiceNumber"),
                     receipt_data.get("kraPin"),
+                    receipt_data.get("buyerKraPin"),
                     receipt_data.get("cuInvoice"),
                     receipt_data.get("batchTitle"),
                     image_filename,
@@ -448,6 +450,10 @@ class DatabaseService:
         if receipt_data.get("kraPin") is not None:
             set_parts.append(f"kra_pin = ${p_idx}")
             params.append(receipt_data["kraPin"])
+            p_idx += 1
+        if receipt_data.get("buyerKraPin") is not None:
+            set_parts.append(f"buyer_kra_pin = ${p_idx}")
+            params.append(receipt_data["buyerKraPin"])
             p_idx += 1
         if receipt_data.get("cuInvoice") is not None:
             set_parts.append(f"cu_invoice = ${p_idx}")

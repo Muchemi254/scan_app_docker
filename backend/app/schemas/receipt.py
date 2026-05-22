@@ -44,8 +44,9 @@ class ReceiptBase(BaseModel):
     receiptDate: str = Field(..., description="Receipt date (MM/DD/YYYY format)")
     category: Optional[str] = Field(None, description="Expense category")
     invoiceNumber: Optional[str] = Field(None, description="Invoice/receipt number")
-    kraPin: Optional[str] = Field(None, description="KRA PIN")
-    cuInvoice: Optional[str] = Field(None, description="CU invoice number")
+    kraPin: Optional[str] = Field(None, description="Seller KRA PIN (supplier PIN)")
+    buyerKraPin: Optional[str] = Field(None, description="Buyer KRA PIN (your PIN)")
+    cuInvoice: Optional[str] = Field(None, description="CU invoice number (KRA-issued)")
     batchTitle: Optional[str] = Field(None, description="Batch/transaction title")
     items: List[ReceiptItemCreate] = Field(default_factory=list, description="Receipt items")
 
@@ -65,6 +66,7 @@ class ReceiptUpdate(BaseModel):
     category: Optional[str] = None
     invoiceNumber: Optional[str] = None
     kraPin: Optional[str] = None
+    buyerKraPin: Optional[str] = None
     cuInvoice: Optional[str] = None
     batchTitle: Optional[str] = None
     status: Optional[ReceiptStatus] = None

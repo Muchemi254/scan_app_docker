@@ -218,6 +218,14 @@ async def extract_receipt_data(
         - Use 'N/A' for missing fields
         - Dates in MM/DD/YYYY format
         - {category_instructions}
+        - KRA PINs: Look for 'PIN', 'KRA', 'P051' format (P + 10 digits).
+          The SELLER PIN (kraPin) belongs to the shop/supplier issuing the receipt.
+          The BUYER PIN (buyerKraPin) belongs to the customer making the purchase.
+          Often one appears near the top (seller) and one near the bottom (buyer/your company).
+        - cuInvoice: The KRA-issued CU invoice/receipt number, typically labeled
+          'CU Invoice', 'KRA CU', 'CU No', or appears as a long alphanumeric string
+          starting with 'KRACU' or similar. This is different from the supplier's
+          own invoice number.
 
         Return ONLY JSON object matching this structure:
         {{
@@ -227,8 +235,9 @@ async def extract_receipt_data(
         "receiptDate": "MM/DD/YYYY",
         "category": "category name",
         "invoiceNumber": "string or N/A",
-        "kraPin": "string or N/A",
-        "cuInvoice": "string or N/A",
+        "kraPin": "seller KRA PIN or N/A",
+        "buyerKraPin": "buyer KRA PIN or N/A",
+        "cuInvoice": "KRA CU invoice number or N/A",
         "items": [
         {{"name": "string", "quantity": number, "price": "string", "tax": "string", "isZeroRated": boolean}}
         ]
@@ -284,6 +293,7 @@ async def extract_receipt_data(
             category=data.get("category", "Other"),
             invoiceNumber=data.get("invoiceNumber"),
             kraPin=data.get("kraPin"),
+            buyerKraPin=data.get("buyerKraPin"),
             cuInvoice=data.get("cuInvoice"),
             items=items,
             status=status
@@ -337,6 +347,9 @@ INSTRUCTIONS per object:
 - Use 'N/A' for missing fields
 - Dates in MM/DD/YYYY format
 - {category_instructions}
+- KRA PINs: The SELLER PIN (kraPin) is the supplier's PIN. The BUYER PIN (buyerKraPin)
+  is the customer/your company's PIN. Look for P051 format (P + 10 digits).
+- cuInvoice: KRA-issued CU number, often labeled 'CU Invoice' or starting 'KRACU'.
 
 Return ONLY a JSON array matching this structure:
 [
@@ -347,8 +360,9 @@ Return ONLY a JSON array matching this structure:
     "receiptDate": "MM/DD/YYYY",
     "category": "category name",
     "invoiceNumber": "string or N/A",
-    "kraPin": "string or N/A",
-    "cuInvoice": "string or N/A",
+    "kraPin": "seller KRA PIN or N/A",
+    "buyerKraPin": "buyer KRA PIN or N/A",
+    "cuInvoice": "KRA CU invoice number or N/A",
     "items": [
         {{"name": "string", "quantity": number, "price": "string", "tax": "string", "isZeroRated": boolean}}
     ]
@@ -417,6 +431,7 @@ Return ONLY a JSON array matching this structure:
                     category=data.get("category", "Other"),
                     invoiceNumber=data.get("invoiceNumber"),
                     kraPin=data.get("kraPin"),
+                    buyerKraPin=data.get("buyerKraPin"),
                     cuInvoice=data.get("cuInvoice"),
                     items=items,
                     status=status

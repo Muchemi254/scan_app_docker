@@ -157,6 +157,7 @@ async def get_review_batch(
                 "category": receipt.get("category"),
                 "invoiceNumber": receipt.get("invoiceNumber"),
                 "kraPin": receipt.get("kraPin"),
+                "buyerKraPin": receipt.get("buyerKraPin"),
                 "cuInvoice": receipt.get("cuInvoice"),
                 "batchTitle": receipt.get("batchTitle"),
                 "status": receipt.get("status"),

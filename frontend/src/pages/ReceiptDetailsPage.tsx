@@ -109,6 +109,9 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
             <p><strong>Tax:</strong> {receipt.taxAmount}</p>
             <p><strong>Date:</strong> {receipt.receiptDate}</p>
             <p><strong>Category:</strong> {receipt.category}</p>
+            {receipt.kraPin && <p><strong>Seller KRA PIN:</strong> {receipt.kraPin}</p>}
+            {receipt.buyerKraPin && <p><strong>Buyer KRA PIN:</strong> {receipt.buyerKraPin}</p>}
+            {receipt.cuInvoice && <p><strong>CU Invoice:</strong> {receipt.cuInvoice}</p>}
             {receipt.imageUrl && (
               <div>
                 <img src={receipt.imageUrl} alt="Receipt" className="max-w-md mt-4" />

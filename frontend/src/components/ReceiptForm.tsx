@@ -23,6 +23,7 @@ const ReceiptForm = ({
     category: initialData?.category || '',
     invoiceNumber: initialData?.invoiceNumber || '',
     kraPin: initialData?.kraPin || '',
+    buyerKraPin: initialData?.buyerKraPin || '',
     cuInvoice: initialData?.cuInvoice || '',
     status: initialData?.status || 'processed',
     items: initialData?.items?.length
@@ -70,6 +71,7 @@ const ReceiptForm = ({
         category: initialData.category || '',
         invoiceNumber: initialData.invoiceNumber || '',
         kraPin: initialData.kraPin || '',
+        buyerKraPin: initialData.buyerKraPin || '',
         cuInvoice: initialData.cuInvoice || '',
         status: initialData.status || 'processed',
         items: initialData.items?.length
@@ -378,7 +380,7 @@ const ReceiptForm = ({
     <form onSubmit={handleSubmit} className="space-y-4">
       {/* Header fields */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {["supplier", "totalAmount", "taxAmount", "receiptDate", "category", "invoiceNumber", "kraPin", "cuInvoice"].map((name) => (
+        {["supplier", "totalAmount", "taxAmount", "receiptDate", "category", "invoiceNumber", "kraPin", "buyerKraPin", "cuInvoice"].map((name) => (
           <div key={name}>
             <label className="block text-xs font-medium text-gray-600 mb-0.5 capitalize">{name.replace(/([A-Z])/g, ' $1')}</label>
             <input
