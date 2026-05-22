@@ -209,9 +209,26 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
                 : 'border-transparent hover:bg-gray-50'
             }`}
           >
-            <div className="flex items-center justify-between gap-1">
-              <span className="font-medium text-sm truncate text-gray-900">{receipt.supplier}</span>
-              <span
+            <div className="flex items-center gap-3">
+              {/* Thumbnail */}
+              {receipt.imageUrl ? (
+                <img
+                  src={`/api/images/cached?url=${encodeURIComponent(receipt.imageUrl)}&thumb=1`}
+                  alt=""
+                  className="w-12 h-12 object-cover rounded flex-shrink-0 bg-gray-100"
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).style.display = 'none';
+                  }}
+                />
+              ) : (
+                <div className="w-12 h-12 rounded flex-shrink-0 bg-gray-100 flex items-center justify-center text-gray-300 text-xs">
+                  N/A
+                </div>
+              )}
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between gap-1">
+                  <span className="font-medium text-sm truncate text-gray-900">{receipt.supplier}</span>
+                  <span
                 className={`shrink-0 w-2 h-2 rounded-full ${isComplete(receipt) ? 'bg-green-500' : 'bg-red-500'}`}
                 title={isComplete(receipt) ? 'Processed' : 'Needs review'}
               />
