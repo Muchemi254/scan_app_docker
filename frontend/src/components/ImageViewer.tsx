@@ -17,6 +17,17 @@ const ImageViewer = ({
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [loadError, setLoadError] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  // Reset error + loading state when imageUrl changes (switching receipts)
+  useEffect(() => {
+    setLoadError(false);
+    setLoading(true);
+    setRotation(0);
+    setZoom(1);
+    setPanX(0);
+    setPanY(0);
+  }, [imageUrl]);
 
   const touchContainerRef = useRef<HTMLDivElement>(null);
 
@@ -172,14 +183,23 @@ const ImageViewer = ({
               <button onClick={handleOpenInNewTab} className="px-4 py-2 bg-blue-500 text-white rounded text-sm hover:bg-blue-600">Open Original File</button>
             </div>
           ) : (
-            <img
-              src={displayUrl}
-              alt={altText}
-              onError={() => setLoadError(true)}
-              className="max-w-full max-h-full object-contain transition-transform duration-200 select-none"
-              style={{ transform: imageTransform, cursor: cursorStyle }}
-              draggable={false}
-            />
+            <>
+              {loading && (
+                <div className="absolute inset-0 flex items-center justify-center bg-gray-50 z-10">
+                  <div className="animate-spin rounded-full h-6 w-6 border-2 border-blue-500 border-t-transparent" />
+                </div>
+              )}
+              <img
+                key={imageUrl}
+                src={displayUrl}
+                alt={altText}
+                onLoad={() => setLoading(false)}
+                onError={() => { setLoadError(true); setLoading(false); }}
+                className="max-w-full max-h-full object-contain transition-transform duration-200 select-none"
+                style={{ transform: imageTransform, cursor: cursorStyle }}
+                draggable={false}
+              />
+            </>
           )}
         </div>
       </div>
