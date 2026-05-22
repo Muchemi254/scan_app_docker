@@ -10,6 +10,15 @@ from app.schemas.receipt import AuditAction, AuditFieldChange, AuditEntry
 logger = logging.getLogger(__name__)
 
 
+def _is_meaningful(val) -> bool:
+    """Return True if the value is worth recording in an audit trail."""
+    if val is None:
+        return False
+    if isinstance(val, str) and val.strip() in ("", "N/A", "Unknown"):
+        return False
+    return True
+
+
 class AuditService:
 
     @staticmethod
@@ -21,7 +30,7 @@ class AuditService:
         old = old_data or {}
         tracked_fields = {
             "supplier", "totalAmount", "taxAmount", "receiptDate",
-            "category", "invoiceNumber", "kraPin", "cuInvoice",
+            "category", "invoiceNumber", "kraPin", "buyerKraPin", "cuInvoice",
             "batchTitle", "status", "imageUrl", "items",
         }
         for field in tracked_fields:
@@ -99,10 +108,11 @@ class AuditService:
         created_data: Dict[str, Any],
         changed_by: str,
     ):
+        # Only record fields that have actual data
         await AuditService.log(
             user_id, receipt_id, AuditAction.CREATED, changed_by,
             changes=[AuditFieldChange(field=k, old_value=None, new_value=v)
-                     for k, v in created_data.items()],
+                     for k, v in created_data.items() if _is_meaningful(v)],
         )
 
     @staticmethod
@@ -127,8 +137,9 @@ class AuditService:
         deleted_data: Dict[str, Any],
         changed_by: str,
     ):
+        # Only record fields that had actual data before deletion
         await AuditService.log(
             user_id, receipt_id, AuditAction.DELETED, changed_by,
             changes=[AuditFieldChange(field=k, old_value=v, new_value=None)
-                     for k, v in deleted_data.items()],
+                     for k, v in deleted_data.items() if _is_meaningful(v)],
         )
