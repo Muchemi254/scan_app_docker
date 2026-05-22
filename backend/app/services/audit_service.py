@@ -45,14 +45,14 @@ class AuditService:
     ) -> str:
         entry_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
-        changes_data = [c.model_dump() for c in changes] if changes else []
+        changes_data = json.dumps([c.model_dump() for c in changes] if changes else [])
 
         pool = await get_pool()
         async with pool.acquire() as conn:
             await conn.execute(
                 """
                 INSERT INTO audit_logs (id, receipt_id, user_id, action, changed_by, timestamp, changes)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
                 """,
                 entry_id, receipt_id, user_id, action.value, changed_by, now,
                 changes_data,
