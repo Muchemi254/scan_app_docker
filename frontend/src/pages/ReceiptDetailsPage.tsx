@@ -115,6 +115,45 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
               </div>
             )}
 
+            {/* Items table */}
+            {receipt.items && receipt.items.length > 0 && (
+              <div className="mt-4">
+                <h3 className="font-semibold text-gray-700 mb-2">Items</h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm border">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-3 py-2 text-left">#</th>
+                        <th className="px-3 py-2 text-left">Name</th>
+                        <th className="px-3 py-2 text-right">Qty</th>
+                        <th className="px-3 py-2 text-right">Price</th>
+                        <th className="px-3 py-2 text-right">Tax</th>
+                        <th className="px-3 py-2 text-right">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {receipt.items.map((item: any, idx: number) => {
+                        const qty = Number(item.quantity) || 1;
+                        const price = Number(item.price) || 0;
+                        const tax = Number(item.tax) || 0;
+                        const lineTotal = qty * (price + tax);
+                        return (
+                          <tr key={idx}>
+                            <td className="px-3 py-2">{idx + 1}</td>
+                            <td className="px-3 py-2">{item.name}</td>
+                            <td className="px-3 py-2 text-right">{qty}</td>
+                            <td className="px-3 py-2 text-right">{item.price}</td>
+                            <td className="px-3 py-2 text-right">{item.tax || '-'}</td>
+                            <td className="px-3 py-2 text-right font-medium">{lineTotal.toFixed(2)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
             {receipt.id && (
               <div className="mt-6">
                 <AuditTrail receiptId={receipt.id} />
