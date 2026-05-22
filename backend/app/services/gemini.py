@@ -218,14 +218,13 @@ async def extract_receipt_data(
         - Use 'N/A' for missing fields
         - Dates in MM/DD/YYYY format
         - {category_instructions}
-        - KRA PINs: Look for 'PIN', 'KRA', 'P051' format (P + 10 digits).
-          The SELLER PIN (kraPin) belongs to the shop/supplier issuing the receipt.
-          The BUYER PIN (buyerKraPin) belongs to the customer making the purchase.
-          Often one appears near the top (seller) and one near the bottom (buyer/your company).
-        - cuInvoice: The KRA-issued CU invoice/receipt number, typically labeled
-          'CU Invoice', 'KRA CU', 'CU No', or appears as a long alphanumeric string
-          starting with 'KRACU' or similar. This is different from the supplier's
-          own invoice number.
+        - KRA PINs: Always start with 'P' followed by digits and end with a letter
+          (e.g. 'P05115959U'). The SELLER PIN (kraPin) belongs to the supplier.
+          The BUYER PIN (buyerKraPin) belongs to the customer/your company.
+          Often one appears near the top (seller) and one near the bottom (buyer).
+        - cuInvoice: The KRA-issued control unit number, often a long numeric
+          string (e.g. '004084202207080184'), labeled 'CU Invoice', 'CU No',
+          'Control Unit', or similar. This is NOT the supplier's own invoice number.
 
         Return ONLY JSON object matching this structure:
         {{
@@ -347,9 +346,10 @@ INSTRUCTIONS per object:
 - Use 'N/A' for missing fields
 - Dates in MM/DD/YYYY format
 - {category_instructions}
-- KRA PINs: The SELLER PIN (kraPin) is the supplier's PIN. The BUYER PIN (buyerKraPin)
-  is the customer/your company's PIN. Look for P051 format (P + 10 digits).
-- cuInvoice: KRA-issued CU number, often labeled 'CU Invoice' or starting 'KRACU'.
+- KRA PINs: Always 'P' + digits + letter (e.g. 'P05115959U').
+  Seller PIN (kraPin) = supplier. Buyer PIN (buyerKraPin) = your company.
+- cuInvoice: KRA control unit number, long numeric string
+  (e.g. '004084202207080184'), labeled 'CU Invoice'/'CU No'.
 
 Return ONLY a JSON array matching this structure:
 [
