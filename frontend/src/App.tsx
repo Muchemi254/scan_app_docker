@@ -22,6 +22,7 @@ import GalleryPage from './pages/GalleryPage';
 import DataCleaningPage from './pages/DataCleaningPage';
 import ReviewBatchListPage from './pages/ReviewBatchListPage';
 import ReviewBatchDetailPage from './pages/ReviewBatchDetailPage';
+import SettingsPage from './pages/SettingsPage';
 
 import { ScannerProvider } from './contexts/ScannerContext';
 import PrivateRoute from './contexts/PrivateRoute';
@@ -258,6 +259,16 @@ const AppContent = () => {
                   element={
                     <PrivateRoute userId={userId} authLoading={authLoading}>
                       <ReviewBatchDetailPage userId={userId} />
+                    </PrivateRoute>
+                  }
+                />
+
+                {/* Settings */}
+                <Route
+                  path="/settings"
+                  element={
+                    <PrivateRoute userId={userId} authLoading={authLoading}>
+                      <SettingsPage userId={userId} />
                     </PrivateRoute>
                   }
                 />

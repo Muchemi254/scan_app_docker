@@ -1,0 +1,180 @@
+import { auth } from './firebase';
+
+const API_BASE_URL = import.meta.env.VITE_API_URL || '/api/v1';
+
+async function getAuthHeader(): Promise<string> {
+  if (auth?.currentUser) {
+    const token = await auth.currentUser.getIdToken();
+    if (token) return `Bearer ${token}`;
+  }
+  throw new Error('Authentication failed');
+}
+
+function getUserId(): string {
+  const userId = auth?.currentUser?.uid;
+  if (!userId) throw new Error('User not authenticated');
+  return userId;
+}
+
+export interface BackupEntry {
+  id: string;
+  user_id: string;
+  filename: string;
+  created_at: string;
+  size_bytes: number;
+  size_kb: number;
+  available: boolean;
+}
+
+export interface BackupPreview {
+  manifest: any;
+  receipt_count: number;
+  image_count: number;
+  size_kb: number;
+  receipts: Array<{
+    id: string;
+    supplier: string;
+    totalAmount: string;
+    receiptDate: string;
+    category: string;
+    status: string;
+    hasImage: boolean;
+  }>;
+}
+
+export interface ImportResult {
+  status: string;
+  stats: {
+    receipts: number;
+    items: number;
+    tasks: number;
+    settings: number;
+    images: number;
+    skipped: number;
+    errors: number;
+  };
+}
+
+export const backupApi = {
+  /** Create and download a backup */
+  async exportBackup(): Promise<void> {
+    const authorization = await getAuthHeader();
+    const userId = getUserId();
+    const url = `${API_BASE_URL}/users/${userId}/backup/export`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: authorization },
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || 'Export failed');
+    }
+
+    const blob = await response.blob();
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename="?(.+?)"?$/);
+    const filename = match ? match[1] : 'scanapp_backup.tar.gz';
+    const url_blob = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url_blob;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url_blob);
+  },
+
+  /** List all backups */
+  async listBackups(): Promise<BackupEntry[]> {
+    const authorization = await getAuthHeader();
+    const userId = getUserId();
+    const response = await fetch(
+      `${API_BASE_URL}/users/${userId}/backup/list`,
+      { headers: { Authorization: authorization } }
+    );
+    if (!response.ok) throw new Error('Failed to list backups');
+    return response.json();
+  },
+
+  /** Download a specific backup */
+  async downloadBackup(backupId: string, filename: string): Promise<void> {
+    const authorization = await getAuthHeader();
+    const userId = getUserId();
+    const response = await fetch(
+      `${API_BASE_URL}/users/${userId}/backup/download/${backupId}`,
+      { headers: { Authorization: authorization } }
+    );
+    if (!response.ok) throw new Error('Download failed');
+
+    const blob = await response.blob();
+    const url_blob = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url_blob;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url_blob);
+  },
+
+  /** Preview a backup file before import */
+  async previewBackup(file: File): Promise<BackupPreview> {
+    const authorization = await getAuthHeader();
+    const userId = getUserId();
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await fetch(
+      `${API_BASE_URL}/users/${userId}/backup/preview`,
+      {
+        method: 'POST',
+        headers: { Authorization: authorization },
+        body: formData,
+      }
+    );
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || 'Preview failed');
+    }
+    return response.json();
+  },
+
+  /** Import a backup */
+  async importBackup(
+    file: File,
+    conflict: string,
+    selectedIds?: string[],
+  ): Promise<ImportResult> {
+    const authorization = await getAuthHeader();
+    const userId = getUserId();
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('conflict', conflict);
+    if (selectedIds && selectedIds.length > 0) {
+      formData.append('selected_ids', JSON.stringify(selectedIds));
+    }
+
+    const response = await fetch(
+      `${API_BASE_URL}/users/${userId}/backup/import`,
+      {
+        method: 'POST',
+        headers: { Authorization: authorization },
+        body: formData,
+      }
+    );
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || 'Import failed');
+    }
+    return response.json();
+  },
+
+  /** Delete a backup */
+  async deleteBackup(backupId: string): Promise<void> {
+    const authorization = await getAuthHeader();
+    const userId = getUserId();
+    const response = await fetch(
+      `${API_BASE_URL}/users/${userId}/backup/${backupId}`,
+      { method: 'DELETE', headers: { Authorization: authorization } }
+    );
+    if (!response.ok) throw new Error('Delete failed');
+  },
+};

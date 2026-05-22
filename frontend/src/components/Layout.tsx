@@ -13,7 +13,8 @@ import {
   PlusCircle,
   Images,
   Sparkles,
-  ListChecks
+  ListChecks,
+  Settings,
 } from 'lucide-react';
 
 const Layout = () => {
@@ -48,6 +49,7 @@ const Layout = () => {
     { path: '/review', label: 'Review', icon: ClipboardCheck },
     { path: '/gallery', label: 'Gallery', icon: Images },
     { path: '/review-batches', label: 'Batches', icon: ListChecks },
+    { path: '/settings', label: 'Settings', icon: Settings },
     { path: '/cleaning', label: 'Clean', icon: Sparkles },
     { path: '/post-receipt', label: 'Post', icon: PlusCircle },
     { path: '/export', label: 'Export', icon: Download },
