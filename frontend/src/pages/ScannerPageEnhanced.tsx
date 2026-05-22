@@ -141,12 +141,11 @@ const ScannerPageEnhanced = ({ userId }: { userId: string | null }) => {
         // --- Sync Path (Single File) ---
         const image = selectedFiles[0];
         const extractedData = await receiptApi.extract(image);
-        const hasMissing = hasMissingFields(extractedData);
         await receiptApi.create(
           {
             ...extractedData,
             batchTitle: batchTitle.trim(),
-            status: hasMissing ? 'needs_review' : 'processed',
+            status: 'needs_review',
           },
           image
         );
@@ -185,14 +184,11 @@ const ScannerPageEnhanced = ({ userId }: { userId: string | null }) => {
     try {
       // Extract data
       const extractedData = await receiptApi.extract(file);
-      const hasMissing = hasMissingFields(extractedData);
-
-      // Create receipt
       await receiptApi.create(
         {
           ...extractedData,
           batchTitle: batchTitle.trim(),
-          status: hasMissing ? 'needs_review' : 'processed',
+          status: 'needs_review',
         },
         file
       );

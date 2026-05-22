@@ -114,8 +114,8 @@ async def _process_batch(batch_id: str, user_id: str, batch_title: str) -> None:
                 
                 try:
                     data = result.model_dump(exclude_unset=True)
-                    has_missing = _has_missing_fields(data)
-                    receipt_status = "needs_review" if has_missing else "processed"
+                    # All scans require manual review — never auto-process
+                    receipt_status = "needs_review"
 
                     # Pre-generate UUID for image filename
                     import uuid as _batch_uuid
