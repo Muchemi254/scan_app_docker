@@ -400,54 +400,76 @@ class DatabaseService:
         """Update receipt fields.  If items are provided, replace all items."""
         now = datetime.now(timezone.utc)
 
+        # Build dynamic SET clause from provided fields
+        set_parts = ["updated_at = $2"]
+        params = [receipt_id, now]
+        p_idx = 3
+
+        field_map = {
+            "status": ("status", "$" + str(p_idx := None)),
+        }
+
+        # Rebuild with clean index tracking
+        set_parts = ["updated_at = $2"]
+        params = [receipt_id, now]
+        p_idx = 3
+
+        if receipt_data.get("status"):
+            set_parts.append(f"status = ${p_idx}")
+            params.append(receipt_data["status"])
+            p_idx += 1
+        if receipt_data.get("supplier"):
+            set_parts.append(f"supplier = ${p_idx}")
+            params.append(receipt_data["supplier"])
+            p_idx += 1
+        if "totalAmount" in receipt_data:
+            set_parts.append(f"total_amount = ${p_idx}")
+            params.append(sanitize_numeric(receipt_data["totalAmount"]))
+            p_idx += 1
+        if "taxAmount" in receipt_data:
+            set_parts.append(f"tax_amount = ${p_idx}")
+            params.append(sanitize_numeric(receipt_data["taxAmount"]))
+            p_idx += 1
         date_val = receipt_data.get("receiptDate")
         if date_val:
-            receipt_date = _parse_date_mmddyyyy(date_val) or now.date()
-        else:
-            receipt_date = None
+            rd = _parse_date_mmddyyyy(date_val)
+            if rd:
+                set_parts.append(f"receipt_date = ${p_idx}")
+                params.append(rd)
+                p_idx += 1
+        if receipt_data.get("category") is not None:
+            set_parts.append(f"category = ${p_idx}")
+            params.append(receipt_data["category"])
+            p_idx += 1
+        if receipt_data.get("invoiceNumber") is not None:
+            set_parts.append(f"invoice_number = ${p_idx}")
+            params.append(receipt_data["invoiceNumber"])
+            p_idx += 1
+        if receipt_data.get("kraPin") is not None:
+            set_parts.append(f"kra_pin = ${p_idx}")
+            params.append(receipt_data["kraPin"])
+            p_idx += 1
+        if receipt_data.get("cuInvoice") is not None:
+            set_parts.append(f"cu_invoice = ${p_idx}")
+            params.append(receipt_data["cuInvoice"])
+            p_idx += 1
+        if receipt_data.get("batchTitle") is not None:
+            set_parts.append(f"batch_title = ${p_idx}")
+            params.append(receipt_data["batchTitle"])
+            p_idx += 1
+        if receipt_data.get("image_filename") is not None:
+            set_parts.append(f"image_filename = ${p_idx}")
+            params.append(receipt_data["image_filename"])
+            p_idx += 1
 
-        total = None
-        if "totalAmount" in receipt_data:
-            total = sanitize_numeric(receipt_data["totalAmount"])
-
-        tax = None
-        if "taxAmount" in receipt_data:
-            tax = sanitize_numeric(receipt_data["taxAmount"])
+        set_clause = ", ".join(set_parts)
 
         pool = await get_pool()
         async with pool.acquire() as conn:
             async with conn.transaction():
                 result = await conn.execute(
-                    """
-                    UPDATE receipts SET
-                        status = COALESCE($3, status),
-                        supplier = COALESCE($4, supplier),
-                        total_amount = COALESCE($5, total_amount),
-                        tax_amount = $6,
-                        receipt_date = COALESCE($7, receipt_date),
-                        category = COALESCE($8, category),
-                        invoice_number = COALESCE($9, invoice_number),
-                        kra_pin = COALESCE($10, kra_pin),
-                        cu_invoice = COALESCE($11, cu_invoice),
-                        batch_title = COALESCE($12, batch_title),
-                        image_filename = COALESCE($13, image_filename),
-                        updated_at = $14
-                    WHERE id = $1 AND user_id = $2
-                    """,
-                    receipt_id,
-                    user_id,
-                    receipt_data.get("status"),
-                    receipt_data.get("supplier"),
-                    total,
-                    tax,
-                    receipt_date,
-                    receipt_data.get("category"),
-                    receipt_data.get("invoiceNumber"),
-                    receipt_data.get("kraPin"),
-                    receipt_data.get("cuInvoice"),
-                    receipt_data.get("batchTitle"),
-                    receipt_data.get("image_filename"),
-                    now,
+                    f"UPDATE receipts SET {set_clause} WHERE id = $1 AND user_id = ${p_idx}",
+                    *params, user_id,
                 )
 
                 if result == "UPDATE 0":
