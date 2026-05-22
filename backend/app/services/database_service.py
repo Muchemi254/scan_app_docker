@@ -305,7 +305,7 @@ class DatabaseService:
         pool = await get_pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT * FROM receipts WHERE user_id = $1 AND id = ANY($2[])",
+                "SELECT * FROM receipts WHERE user_id = $1 AND id = ANY($2::text[])",
                 user_id, receipt_ids,
             )
             results = []
@@ -361,7 +361,33 @@ class DatabaseService:
                 *params,
             )
             total = rows[0]["full_count"] if rows else 0
-            receipts = [_receipt_row_to_dict(r) for r in rows]
+            # Batch-load items for all returned receipts (single query)
+            receipt_ids = [r["id"] for r in rows]
+            items_map = {}
+            if receipt_ids:
+                item_rows = await conn.fetch(
+                    """
+                    SELECT receipt_id, sort_order, name, quantity, price, tax, is_zero_rated, discount
+                    FROM line_items
+                    WHERE receipt_id = ANY($1::text[])
+                    ORDER BY receipt_id, sort_order
+                    """,
+                    receipt_ids,
+                )
+                for ir in item_rows:
+                    rid = ir["receipt_id"]
+                    if rid not in items_map:
+                        items_map[rid] = []
+                    items_map[rid].append({
+                        "name": ir["name"],
+                        "quantity": float(ir["quantity"]),
+                        "price": format(Decimal(str(ir["price"])), ".2f"),
+                        "tax": format(Decimal(str(ir["tax"] or 0)), ".2f"),
+                        "isZeroRated": ir["is_zero_rated"],
+                        "discount": format(Decimal(str(ir["discount"])), ".2f") if ir["discount"] else None,
+                    })
+
+            receipts = [_receipt_row_to_dict(r, items_map.get(r["id"], [])) for r in rows]
             return receipts, total
 
     @staticmethod
