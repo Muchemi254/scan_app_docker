@@ -59,6 +59,31 @@ const ReceiptForm = ({
     setFormData({ ...formData, [name]: value });
   };
 
+  // Sync form state when initialData loads (async fetch completes after mount)
+  useEffect(() => {
+    if (initialData) {
+      setFormData({
+        supplier: initialData.supplier || '',
+        totalAmount: initialData.totalAmount || '',
+        taxAmount: initialData.taxAmount || '',
+        receiptDate: initialData.receiptDate || '',
+        category: initialData.category || '',
+        invoiceNumber: initialData.invoiceNumber || '',
+        kraPin: initialData.kraPin || '',
+        cuInvoice: initialData.cuInvoice || '',
+        status: initialData.status || 'processed',
+        items: initialData.items?.length
+          ? initialData.items.map((item: any) => ({
+              ...item,
+              tax: item.tax || '',
+              discount: item.discount || '',
+              isZeroRated: item.isZeroRated || false,
+            }))
+          : [],
+      });
+    }
+  }, [initialData]);
+
   const handleItemChange = (index: number, field: string, value: string | number | boolean) => {
     const newItems = [...formData.items];
     newItems[index] = { ...newItems[index], [field]: value };
