@@ -1,16 +1,16 @@
+import json
 import logging
+import uuid
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
-from datetime import datetime
 
-from app.services.firebase_service import get_db
+from app.core.database import get_pool
 from app.schemas.receipt import AuditAction, AuditFieldChange, AuditEntry
 
 logger = logging.getLogger(__name__)
 
 
 class AuditService:
-
-    COLLECTION = "audit"
 
     @staticmethod
     def _compute_changes(
@@ -43,38 +43,53 @@ class AuditService:
         changed_by: str,
         changes: Optional[List[AuditFieldChange]] = None,
     ) -> str:
-        doc_ref = get_db().collection(
-            f"users/{user_id}/receipts/{receipt_id}/{AuditService.COLLECTION}"
-        ).document()
+        entry_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc)
+        changes_json = json.dumps(
+            [c.model_dump() for c in changes] if changes else [],
+            default=str,
+        )
 
-        entry = {
-            "action": action.value,
-            "changed_by": changed_by,
-            "timestamp": datetime.utcnow(),
-            "changes": [c.model_dump() for c in changes] if changes else [],
-        }
-        doc_ref.set(entry)
-        logger.info(f"Audit: {action.value} receipt {receipt_id} by {changed_by}")
-        return doc_ref.id
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO audit_logs (id, receipt_id, user_id, action, changed_by, timestamp, changes)
+                VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+                """,
+                entry_id, receipt_id, user_id, action.value, changed_by, now, changes_json,
+            )
+        logger.info("Audit: %s receipt %s by %s", action.value, receipt_id, changed_by)
+        return entry_id
 
     @staticmethod
     async def get_audit_trail(
         user_id: str,
         receipt_id: str,
     ) -> List[Dict[str, Any]]:
-        docs = (
-            get_db()
-            .collection(f"users/{user_id}/receipts/{receipt_id}/{AuditService.COLLECTION}")
-            .order_by("timestamp", direction="DESCENDING")
-            .stream()
-        )
-        results = []
-        for doc in docs:
-            data = doc.to_dict()
-            data["id"] = doc.id
-            data["receipt_id"] = receipt_id
-            results.append(data)
-        return results
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, receipt_id, user_id, action, changed_by, timestamp, changes
+                FROM audit_logs
+                WHERE receipt_id = $1 AND user_id = $2
+                ORDER BY timestamp DESC
+                """,
+                receipt_id, user_id,
+            )
+            results = []
+            for r in rows:
+                results.append({
+                    "id": str(r["id"]),
+                    "receipt_id": str(r["receipt_id"]),
+                    "user_id": r["user_id"],
+                    "action": r["action"],
+                    "changed_by": r["changed_by"],
+                    "timestamp": r["timestamp"],
+                    "changes": r["changes"] or [],
+                })
+            return results
 
     @staticmethod
     async def log_create(

@@ -21,7 +21,7 @@ from app.services.review_batch_service import (
     init_db, create_batch, list_batches, get_batch, delete_batch,
     update_item_status, delete_item,
 )
-from app.services.firebase_service import FirestoreService
+from app.services.database_service import DatabaseService
 from app.services.export_service import generate_export
 from app.schemas.export import ExportRequest, ExportFormat
 
@@ -33,9 +33,6 @@ router = APIRouter(
     prefix="/users",
     tags=["review-batches"],
 )
-
-# Ensure SQLite tables exist on first use
-init_db()
 
 
 def _verify_access(user_id: str, current_user_id: str):
@@ -98,7 +95,7 @@ async def upload_review_batch(
     if len(receipt_ids) > 5000:
         raise HTTPException(status_code=400, detail="Maximum 5000 receipts per batch")
 
-    batch = create_batch(userId, name, receipt_ids, csv_filename=file.filename)
+    batch = await create_batch(userId, name, receipt_ids, csv_filename=file.filename)
     logger.info(f"Created review batch {batch['id']} with {len(receipt_ids)} receipts for user {userId}")
     return batch
 
@@ -110,7 +107,7 @@ async def list_review_batches(
 ):
     """List all review batches for the user."""
     _verify_access(userId, current_user_id)
-    return list_batches(userId)
+    return await list_batches(userId)
 
 
 @router.get("/{userId}/review-batches/{batchId}")
@@ -126,7 +123,7 @@ async def get_review_batch(
     """
     _verify_access(userId, current_user_id)
 
-    batch = get_batch(userId, batchId)
+    batch = await get_batch(userId, batchId)
     if not batch:
         raise HTTPException(status_code=404, detail="Review batch not found")
 
@@ -136,10 +133,10 @@ async def get_review_batch(
         result["items"] = []
         return result
 
-    # Fetch all receipts in one batch call (chunked internally at 10/docs)
+    # Fetch all receipts in one batch call
     receipt_ids = [item["receipt_id"] for item in item_list]
     try:
-        receipts = await FirestoreService.get_receipts_by_ids(userId, receipt_ids)
+        receipts = await DatabaseService.get_receipts_by_ids(userId, receipt_ids)
     except Exception:
         logger.exception("Batch fetch of receipts failed")
         receipts = []
@@ -196,7 +193,7 @@ async def update_review_status(
     if review_status not in valid:
         raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {', '.join(valid)}")
 
-    result = update_item_status(batchId, receiptId, review_status, notes or None)
+    result = await update_item_status(batchId, receiptId, review_status, notes or None)
     if not result:
         raise HTTPException(status_code=404, detail="Item not found in batch")
 
@@ -212,7 +209,7 @@ async def delete_review_batch(
     """Delete a review batch and all its items."""
     _verify_access(userId, current_user_id)
 
-    deleted = delete_batch(userId, batchId)
+    deleted = await delete_batch(userId, batchId)
     if not deleted:
         raise HTTPException(status_code=404, detail="Review batch not found")
 
@@ -227,7 +224,7 @@ async def delete_review_batch_item(
     """Remove a single receipt from a review batch."""
     _verify_access(userId, current_user_id)
 
-    deleted = delete_item(batchId, receiptId)
+    deleted = await delete_item(batchId, receiptId)
     if not deleted:
         raise HTTPException(status_code=404, detail="Item not found in batch")
 
@@ -251,7 +248,7 @@ async def prefetch_batch_images(
     """
     _verify_access(userId, current_user_id)
 
-    batch = get_batch(userId, batchId)
+    batch = await get_batch(userId, batchId)
     if not batch:
         raise HTTPException(status_code=404, detail="Review batch not found")
 
@@ -259,9 +256,9 @@ async def prefetch_batch_images(
     if not receipt_ids:
         return {"status": "empty", "message": "No receipts in batch"}
 
-    # Resolve image URLs from Firestore
+    # Resolve image URLs from database
     try:
-        receipts = await FirestoreService.get_receipts_by_ids(userId, receipt_ids)
+        receipts = await DatabaseService.get_receipts_by_ids(userId, receipt_ids)
     except Exception:
         logger.exception("Failed to fetch receipts for prefetch")
         raise HTTPException(status_code=500, detail="Failed to fetch receipt data")
@@ -345,7 +342,7 @@ async def export_review_batch(
     """
     _verify_access(userId, current_user_id)
 
-    batch = get_batch(userId, batchId)
+    batch = await get_batch(userId, batchId)
     if not batch:
         raise HTTPException(status_code=404, detail="Review batch not found")
 
@@ -354,7 +351,7 @@ async def export_review_batch(
         raise HTTPException(status_code=404, detail="Batch has no receipts")
 
     try:
-        receipts = await FirestoreService.get_receipts_by_ids(userId, receipt_ids)
+        receipts = await DatabaseService.get_receipts_by_ids(userId, receipt_ids)
     except Exception as e:
         logger.error(f"Failed to fetch batch receipts for export: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch receipt data")

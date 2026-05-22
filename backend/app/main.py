@@ -6,15 +6,11 @@ Serves as the backend for the Scan App receipt management system.
 Architecture:
 - Multi-tenant (per-user data isolation)
 - Firebase Auth (validate tokens from frontend)
-- Firebase Firestore (data storage)
-- Firebase Storage (image storage)
+- PostgreSQL (data storage via asyncpg)
+- Local filesystem (image storage)
 - Gemini API (AI extraction)
+- Redis + Celery (async batch processing)
 - RESTful API with OpenAPI docs
-
-Ready to migrate to:
-- PostgreSQL/MongoDB
-- Local/S3 storage
-- Custom auth system
 """
 
 import logging
@@ -52,13 +48,22 @@ async def lifespan(app: FastAPI):
     logger.info(f"Firebase Credentials: {settings.FIREBASE_CREDENTIALS_PATH}")
     logger.info(f"CORS Origins: {settings.BACKEND_CORS_ORIGINS}")
 
-    # Initialize Firebase on startup (don't wait for first request)
+    # Initialize PostgreSQL connection pool
+    try:
+        from app.core.database import init_pool
+        await init_pool()
+        logger.info("PostgreSQL pool initialized")
+    except Exception as e:
+        logger.error(f"Failed to initialize PostgreSQL pool: {e}")
+        raise
+
+    # Initialize Firebase Auth (token validation only)
     try:
         from app.services.firebase_service import init_firebase
         init_firebase()
-        logger.info("Firebase initialized successfully on startup")
+        logger.info("Firebase auth initialized successfully")
     except Exception as e:
-        logger.error(f"Failed to initialize Firebase on startup: {e}")
+        logger.error(f"Failed to initialize Firebase auth: {e}")
         raise
 
     # Connect Redis
@@ -73,6 +78,11 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("Shutting down application")
+    try:
+        from app.core.database import close_pool
+        await close_pool()
+    except Exception:
+        pass
     try:
         from app.services.batch_service import close_redis
         await close_redis()

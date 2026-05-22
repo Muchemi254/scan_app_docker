@@ -4,7 +4,7 @@ from typing import Optional, List, Dict, Any, Tuple
 from collections import defaultdict
 from datetime import datetime
 
-from app.services.firebase_service import FirestoreService, get_db
+from app.services.database_service import DatabaseService
 
 logger = logging.getLogger(__name__)
 
@@ -264,31 +264,30 @@ async def apply_actions(user_id: str, actions: List[dict]) -> dict:
         if atype == "supplier_merge":
             canonical = action["canonical"]
             for rid in action["receipt_ids"]:
-                current = await FirestoreService.get_receipt(user_id, rid)
+                current = await DatabaseService.get_receipt(user_id, rid)
                 if current and current.get("supplier") != canonical:
-                    await FirestoreService.update_receipt(user_id, rid, {"supplier": canonical})
+                    await DatabaseService.update_receipt(user_id, rid, {"supplier": canonical})
                     stats["supplier_renames"] += 1
 
         elif atype == "field_propagation":
             field = action["field"]
             value = action["value"]
             for rid in action["target_receipts"]:
-                current = await FirestoreService.get_receipt(user_id, rid)
+                current = await DatabaseService.get_receipt(user_id, rid)
                 if current:
                     current_val = current.get(field)
                     if not current_val or str(current_val).strip() in ("", "N/A"):
-                        await FirestoreService.update_receipt(user_id, rid, {field: value})
+                        await DatabaseService.update_receipt(user_id, rid, {field: value})
                         stats["fields_filled"] += 1
 
         elif atype == "duplicate":
             keep_id = action.get("keep_id")
             for rid in action.get("delete_ids", []):
-                receipt = await FirestoreService.get_receipt(user_id, rid)
+                receipt = await DatabaseService.get_receipt(user_id, rid)
                 if receipt:
-                    if receipt.get("imageUrl"):
-                        from app.services.firebase_service import StorageService
-                        await StorageService.delete_receipt_image(receipt["imageUrl"])
-                    await FirestoreService.delete_receipt(user_id, rid)
+                    from app.services.database_service import delete_receipt_images
+                    delete_receipt_images(rid)
+                    await DatabaseService.delete_receipt(user_id, rid)
                     stats["duplicates_removed"] += 1
 
     return stats

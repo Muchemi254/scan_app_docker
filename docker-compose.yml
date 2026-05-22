@@ -11,6 +11,27 @@ services:
       - app-network
 
   # ========================================================================
+  # PostgreSQL — primary database
+  # ========================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: scan-app-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: scanapp
+      POSTGRES_USER: scanapp
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-scanapp_dev}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scanapp"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+
+  # ========================================================================
   # FastAPI Backend
   # ========================================================================
   backend:
@@ -25,9 +46,17 @@ services:
       - ./firebaseservice.json:/app/firebaseservice.json:ro
       # Persist SQLite review batch database across container rebuilds
       - review_batch_data:/app/data
+      # Local image storage
+      - image_data:/app/data/images
     environment:
-      # SQLite database path for review batches
+      # SQLite database path for review batches (transitional - migrating to PG)
       REVIEW_BATCH_DB_PATH: /app/data/review_batches.db
+      # PostgreSQL
+      DATABASE_URL: postgresql://scanapp:${DB_PASSWORD:-scanapp_dev}@postgres:5432/scanapp
+      DATABASE_POOL_MIN: 2
+      DATABASE_POOL_MAX: 20
+      # Image storage
+      IMAGE_STORAGE_DIR: /app/data/images
       # Firebase Configuration - Uses service account JSON file mounted at /app/firebaseservice.json
       FIREBASE_CREDENTIALS_PATH: /app/firebaseservice.json
 
@@ -56,6 +85,7 @@ services:
 
     depends_on:
       - redis
+      - postgres
 
     # Health check
     healthcheck:
@@ -165,6 +195,10 @@ networks:
 # VOLUMES (if needed for persistent data)
 # ============================================================================
 volumes:
+  pgdata:
+    driver: local
+  image_data:
+    driver: local
   review_batch_data:
     driver: local
 

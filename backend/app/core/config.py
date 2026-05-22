@@ -49,6 +49,20 @@ class Settings(BaseSettings):
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
 
+    # PostgreSQL
+    DATABASE_URL: str = os.getenv(
+        "DATABASE_URL",
+        "postgresql://scanapp:scanapp_dev@localhost:5432/scanapp",
+    )
+    DATABASE_POOL_MIN: int = 2
+    DATABASE_POOL_MAX: int = 20
+
+    # Image storage
+    IMAGE_STORAGE_DIR: str = os.getenv(
+        "IMAGE_STORAGE_DIR",
+        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "images"),
+    )
+
     # Gemini API
     GEMINI_API_KEY: str
 
@@ -60,11 +74,12 @@ class Settings(BaseSettings):
     # Upload limits
     MAX_UPLOAD_SIZE: int = 10 * 1024 * 1024  # 10 MB per file
 
-    # SQLite database for review batch tracking
+    # SQLite database for review batch tracking (transitional — migrating to PostgreSQL)
     REVIEW_BATCH_DB_PATH: str = os.getenv("REVIEW_BATCH_DB_PATH", "")
 
     # Features
     ENABLE_DOCS: bool = True  # Swagger UI
+    USE_POSTGRES: bool = os.getenv("USE_POSTGRES", "false").lower() == "true"  # toggle PG vs Firestore
 
     class Config:
         env_file = ".env"

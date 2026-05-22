@@ -5,9 +5,10 @@ FROM python:3.11-slim as builder
 
 WORKDIR /app
 
-# Install build dependencies
+# Install build dependencies (libpq-dev needed for asyncpg)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements and install Python dependencies
@@ -19,9 +20,10 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install runtime dependencies only
+# Install runtime dependencies (libpq5 needed for asyncpg at runtime)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy Python dependencies from builder
@@ -30,8 +32,8 @@ COPY --from=builder /root/.local /root/.local
 # Copy application code
 COPY app/ ./app/
 
-# Ensure data directory exists for SQLite
-RUN mkdir -p /app/data
+# Ensure data directories exist
+RUN mkdir -p /app/data /app/data/images
 
 # Set environment variables
 ENV PATH=/root/.local/bin:$PATH \

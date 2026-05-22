@@ -145,9 +145,26 @@ async def get_cached_image(url: str):
 
     GET /api/images/cached?url=<encoded-image-url>
 
-    First request fetches from source → caches in Redis → returns.
-    Subsequent requests serve from Redis (fast, no external network call).
+    Two modes:
+    - Local files:  url starts with "/receipt-images/" → read from disk
+    - External URLs: fetches from source → caches in Redis → returns
     """
+    # ── Local filesystem path (PostgreSQL-backed receipts) ────────────────
+    if url.startswith("/receipt-images/"):
+        from app.services.database_service import read_image
+        parts = url.rstrip("/").split("/")
+        raw_id = parts[-1]
+        thumb = "?thumb=1" in url or url.endswith("?thumb=1")
+        receipt_id = raw_id.split("?")[0]
+        img_bytes = read_image(receipt_id, thumb=thumb)
+        if img_bytes:
+            return Response(
+                content=img_bytes, media_type="image/jpeg",
+                headers={"Cache-Control": "public, max-age=86400"},
+            )
+        raise HTTPException(status_code=404, detail="Image not found")
+
+    # ── External URL proxy (Firebase Storage, legacy images) ──────────────
     _validate_image_url(url)
 
     cached = await _cache_get(url)

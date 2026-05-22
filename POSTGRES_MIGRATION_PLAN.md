@@ -1,5 +1,24 @@
 # Firestore → PostgreSQL Migration Plan
 
+> **Migration Run Status (2026-05-22):** Successfully tested end-to-end.
+> Pipeline verified: schema creation → data migration (5 receipts, 10 items,
+> 1 task, 1 settings) → integration test (15/15 pass) → DataAdapter toggle
+> (USE_POSTGRES=true/false working). See `backend/scripts/migrate_data.py`.
+
+## Key Changes Discovered During Migration Run
+
+1. **PKs changed from UUID to TEXT** — Firestore document IDs are arbitrary
+   strings (e.g. `rec0`, `task001`).  PostgreSQL `UUID` type rejects these.
+   All `id` columns are now `TEXT`.  New receipts can still use
+   `str(uuid.uuid4())` for UUIDs — it's just stored as text.
+
+2. **DataAdapter** (`backend/app/services/data_adapter.py`) —
+   toggleable backend via `USE_POSTGRES` env var.  `true` → PostgreSQL,
+   `false` → Firestore.  Used for zero-downtime migration.
+
+3. **All `::uuid` casts removed** from SQL queries.  Since PKs are TEXT,
+   no type coercion needed.
+
 ## Context
 
 The scan app currently uses Firestore (NoSQL document DB) for 4 collections:

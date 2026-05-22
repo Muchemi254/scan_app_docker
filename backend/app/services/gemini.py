@@ -73,7 +73,7 @@ def sanitize_numeric(value: Any) -> str:
     return sanitized if sanitized and sanitized != '.' else "0"
 
 from app.schemas.receipt import ReceiptCreate, ReceiptItem, ReceiptStatus
-from app.services.firebase_service import FirestoreService
+from app.services.database_service import DatabaseService
 from app.core.encryption import decrypt_api_key
 
 logger = logging.getLogger(__name__)
@@ -108,7 +108,7 @@ async def get_gemini_config(user_id: Optional[str]) -> Tuple[str, str, str]:
     
     if user_id:
         try:
-            ai_settings = await FirestoreService.get_user_settings(user_id, "ai_config")
+            ai_settings = await DatabaseService.get_user_settings(user_id, "ai_config")
             if ai_settings:
                 # IMPORTANT: use the provider currently active in user settings
                 configs = ai_settings.get("configs", {})
@@ -201,7 +201,7 @@ async def extract_receipt_data(
         # Get thinking mode
         thinking_mode = False
         if user_id:
-             ai_settings = await FirestoreService.get_user_settings(user_id, "ai_config")
+             ai_settings = await DatabaseService.get_user_settings(user_id, "ai_config")
              if ai_settings:
                  provider_config = ai_settings.get("configs", {}).get(provider, {})
                  thinking_mode = provider_config.get("thinking_mode", False)
@@ -318,7 +318,7 @@ async def extract_receipt_batch(
         # Get thinking mode
         thinking_mode = False
         if user_id:
-             ai_settings = await FirestoreService.get_user_settings(user_id, "ai_config")
+             ai_settings = await DatabaseService.get_user_settings(user_id, "ai_config")
              if ai_settings:
                  provider_config = ai_settings.get("configs", {}).get(provider, {})
                  thinking_mode = provider_config.get("thinking_mode", False)

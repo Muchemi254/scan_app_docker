@@ -1,0 +1,128 @@
+"""
+Data adapter — routes to PostgreSQL or Firestore based on USE_POSTGRES flag.
+
+Every method mirrors the interface of DatabaseService / FirestoreService.
+API routes import from here instead of directly from either service.
+"""
+
+import logging
+from typing import Optional, List, Dict, Any
+from app.core.config import settings
+
+logger = logging.getLogger(__name__)
+
+_PG_AVAILABLE = False
+try:
+    from app.services.database_service import (
+        DatabaseService, save_image, save_thumbnail,
+        delete_receipt_images, read_image,
+    )
+    _PG_AVAILABLE = True
+except Exception:
+    pass
+
+
+class DataService:
+    """Routes to PostgreSQL (DatabaseService) or Firestore (FirestoreService)."""
+
+    @classmethod
+    def _backend(cls):
+        if settings.USE_POSTGRES and _PG_AVAILABLE:
+            from app.services.database_service import DatabaseService as DB
+            return DB, "postgres"
+        from app.services.firebase_service import FirestoreService as DB
+        return DB, "firestore"
+
+    # ── Receipt CRUD ─────────────────────────────────────────────────────
+
+    @classmethod
+    async def create_receipt(cls, user_id: str, receipt_data: Dict[str, Any]) -> str:
+        db, backend = cls._backend()
+        logger.debug("create_receipt → %s", backend)
+        return await db.create_receipt(user_id, receipt_data)
+
+    @classmethod
+    async def get_receipt(cls, user_id: str, receipt_id: str) -> Optional[Dict[str, Any]]:
+        db, _ = cls._backend()
+        return await db.get_receipt(user_id, receipt_id)
+
+    @classmethod
+    async def get_receipts_by_ids(cls, user_id: str, receipt_ids: List[str]) -> List[Dict[str, Any]]:
+        db, _ = cls._backend()
+        return await db.get_receipts_by_ids(user_id, receipt_ids)
+
+    @classmethod
+    async def list_receipts(
+        cls, user_id: str, skip: int = 0, limit: int = 50,
+        status: Optional[str] = None, category: Optional[str] = None,
+        batch_title: Optional[str] = None,
+    ) -> tuple:
+        db, _ = cls._backend()
+        return await db.list_receipts(user_id, skip, limit, status, category, batch_title)
+
+    @classmethod
+    async def update_receipt(cls, user_id: str, receipt_id: str, receipt_data: Dict[str, Any]) -> bool:
+        db, _ = cls._backend()
+        return await db.update_receipt(user_id, receipt_id, receipt_data)
+
+    @classmethod
+    async def delete_receipt(cls, user_id: str, receipt_id: str) -> bool:
+        db, _ = cls._backend()
+        return await db.delete_receipt(user_id, receipt_id)
+
+    @classmethod
+    async def search_receipts(
+        cls, user_id: str, supplier: Optional[str] = None,
+        category: Optional[str] = None, date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        db, _ = cls._backend()
+        return await db.search_receipts(user_id, supplier, category, date_from, date_to)
+
+    @classmethod
+    async def check_duplicate(
+        cls, user_id: str, supplier: Optional[str] = None,
+        totalAmount: Optional[str] = None, receiptDate: Optional[str] = None,
+        invoiceNumber: Optional[str] = None, exclude_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        db, _ = cls._backend()
+        return await db.check_duplicate(user_id, supplier, totalAmount, receiptDate, invoiceNumber, exclude_id)
+
+    @classmethod
+    async def get_receipt_groups(cls, user_id: str) -> List[Dict[str, Any]]:
+        db, _ = cls._backend()
+        return await db.get_receipt_groups(user_id)
+
+    # ── User AI Settings ─────────────────────────────────────────────────
+
+    @classmethod
+    async def get_user_settings(cls, user_id: str, settings_key: str) -> Optional[Dict[str, Any]]:
+        db, _ = cls._backend()
+        return await db.get_user_settings(user_id, settings_key)
+
+    @classmethod
+    async def update_user_settings(cls, user_id: str, settings_key: str, data: Dict[str, Any]) -> bool:
+        db, _ = cls._backend()
+        return await db.update_user_settings(user_id, settings_key, data)
+
+
+# ── Image helpers (local only, fall back gracefully) ─────────────────────
+
+def _save_image_local(receipt_id: str, jpeg_bytes: bytes) -> str:
+    if _PG_AVAILABLE:
+        return save_image(receipt_id, jpeg_bytes)
+    raise RuntimeError("Local image storage not available (USE_POSTGRES=false)")
+
+def _save_thumbnail_local(receipt_id: str, jpeg_bytes: bytes) -> str:
+    if _PG_AVAILABLE:
+        return save_thumbnail(receipt_id, jpeg_bytes)
+    raise RuntimeError("Local image storage not available (USE_POSTGRES=false)")
+
+def _delete_receipt_images_local(receipt_id: str) -> None:
+    if _PG_AVAILABLE:
+        delete_receipt_images(receipt_id)
+
+def _read_image_local(receipt_id: str, thumb: bool = False):
+    if _PG_AVAILABLE:
+        return read_image(receipt_id, thumb)
+    return None

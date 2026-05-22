@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response
 from app.core.security import get_current_user_id
 from app.schemas.export import ExportRequest, ExportFormat
-from app.services.firebase_service import FirestoreService
+from app.services.database_service import DatabaseService
 from app.services.export_service import generate_export
 
 logger = logging.getLogger(__name__)
@@ -36,7 +36,7 @@ async def export_receipts(
         raise HTTPException(status_code=403, detail="Access denied")
 
     try:
-        receipts, _ = await FirestoreService.list_receipts(
+        receipts, _ = await DatabaseService.list_receipts(
             userId, skip=0, limit=5000,
         )
     except Exception as e:
