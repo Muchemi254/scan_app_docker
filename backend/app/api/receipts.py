@@ -25,7 +25,9 @@ from app.schemas.receipt import (
     AuditEntry, AuditList, SpendingSummaryRequest, SpendingSummaryResponse,
     CategoryBreakdown, SupplierBreakdown, MonthlyTrend,
 )
-from app.services.database_service import DatabaseService, save_image, save_thumbnail, delete_receipt_images
+from app.services.data_adapter import DataService
+from app.services.database_service import save_image, save_thumbnail, delete_receipt_images
+from app.services.firebase_service import StorageService
 from app.services.gemini import extract_receipt_data, generate_ai_summary
 from app.services.image_service import process_image, generate_thumbnail
 from app.services.task_service import TaskService
@@ -79,7 +81,7 @@ async def batch_extract_receipts(
     )
 
     # 1.5 Get current provider settings
-    ai_settings = await DatabaseService.get_user_settings(userId, "ai_config")
+    ai_settings = await DataService.get_user_settings(userId, "ai_config")
     provider = ai_settings.get("provider", "gemini") if ai_settings else "gemini"
 
     # 2. Process files
@@ -192,13 +194,13 @@ async def create_receipt(
         raise HTTPException(status_code=422, detail=f"Invalid receipt_data: {e}")
 
     try:
-        # Pre-generate receipt ID for image filename
+        # Pre-generate receipt ID
         import uuid as _uuid
         receipt_id = str(_uuid.uuid4())
 
         # Upload image if provided
+        image_url = parsed.imageUrl
         image_filename = None
-        thumbnail_filename = None
         if file:
             file_contents = await file.read()
             if len(file_contents) > settings.MAX_UPLOAD_SIZE:
@@ -207,26 +209,34 @@ async def create_receipt(
                 file_contents, file.content_type or "image/jpeg"
             )
             thumb = generate_thumbnail(file_contents, file.content_type or "image/jpeg")
-            image_filename = save_image(receipt_id, processed)
-            if thumb:
-                thumbnail_filename = save_thumbnail(receipt_id, thumb)
+
+            if settings.USE_POSTGRES:
+                image_filename = save_image(receipt_id, processed)
+                if thumb:
+                    save_thumbnail(receipt_id, thumb)
+            else:
+                base = f"receipt_{int(datetime.utcnow().timestamp())}"
+                image_url, _ = await StorageService.upload_receipt_images(
+                    userId, base, processed, thumb,
+                )
 
         # Prepare data for storage
         data = parsed.model_dump(exclude_unset=True)
         data["userId"] = userId
-        if image_filename:
-            data["image_filename"] = image_filename
-        if thumbnail_filename:
-            data["thumbnail_filename"] = thumbnail_filename
+        if settings.USE_POSTGRES:
+            if image_filename:
+                data["image_filename"] = image_filename
+        else:
+            if image_url:
+                data["imageUrl"] = image_url
 
-        # Save to PostgreSQL
-        receipt_id = await DatabaseService.create_receipt(user_id=userId, receipt_data={**data, "id": receipt_id})
+        receipt_id = await DataService.create_receipt(user_id=userId, receipt_data={**data, "id": receipt_id})
 
         # Audit log
         await AuditService.log_create(userId, receipt_id, data, current_user_id)
 
         # Fetch and return created receipt
-        created = await DatabaseService.get_receipt(userId, receipt_id)
+        created = await DataService.get_receipt(userId, receipt_id)
         return Receipt(**created)
 
     except Exception as e:
@@ -273,7 +283,7 @@ async def list_receipts(
     verify_user_access(userId, current_user_id)
 
     try:
-        receipts, total = await DatabaseService.list_receipts(
+        receipts, total = await DataService.list_receipts(
             userId, skip=skip, limit=limit, status=status_filter,
             category=category, batch_title=batch_title,
         )
@@ -310,7 +320,7 @@ async def list_receipt_groups(
     """
     verify_user_access(userId, current_user_id)
     try:
-        groups = await DatabaseService.get_receipt_groups(userId)
+        groups = await DataService.get_receipt_groups(userId)
         return ReceiptGroupList(
             groups=[ReceiptGroup(**g) for g in groups]
         )
@@ -333,7 +343,7 @@ async def get_receipt(
     verify_user_access(userId, current_user_id)
 
     try:
-        receipt = await DatabaseService.get_receipt(userId, receiptId)
+        receipt = await DataService.get_receipt(userId, receiptId)
 
         if not receipt:
             raise HTTPException(
@@ -379,7 +389,7 @@ async def update_receipt(
 
     try:
         # Get current receipt
-        current = await DatabaseService.get_receipt(userId, receiptId)
+        current = await DataService.get_receipt(userId, receiptId)
         if not current:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -387,6 +397,7 @@ async def update_receipt(
             )
 
         # Upload new image if provided
+        image_url = current.get("imageUrl")
         if file:
             file_contents = await file.read()
             if len(file_contents) > settings.MAX_UPLOAD_SIZE:
@@ -395,23 +406,33 @@ async def update_receipt(
                 file_contents, file.content_type or "image/jpeg"
             )
             thumb = generate_thumbnail(file_contents, file.content_type or "image/jpeg")
-            image_filename = save_image(receiptId, processed)
-            if thumb:
-                save_thumbnail(receiptId, thumb)
+
+            if settings.USE_POSTGRES:
+                image_filename = save_image(receiptId, processed)
+                if thumb:
+                    save_thumbnail(receiptId, thumb)
+            else:
+                base = f"receipt_{int(datetime.utcnow().timestamp())}"
+                image_url, _ = await StorageService.upload_receipt_images(
+                    userId, base, processed, thumb,
+                )
 
         # Prepare update data
         data = updates.model_dump(exclude_unset=True)
         if file:
-            data["image_filename"] = image_filename
+            if settings.USE_POSTGRES:
+                data["image_filename"] = image_filename
+            else:
+                data["imageUrl"] = image_url
 
         # Audit log before update
         await AuditService.log_update(userId, receiptId, current, data, current_user_id)
 
         # Update
-        await DatabaseService.update_receipt(userId, receiptId, data)
+        await DataService.update_receipt(userId, receiptId, data)
 
         # Return updated
-        updated = await DatabaseService.get_receipt(userId, receiptId)
+        updated = await DataService.get_receipt(userId, receiptId)
         return Receipt(**updated)
 
     except HTTPException:
@@ -439,21 +460,24 @@ async def delete_receipt(
 
     try:
         # Get receipt to delete image
-        receipt = await DatabaseService.get_receipt(userId, receiptId)
+        receipt = await DataService.get_receipt(userId, receiptId)
         if not receipt:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Receipt not found"
             )
 
-        # Delete images from local filesystem
-        delete_receipt_images(receiptId)
+        # Delete images
+        if settings.USE_POSTGRES:
+            delete_receipt_images(receiptId)
+        elif receipt.get("imageUrl"):
+            await StorageService.delete_receipt_image(receipt["imageUrl"])
 
         # Audit log before delete
         await AuditService.log_delete(userId, receiptId, receipt, current_user_id)
 
         # Delete document
-        await DatabaseService.delete_receipt(userId, receiptId)
+        await DataService.delete_receipt(userId, receiptId)
 
     except HTTPException:
         raise
@@ -486,7 +510,7 @@ async def search_receipts(
     verify_user_access(userId, current_user_id)
 
     try:
-        receipts = await DatabaseService.search_receipts(
+        receipts = await DataService.search_receipts(
             userId, supplier=supplier, category=category, date_from=date_from, date_to=date_to
         )
 
@@ -517,7 +541,7 @@ async def generate_summary(
 ):
     verify_user_access(userId, current_user_id)
     try:
-        receipts, _ = await DatabaseService.list_receipts(
+        receipts, _ = await DataService.list_receipts(
             userId, skip=0, limit=5000,
         )
 
@@ -632,7 +656,7 @@ async def check_duplicate(
 ):
     verify_user_access(userId, current_user_id)
     try:
-        matches = await DatabaseService.check_duplicate(
+        matches = await DataService.check_duplicate(
             userId,
             supplier=body.supplier,
             totalAmount=body.totalAmount,

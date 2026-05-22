@@ -21,7 +21,7 @@ from app.services.review_batch_service import (
     init_db, create_batch, list_batches, get_batch, delete_batch,
     update_item_status, delete_item,
 )
-from app.services.database_service import DatabaseService
+from app.services.data_adapter import DataService
 from app.services.export_service import generate_export
 from app.schemas.export import ExportRequest, ExportFormat
 
@@ -136,7 +136,7 @@ async def get_review_batch(
     # Fetch all receipts in one batch call
     receipt_ids = [item["receipt_id"] for item in item_list]
     try:
-        receipts = await DatabaseService.get_receipts_by_ids(userId, receipt_ids)
+        receipts = await DataService.get_receipts_by_ids(userId, receipt_ids)
     except Exception:
         logger.exception("Batch fetch of receipts failed")
         receipts = []
@@ -258,7 +258,7 @@ async def prefetch_batch_images(
 
     # Resolve image URLs from database
     try:
-        receipts = await DatabaseService.get_receipts_by_ids(userId, receipt_ids)
+        receipts = await DataService.get_receipts_by_ids(userId, receipt_ids)
     except Exception:
         logger.exception("Failed to fetch receipts for prefetch")
         raise HTTPException(status_code=500, detail="Failed to fetch receipt data")
@@ -351,7 +351,7 @@ async def export_review_batch(
         raise HTTPException(status_code=404, detail="Batch has no receipts")
 
     try:
-        receipts = await DatabaseService.get_receipts_by_ids(userId, receipt_ids)
+        receipts = await DataService.get_receipts_by_ids(userId, receipt_ids)
     except Exception as e:
         logger.error(f"Failed to fetch batch receipts for export: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch receipt data")

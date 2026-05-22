@@ -21,7 +21,9 @@ from pydantic import BaseModel
 from app.core.config import settings
 from app.core.security import get_current_user_id
 from app.services import batch_service
-from app.services.database_service import DatabaseService, save_image, save_thumbnail
+from app.services.data_adapter import DataService
+from app.services.database_service import save_image, save_thumbnail
+from app.services.firebase_service import StorageService
 from app.services.gemini import extract_receipt_data, extract_receipt_batch
 from app.services.image_service import process_image, generate_thumbnail
 from app.services.audit_service import AuditService
@@ -119,24 +121,34 @@ async def _process_batch(batch_id: str, user_id: str, batch_title: str) -> None:
                     import uuid as _batch_uuid
                     pre_id = str(_batch_uuid.uuid4())
 
-                    # Save images locally
+                    # Save images
                     await batch_service.update_item(batch_id, idx, "processing", message="Saving images...")
                     thumb = generate_thumbnail(p_bytes, "image/jpeg")
-                    img_filename = save_image(pre_id, p_bytes)
-                    thumb_filename = save_thumbnail(pre_id, thumb) if thumb else None
 
-                    # Save to PostgreSQL
+                    if settings.USE_POSTGRES:
+                        img_filename = save_image(pre_id, p_bytes)
+                        thumb_filename = save_thumbnail(pre_id, thumb) if thumb else None
+                    else:
+                        base_name = f"receipt_{int(datetime.now(timezone.utc).timestamp())}_{idx}"
+                        image_url, _ = await StorageService.upload_receipt_images(
+                            user_id, base_name, p_bytes, thumb,
+                        )
+
+                    # Save to database
                     await batch_service.update_item(batch_id, idx, "processing", message="Saving to database...")
                     data.update(
                         id=pre_id,
                         userId=user_id,
                         batchTitle=batch_title,
                         status=receipt_status,
-                        image_filename=img_filename,
                     )
-                    if thumb_filename:
-                        data["thumbnail_filename"] = thumb_filename
-                    receipt_id = await DatabaseService.create_receipt(user_id, data)
+                    if settings.USE_POSTGRES:
+                        data["image_filename"] = img_filename
+                        if thumb_filename:
+                            data["thumbnail_filename"] = thumb_filename
+                    else:
+                        data["imageUrl"] = image_url
+                    receipt_id = await DataService.create_receipt(user_id, data)
 
                     await AuditService.log_create(user_id, receipt_id, data, user_id)
 

@@ -3,7 +3,7 @@ from typing import List
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, status
 from app.core.security import get_current_user_id
-from app.services.database_service import DatabaseService
+from app.services.data_adapter import DataService
 from app.services.data_cleaning_service import generate_all_suggestions, apply_actions
 
 logger = logging.getLogger(__name__)
@@ -38,7 +38,7 @@ async def get_cleaning_suggestions(
         raise HTTPException(status_code=403, detail="Access denied")
 
     try:
-        receipts, _ = await DatabaseService.list_receipts(userId, skip=0, limit=5000)
+        receipts, _ = await DataService.list_receipts(userId, skip=0, limit=5000)
     except Exception as e:
         logger.error(f"Failed to fetch receipts for cleaning: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch receipts")

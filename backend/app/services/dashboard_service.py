@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 from collections import defaultdict
 
-from app.services.database_service import DatabaseService
+from app.services.data_adapter import DataService
 from app.services.gemini import generate_ai_summary
 
 logger = logging.getLogger(__name__)
@@ -76,7 +76,7 @@ class DashboardService:
         date_to: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Fetch all receipts for a user, optionally filtered by date range."""
-        receipts, _ = await DatabaseService.list_receipts(
+        receipts, _ = await DataService.list_receipts(
             user_id, skip=0, limit=5000,
         )
 

@@ -49,12 +49,13 @@ services:
       # Local image storage
       - image_data:/app/data/images
     environment:
-      # SQLite database path for review batches (transitional - migrating to PG)
+      # SQLite database path for review batches (transitional — migrating to PG)
       REVIEW_BATCH_DB_PATH: /app/data/review_batches.db
       # PostgreSQL
       DATABASE_URL: postgresql://scanapp:${DB_PASSWORD:-scanapp_dev}@postgres:5432/scanapp
       DATABASE_POOL_MIN: 2
       DATABASE_POOL_MAX: 20
+      USE_POSTGRES: "true"
       # Image storage
       IMAGE_STORAGE_DIR: /app/data/images
       # Firebase Configuration - Uses service account JSON file mounted at /app/firebaseservice.json
@@ -120,12 +121,17 @@ services:
     command: celery -A app.core.celery_app worker --loglevel=info
     volumes:
       - ./firebaseservice.json:/app/firebaseservice.json:ro
+      - image_data:/app/data/images
     environment:
       FIREBASE_CREDENTIALS_PATH: /app/firebaseservice.json
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       REDIS_URL: redis://redis:6379/0
+      USE_POSTGRES: "true"
+      DATABASE_URL: postgresql://scanapp:${DB_PASSWORD:-scanapp_dev}@postgres:5432/scanapp
+      IMAGE_STORAGE_DIR: /app/data/images
     depends_on:
       - redis
+      - postgres
       - backend
     networks:
       - app-network

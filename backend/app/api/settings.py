@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.core.security import get_current_user_id
 from app.core.encryption import encrypt_api_key, decrypt_api_key
 from app.schemas.settings import AISettings, AISettingsUpdate, AIModel, AIProvider, AITestRequest, AITestResponse
-from app.services.database_service import DatabaseService
+from app.services.data_adapter import DataService
 from app.services.gemini import test_api_key
 
 logger = logging.getLogger(__name__)
@@ -35,7 +35,7 @@ async def get_ai_settings(
     verify_user_access(userId, current_user_id)
     
     # Try to get from Firestore
-    settings_dict = await DatabaseService.get_user_settings(userId, "ai_config")
+    settings_dict = await DataService.get_user_settings(userId, "ai_config")
     if not settings_dict:
         # Default settings
         return AISettings()
@@ -52,7 +52,7 @@ async def get_ai_settings(
             settings_dict["configs"][provider]["api_key"] = settings_dict["api_key"]
             # Clean up old key if migration is successful
             del settings_dict["api_key"]
-            await DatabaseService.update_user_settings(userId, "ai_config", settings_dict)
+            await DataService.update_user_settings(userId, "ai_config", settings_dict)
     
     # Decrypt and mask API keys for response
     if "configs" in settings_dict:
@@ -74,7 +74,7 @@ async def update_ai_settings(
     verify_user_access(userId, current_user_id)
     
     # Get current settings
-    current = await DatabaseService.get_user_settings(userId, "ai_config") or {}
+    current = await DataService.get_user_settings(userId, "ai_config") or {}
     
     # Update logic
     if "configs" not in current:
@@ -105,7 +105,7 @@ async def update_ai_settings(
     if "thinking_mode" in update_data:
         current["configs"][active_provider]["thinking_mode"] = update_data["thinking_mode"]
         
-    await DatabaseService.update_user_settings(userId, "ai_config", current)
+    await DataService.update_user_settings(userId, "ai_config", current)
     
     # Decrypt and mask API keys for response
     for provider in current["configs"]:
@@ -128,7 +128,7 @@ async def test_ai_settings(
     # If the key is the masked one, we need to get the real one from Firestore
     api_key = test_request.api_key
     if api_key.startswith("********"):
-        current = await DatabaseService.get_user_settings(userId, "ai_config")
+        current = await DataService.get_user_settings(userId, "ai_config")
         if not current or not current.get("configs") or test_request.provider not in current["configs"]:
             return AITestResponse(success=False, message="No API key stored for this provider to test")
         api_key = decrypt_api_key(current["configs"][test_request.provider].get("api_key", ""))
