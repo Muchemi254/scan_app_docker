@@ -136,10 +136,11 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
                 <div className="aspect-[4/3] bg-gray-100 relative overflow-hidden">
                   {group.thumbnailUrl ? (
                     <img
-                      src={group.thumbnailUrl}
+                      src={`/api/images/cached?url=${encodeURIComponent(group.thumbnailUrl)}&thumb=1`}
                       alt={group.batchTitle}
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                       loading="lazy"
+                      onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
                     />
                   ) : (
                     <div className="flex items-center justify-center h-full text-gray-300">
@@ -240,7 +241,7 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
               >
                 <div className="aspect-[3/4] bg-gray-100 relative overflow-hidden">
                   <img
-                    src={receipt.imageUrl}
+                    src={`/api/images/cached?url=${encodeURIComponent(receipt.imageUrl)}&thumb=1`}
                     alt={receipt.supplier || 'Receipt'}
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                     loading="lazy"

@@ -158,6 +158,13 @@ async def get_cached_image(url: str):
         receipt_id = raw_id.split("?")[0]
         img_bytes = read_image(receipt_id, thumb=thumb)
         if img_bytes:
+            # Detect and convert HEIC/HEIF to JPEG on-the-fly
+            if img_bytes[:12] and img_bytes[4:8] == b'ftyp' and (b'heic' in img_bytes[:32] or b'heif' in img_bytes[:32] or b'mif1' in img_bytes[:32]):
+                try:
+                    from app.services.image_service import process_image
+                    img_bytes, _ = process_image(img_bytes, 'image/heic')
+                except Exception:
+                    pass  # serve as-is if conversion fails
             return Response(
                 content=img_bytes, media_type="image/jpeg",
                 headers={"Cache-Control": "public, max-age=86400"},
