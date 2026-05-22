@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { reviewBatchApi, type ReviewBatch } from '../services/reviewBatchApi';
+import { receiptApi } from '../services/api';
 import { useReceiptStore } from '../stores/receiptStore';
 import type { ReceiptData } from '../types/gemini';
 import ReviewPanel from '../components/ReviewPanel';
@@ -107,6 +108,31 @@ const ReviewBatchDetailPage = ({ userId }: { userId: string | null }) => {
     setSelectedId(newId);
     if (window.innerWidth < 1024) setSidebarOpen(false);
   };
+
+  // Fetch full receipt with items from API when selection changes
+  // (store data from list endpoint does not include items)
+  useEffect(() => {
+    if (!selectedId || !batch) return;
+    const fetchFull = async () => {
+      try {
+        const fullReceipt = await receiptApi.get(selectedId);
+        setBatch(prev => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            items: prev.items?.map(item =>
+              item.receipt_id === selectedId
+                ? { ...item, receipt: fullReceipt }
+                : item
+            ),
+          };
+        });
+      } catch (e) {
+        // receipt may have been deleted — ignore
+      }
+    };
+    fetchFull();
+  }, [selectedId, batch?.id]);
 
   // ── Pagination ──
   const totalPages = Math.max(1, Math.ceil(batchItems.length / PAGE_SIZE));
