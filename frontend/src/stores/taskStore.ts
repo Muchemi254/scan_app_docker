@@ -20,6 +20,7 @@ export interface TaskFile {
 export interface TaskState {
   // Current active task
   activeTaskId: string | null;
+  backendTaskId: string | null;  // Celery task ID from backend
   batchTitle: string;
   files: TaskFile[];
   isProcessing: boolean;
@@ -40,6 +41,7 @@ export interface TaskState {
   updateProgress: (index: number, total: number, percentage: number) => void;
   updateFileStatus: (index: number, status: TaskFile['status'], message?: string, receiptId?: string) => void;
   setProcessing: (processing: boolean) => void;
+  setBackendTaskId: (id: string) => void;
   pauseTask: () => void;
   resumeTask: () => void;
   completeTask: () => void;
@@ -51,6 +53,7 @@ export const useTaskStore = create<TaskState>()(
   persist(
     (set, get) => ({
       activeTaskId: null,
+      backendTaskId: null,
       batchTitle: '',
       files: [],
       isProcessing: false,
@@ -130,10 +133,12 @@ export const useTaskStore = create<TaskState>()(
 
       completeTask: () => {
         set({
-          activeTaskId: null,
           isProcessing: false,
-          currentProgress: 100
         });
+      },
+
+      setBackendTaskId: (id: string) => {
+        set({ backendTaskId: id });
       },
 
       clearTask: () => {

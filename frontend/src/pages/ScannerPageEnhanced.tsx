@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { receiptApi, taskApi } from '../services/api';
 import { useReceiptStore } from '../stores/receiptStore';
+import { useTaskStore } from '../stores/taskStore';
 import { useTaskProgress } from '../hooks/useTaskProgress';
 import { indexedDB } from '../utils/indexeddb';
 
@@ -159,8 +160,10 @@ const ScannerPageEnhanced = ({ userId }: { userId: string | null }) => {
         const taskResponse = await receiptApi.batchExtract(selectedFiles);
         const backendTaskId = taskResponse.task_id;
         
+        // Store backend task ID for polling
+        useTaskStore.getState().setBackendTaskId(backendTaskId);
+        
         console.log(`Async task started: ${backendTaskId}`);
-        // The UI will now poll/track based on the task infrastructure
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Processing failed';
