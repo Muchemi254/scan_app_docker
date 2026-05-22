@@ -1,6 +1,7 @@
 // src/pages/ReviewPage.tsx
 import { useEffect, useState } from 'react';
 import { useReceiptStore } from '../stores/receiptStore';
+import { receiptApi } from '../services/api';
 import type { ReceiptData } from '../types/gemini';
 import ReviewPanel from '../components/ReviewPanel';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
@@ -12,6 +13,7 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
   const receipts = allReceipts.filter(r => r.status === 'needs_review') as ReceiptData[];
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedReceipt, setSelectedReceipt] = useState<ReceiptData | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 1024);
   const [page, setPage] = useState(1);
@@ -44,10 +46,22 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
     if (window.innerWidth < 1024) setSidebarOpen(false);
   };
 
+  // Fetch full receipt with items from API when selection changes
+  useEffect(() => {
+    if (!selectedId) return;
+    const fetchFull = async () => {
+      try {
+        const full = await receiptApi.get(selectedId);
+        setSelectedReceipt(full);
+      } catch (e) { /* ignore */ }
+    };
+    fetchFull();
+  }, [selectedId]);
+
   const totalPages = Math.max(1, Math.ceil(receipts.length / PAGE_SIZE));
   const clampedPage = Math.min(page, totalPages);
   const pageReceipts = receipts.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);
-  const selected = receipts.find(r => r.id === selectedId);
+  const selected = selectedReceipt || receipts.find(r => r.id === selectedId) || null;
 
   if (loading && receipts.length === 0) {
     return (
