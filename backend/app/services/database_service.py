@@ -203,14 +203,14 @@ class DatabaseService:
             await conn.execute(
                 """
                 INSERT INTO user_ai_settings (user_id, provider, model_id, configs)
-                VALUES ($1, $2, $3, $4)
+                VALUES ($1, $2, $3, $4::jsonb)
                 ON CONFLICT (user_id)
-                DO UPDATE SET provider = $2, model_id = $3, configs = $4
+                DO UPDATE SET provider = $2, model_id = $3, configs = $4::jsonb
                 """,
                 user_id,
                 data.get("provider", "gemini"),
                 data.get("model_id", "gemini-3-flash-preview"),
-                data.get("configs", {}),
+                json.dumps(data.get("configs", {})),
             )
             return True
 

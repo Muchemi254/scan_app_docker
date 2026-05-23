@@ -54,13 +54,13 @@ class TaskService:
                     total_items, completed_items, current_step, total_steps,
                     percentage, message, error, metadata, results,
                     created_at, updated_at, started_at, completed_at)
-                VALUES ($1, $2, $3, $4, $5, $6, 0, 0, $7, 0, $8, NULL, $9, '{}',
+                VALUES ($1, $2, $3, $4, $5, $6, 0, 0, $7, 0, $8, NULL, $9::jsonb, '{}'::jsonb,
                         $10, $10, NULL, NULL)
                 """,
                 task_id, user_id, task_type.value, batch_title,
                 TaskStatus.QUEUED.value, total_items, total_items,
                 "Task created, waiting to start",
-                metadata or {},
+                json.dumps(metadata or {}, default=str),
                 now,
             )
         logger.info("Created task %s for user %s", task_id, user_id)
@@ -165,12 +165,12 @@ class TaskService:
             await conn.execute(
                 """
                 UPDATE tasks
-                SET results = results || $3,
+                SET results = results || $3::jsonb,
                     updated_at = $4
                 WHERE id = $1 AND user_id = $2
                 """,
                 task_id, user_id,
-                {result_key: result_data},
+                json.dumps({result_key: result_data}, default=str),
                 datetime.now(timezone.utc),
             )
             return True
