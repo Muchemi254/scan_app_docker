@@ -5,8 +5,8 @@ import { auth } from '../services/firebase';
 import {
   Home, Camera, FileText, ClipboardCheck, Download,
   LogOut, Menu, X, ChevronDown, User, Settings,
-  Images, Sparkles, LayoutList, Search, ListChecks,
-  Shield
+  Images, Sparkles, Search, ListChecks,
+  Shield, PlusCircle,
 } from 'lucide-react';
 
 const Layout = () => {
@@ -49,6 +49,7 @@ const Layout = () => {
     { path: '/gallery', label: 'Gallery', icon: Images },
     { path: '/review-batches', label: 'Batches', icon: ListChecks },
     { path: '/cleaning', label: 'Clean', icon: Sparkles },
+    { path: '/post-receipt', label: 'Manual Entry', icon: PlusCircle },
   ];
 
   const settingsItems = [
