@@ -140,6 +140,7 @@ services:
       - backend
     networks:
       - app-network
+      - data-network
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "celery", "-A", "app.core.celery_app", "inspect", "ping", "-d", "celery@$HOSTNAME"]
@@ -197,7 +198,6 @@ networks:
     driver: bridge
   data-network:
     driver: bridge
-    internal: true  # No external access — only containers on this network can reach DB/Redis
 
 # ============================================================================
 # VOLUMES (if needed for persistent data)
