@@ -431,7 +431,7 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
                       <p className="text-xs text-gray-400">{new Date(b.created_at).toLocaleString()} · {b.size_kb} KB</p>
                     </div>
                     <div className="flex gap-1">
-                      <button onClick={() => backupApi.downloadBackup(b.id, b.filename)} disabled={!b.available}
+                      <button onClick={async () => { try { await backupApi.downloadBackup(b.id, b.filename); } catch(e) { setError(e instanceof Error ? e.message : 'Download failed'); } }} disabled={!b.available}
                         className="p-1.5 rounded text-gray-400 hover:text-blue-500 hover:bg-blue-50 disabled:opacity-30" title="Download"><Download className="h-4 w-4" /></button>
                       <button onClick={() => handleDeleteBackup(b.id)}
                         className="p-1.5 rounded text-gray-400 hover:text-red-500 hover:bg-red-50" title="Delete"><Trash2 className="h-4 w-4" /></button>

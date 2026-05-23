@@ -119,23 +119,19 @@ export const backupApi = {
     return response.json();
   },
 
-  /** Download a specific backup */
+  /** Download a specific backup — uses direct URL for large files */
   async downloadBackup(backupId: string, filename: string): Promise<void> {
     const authorization = await getAuthHeader();
     const userId = getUserId();
-    const response = await fetch(
-      `${API_BASE_URL}/users/${userId}/backup/download/${backupId}`,
-      { headers: { Authorization: authorization } }
-    );
-    if (!response.ok) throw new Error('Download failed');
+    const token = authorization.replace('Bearer ', '');
+    const url = `${API_BASE_URL}/users/${userId}/backup/download/${backupId}?token=${encodeURIComponent(token)}`;
 
-    const blob = await response.blob();
-    const url_blob = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url_blob;
+    a.href = url;
     a.download = filename;
+    document.body.appendChild(a);
     a.click();
-    URL.revokeObjectURL(url_blob);
+    document.body.removeChild(a);
   },
 
   /** Preview a backup file before import */

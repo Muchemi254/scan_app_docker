@@ -20,6 +20,8 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from fastapi.responses import Response
 
 from app.core.security import get_current_user_id
+import firebase_admin
+from firebase_admin import auth as firebase_auth
 from app.services.backup_service import export_user_data, import_user_data, parse_backup
 from app.core.config import settings
 
@@ -132,10 +134,21 @@ async def list_backups(
 async def download_backup(
     userId: str,
     backupId: str,
+    token: Optional[str] = Query(None),
     current_user_id: str = Depends(get_current_user_id),
 ):
-    """Download a previously created backup."""
-    _verify_access(userId, current_user_id)
+    """Download a previously created backup. Accepts ?token= for direct browser downloads."""
+    if token:
+        # Validate token manually (bypasses Bearer header requirement)
+        try:
+            from app.core.security import verify_firebase_token
+            decoded = firebase_auth.verify_id_token(token)
+            if decoded.get("uid") != userId:
+                raise HTTPException(status_code=403, detail="Access denied")
+        except Exception:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    else:
+        _verify_access(userId, current_user_id)
 
     history = _load_history()
     entry = next(
