@@ -6,6 +6,8 @@ import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   signOut,
+  setPersistence,
+  browserLocalPersistence,
 } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
@@ -42,6 +44,8 @@ try {
 
   console.log('🔐 Getting Auth instance...');
   auth = getAuth(app);
+  // Use localStorage instead of default IndexedDB (avoids TDZ crash in some SDK versions)
+  setPersistence(auth, browserLocalPersistence).catch(e => console.warn('Auth persistence:', e));
   console.log('✅ Auth instance ready:', !!auth);
 
   console.log('📊 Getting Firestore instance...');
