@@ -52,11 +52,15 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 # Expose port
-EXPOSE 80
+EXPOSE 8081
 
-# Health check
+# Note: nginx:alpine runs worker processes as 'nginx' user automatically.
+# Master process runs as root (needed for port binding and cache dirs).
+# For full non-root, use nginx-unprivileged image instead.
+
+# Health check (runs as nginx user via HEALTHCHECK CMD)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD curl -f http://127.0.0.1/health || exit 1
+    CMD curl -f http://127.0.0.1:8081/health || exit 1
 
 # Start nginx
 CMD ["nginx", "-g", "daemon off;"]
