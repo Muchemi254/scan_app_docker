@@ -1,6 +1,6 @@
 // src/pages/ViewScansPage.tsx
 import { useEffect, useState, useMemo, useCallback } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Calendar, Clock, Search, X } from 'lucide-react';
 import { useReceiptStore } from '../stores/receiptStore';
 import { receiptApi } from '../services/api';
@@ -17,11 +17,13 @@ const isComplete = (receipt: any) =>
 
 const ViewScansPage = ({ userId }: { userId: string | null }) => {
   const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
   const { items: storeReceipts, loading: storeLoading, load } = useReceiptStore();
 
+  const queryFromUrl = new URLSearchParams(location.search).get('q') || '';
+
   // ── Search state ──
-  const [searchQuery, setSearchQuery] = useState(searchParams.get('q') || '');
+  const [searchQuery, setSearchQuery] = useState(queryFromUrl);
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [searchTotal, setSearchTotal] = useState(0);
   const [searching, setSearching] = useState(false);
@@ -43,7 +45,6 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
       setIsSearchMode(false);
       setSearchResults([]);
       setSearchTotal(0);
-      setSearchParams({});
       setSortBy('scanned');
       return;
     }
@@ -86,7 +87,6 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
     setIsSearchMode(false);
     setSearchResults([]);
     setSearchTotal(0);
-    setSearchParams({});
     setPage(1);
     setSortBy('scanned');
   };
