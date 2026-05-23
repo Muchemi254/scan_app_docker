@@ -65,6 +65,7 @@ async def get_current_user_id(user_id: str = Depends(verify_firebase_token)) -> 
     Get the current authenticated user ID.
 
     This is a dependency that ensures all protected routes require authentication.
+    Also sets the user context for PostgreSQL Row-Level Security.
 
     Args:
         user_id: Extracted from Firebase token
@@ -72,4 +73,6 @@ async def get_current_user_id(user_id: str = Depends(verify_firebase_token)) -> 
     Returns:
         User ID
     """
+    from app.core.database import set_current_user_id
+    set_current_user_id(user_id)
     return user_id

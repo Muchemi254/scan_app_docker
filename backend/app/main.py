@@ -45,6 +45,12 @@ async def lifespan(app: FastAPI):
     """
     # Startup
     logger.info(f"Starting {settings.API_TITLE} v{settings.API_VERSION}")
+
+    # Enforce SECRET_KEY — refuse to start with default
+    if settings.SECRET_KEY == "change-me-in-production":
+        logger.critical("SECRET_KEY is still the default value. Set SECRET_KEY env var.")
+        raise RuntimeError("SECRET_KEY must be changed from default for security")
+
     logger.info(f"Firebase Credentials: {settings.FIREBASE_CREDENTIALS_PATH}")
     logger.info(f"CORS Origins: {settings.BACKEND_CORS_ORIGINS}")
 

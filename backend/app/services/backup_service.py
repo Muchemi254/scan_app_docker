@@ -93,9 +93,18 @@ async def export_user_data(user_id: str) -> bytes:
         "audit_logs": [_serialize_row(r) for r in audit_rows],
         "tasks": [_serialize_row(r) for r in tasks_rows],
         "user_ai_settings": _serialize_row(settings_row),
-        "review_batches": [_serialize_row(r) for r in review_batches_rows],
-        "review_batch_items": [_serialize_row(r) for r in review_items_rows],
     }
+
+    # Strip API keys from backup for security
+    if data.get("user_ai_settings"):
+        configs = data["user_ai_settings"].get("configs", {})
+        if isinstance(configs, str):
+            configs = json.loads(configs)
+        if isinstance(configs, dict):
+            for provider in list(configs.keys()):
+                if isinstance(configs[provider], dict):
+                    configs[provider]["api_key"] = "[REDACTED]"
+            data["user_ai_settings"]["configs"] = configs
 
     data_json = json.dumps(data, indent=2, default=str).encode("utf-8")
     data_hash = hashlib.sha256(data_json).hexdigest()
