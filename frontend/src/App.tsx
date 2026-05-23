@@ -10,7 +10,6 @@ import LandingPage from './pages/LandingPage';
 
 import ScannerPage from './pages/ScannerPage';
 import DashboardPage from './pages/DashboardPage';
-import AiScanningEnginePage from './pages/AiScanningEnginePage';
 import ReceiptDetailsPage from './pages/ReceiptDetailsPage';
 import ReviewPage from './pages/ReviewPage';
 import ExportPage from './pages/ExportPage';
@@ -152,15 +151,6 @@ const AppContent = () => {
                   element={
                     <PrivateRoute userId={userId} authLoading={authLoading}>
                       <DashboardPage userId={userId} />
-                    </PrivateRoute>
-                  }
-                />
-
-                <Route
-                  path="/api-dashboard"
-                  element={
-                    <PrivateRoute userId={userId} authLoading={authLoading}>
-                      <AiScanningEnginePage userId={userId} />
                     </PrivateRoute>
                   }
                 />
