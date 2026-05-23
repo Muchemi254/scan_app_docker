@@ -13,7 +13,7 @@ Benefits:
 
 import io
 import logging
-from typing import Tuple
+from typing import Tuple, Optional
 from PIL import Image
 
 logger = logging.getLogger(__name__)
@@ -56,13 +56,39 @@ def _encode_jpeg(img, quality: int) -> bytes:
     return output.getvalue()
 
 
+# Valid image magic bytes (file header signatures)
+_VALID_MAGIC_BYTES = {
+    b"\xff\xd8\xff": "image/jpeg",
+    b"\x89PNG\r\n\x1a\n": "image/png",
+    b"RIFF": "image/webp",
+    b"\x00\x00\x00": "image/heic",  # ISO BMFF (ftyp at offset 4)
+}
+
+def _detect_image_format(file_data: bytes) -> Optional[str]:
+    """Detect image format from magic bytes, ignoring Content-Type header."""
+    if len(file_data) < 12:
+        return None
+    for magic, fmt in _VALID_MAGIC_BYTES.items():
+        if file_data.startswith(magic):
+            return fmt
+    # HEIC/HEIF: check ftyp box at offset 4
+    if file_data[4:8] == b"ftyp":
+        return "image/heic"
+    return None
+
+
 def process_image(file_data: bytes, content_type: str) -> Tuple[bytes, str]:
     """
     Normalise an uploaded image for storage and AI processing.
 
-    Returns:
-        (processed_bytes, "image/jpeg")
+    Validates format by magic bytes (not Content-Type header).
     """
+    # Validate by magic bytes
+    detected = _detect_image_format(file_data)
+    if not detected:
+        raise ValueError("Unsupported image format — must be JPEG, PNG, WebP, or HEIC")
+    content_type = detected  # Trust magic bytes, not client header
+
     try:
         img = _open_and_normalise(file_data, content_type)
 

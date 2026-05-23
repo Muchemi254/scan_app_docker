@@ -145,6 +145,15 @@ def create_app() -> FastAPI:
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         return response
 
+    # Request ID tracking for debugging / correlation
+    @app.middleware("http")
+    async def add_request_id(request, call_next):
+        import uuid
+        request_id = request.headers.get("X-Request-ID", str(uuid.uuid4())[:8])
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        return response
+
     # ====================================================================
     # ERROR HANDLERS
     # ====================================================================
