@@ -245,6 +245,17 @@ export const receiptApi = {
   },
 
   /**
+   * Full-text search across receipts + items
+   * Returns {total, results: [receipt_with_rank]}
+   */
+  async search(query: string, limit?: number, offset?: number): Promise<{ total: number; results: any[] }> {
+    const params = new URLSearchParams({ q: query });
+    if (limit) params.set('limit', String(limit));
+    if (offset) params.set('offset', String(offset));
+    return apiRequest('GET', `/receipts/search?${params.toString()}`);
+  },
+
+  /**
    * Update receipt (partial update)
    * Optionally upload new image
    */

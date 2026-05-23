@@ -330,6 +330,31 @@ async def list_receipt_groups(
 
 
 @router.get(
+    "/{userId}/receipts/search",
+    summary="Full-text search across receipts and items"
+)
+async def search_receipts_endpoint(
+    userId: str,
+    q: str = Query(..., min_length=1, description="Search query"),
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    current_user_id: str = Depends(get_current_user_id),
+):
+    """
+    Search receipts by any attribute: supplier, invoice, KRA PIN, CU invoice,
+    batch title, category, date, amount, or item names.
+    Returns ranked results with relevance scores.
+    """
+    verify_user_access(userId, current_user_id)
+    try:
+        result = await DataService.search_receipts_fulltext(userId, q, limit, offset)
+        return result
+    except Exception as e:
+        logger.error(f"Search failed: {e}")
+        raise HTTPException(status_code=500, detail="Search failed")
+
+
+@router.get(
     "/{userId}/receipts/{receiptId}",
     response_model=Receipt,
     summary="Get single receipt"

@@ -630,6 +630,98 @@ class DatabaseService:
             return results
 
     @staticmethod
+    async def search_receipts_fulltext(
+        user_id: str,
+        query: str,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict:
+        """
+        Full-text search across receipts + items. Returns ranked matches.
+
+        Searches: supplier, category, invoice_number, kra_pin, buyer_kra_pin,
+        cu_invoice, batch_title, total_amount, and item names/quantities.
+
+        Returns: {total, results: [{receipt, rank, highlights}]}
+        """
+        if not query or not query.strip():
+            return {"total": 0, "results": []}
+
+        q = query.strip()
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            # Build search: full-text rank + ILIKE matches
+            rows = await conn.fetch(
+                """
+                WITH ranked AS (
+                    SELECT DISTINCT ON (r.id)
+                        r.*,
+                        GREATEST(
+                            ts_rank(
+                                to_tsvector('simple',
+                                    COALESCE(r.supplier,'') || ' ' ||
+                                    COALESCE(r.category,'') || ' ' ||
+                                    COALESCE(r.invoice_number,'') || ' ' ||
+                                    COALESCE(r.kra_pin,'') || ' ' ||
+                                    COALESCE(r.buyer_kra_pin,'') || ' ' ||
+                                    COALESCE(r.cu_invoice,'') || ' ' ||
+                                    COALESCE(r.batch_title,'') || ' ' ||
+                                    COALESCE(r.total_amount::text,'')
+                                ),
+                                websearch_to_tsquery('simple', $2)
+                            ),
+                            0.01
+                        ) AS rank,
+                        string_agg(DISTINCT li.name, ', ' ORDER BY li.name) AS item_names
+                    FROM receipts r
+                    LEFT JOIN line_items li ON li.receipt_id = r.id
+                    WHERE r.user_id = $1
+                      AND (
+                        to_tsvector('simple',
+                            COALESCE(r.supplier,'') || ' ' ||
+                            COALESCE(r.category,'') || ' ' ||
+                            COALESCE(r.invoice_number,'') || ' ' ||
+                            COALESCE(r.kra_pin,'') || ' ' ||
+                            COALESCE(r.buyer_kra_pin,'') || ' ' ||
+                            COALESCE(r.cu_invoice,'') || ' ' ||
+                            COALESCE(r.batch_title,'') || ' ' ||
+                            COALESCE(r.total_amount::text,'') || ' ' ||
+                            COALESCE(li.name,'')
+                        ) @@ websearch_to_tsquery('simple', $2)
+                        OR r.supplier ILIKE '%' || $2 || '%'
+                        OR r.category ILIKE '%' || $2 || '%'
+                        OR r.invoice_number ILIKE '%' || $2 || '%'
+                        OR r.kra_pin ILIKE '%' || $2 || '%'
+                        OR r.buyer_kra_pin ILIKE '%' || $2 || '%'
+                        OR r.cu_invoice ILIKE '%' || $2 || '%'
+                        OR r.batch_title ILIKE '%' || $2 || '%'
+                        OR r.total_amount::text ILIKE '%' || $2 || '%'
+                        OR r.receipt_date::text ILIKE '%' || $2 || '%'
+                        OR li.name ILIKE '%' || $2 || '%'
+                      )
+                    GROUP BY r.id
+                    ORDER BY r.id, rank DESC
+                )
+                SELECT *, COUNT(*) OVER() AS total
+                FROM ranked
+                ORDER BY rank DESC
+                LIMIT $3 OFFSET $4
+                """,
+                user_id, q, limit, offset,
+            )
+
+            total = rows[0]["total"] if rows else 0
+            results = []
+            for row in rows:
+                items = await _fetch_items(conn, str(row["id"]))
+                receipt = _receipt_row_to_dict(row, items)
+                receipt["_search_rank"] = float(row["rank"])
+                receipt["_item_names"] = row.get("item_names", "")
+                results.append(receipt)
+
+        return {"total": total, "results": results}
+
+    @staticmethod
     async def get_receipt_groups(user_id: str) -> List[Dict[str, Any]]:
         """Return receipts grouped by batchTitle for gallery browsing."""
         pool = await get_pool()
