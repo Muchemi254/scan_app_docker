@@ -108,9 +108,8 @@ async def create_batch(user_id: str, batch_title: str, filenames: List[str]) -> 
             for i, fn in enumerate(filenames)
         ],
     }
-    # Save batch data
-    await r.setex(f"batch:{batch_id}", BATCH_TTL, json.dumps(data))
-    # Add to user's active batches index
+    # Namespace batch key by user for isolation
+    await r.setex(f"batch:{user_id}:{batch_id}", BATCH_TTL, json.dumps(data))
     await r.sadd(f"user_batches:{user_id}", batch_id)
     return batch_id
 
@@ -121,33 +120,31 @@ async def get_user_batches(user_id: str) -> List[str]:
     return await r.smembers(f"user_batches:{user_id}")
 
 
-async def get_batch(batch_id: str) -> Optional[dict]:
+async def get_batch(user_id: str, batch_id: str) -> Optional[dict]:
     r = await get_redis()
-    raw = await r.get(f"batch:{batch_id}")
+    raw = await r.get(f"batch:{user_id}:{batch_id}")
     if not raw:
         return None
     return json.loads(raw)
 
 
-async def set_batch_status(batch_id: str, status: str) -> None:
+async def set_batch_status(user_id: str, batch_id: str, status: str) -> None:
     r = await get_redis()
-    raw = await r.get(f"batch:{batch_id}")
+    raw = await r.get(f"batch:{user_id}:{batch_id}")
     if not raw:
         return
     data = json.loads(raw)
     data["status"] = status
-    await r.setex(f"batch:{batch_id}", BATCH_TTL, json.dumps(data))
+    await r.setex(f"batch:{user_id}:{batch_id}", BATCH_TTL, json.dumps(data))
 
 
 async def update_item(
-    batch_id: str,
-    index: int,
-    status: str,
-    receipt_id: Optional[str] = None,
+    user_id: str, batch_id: str, index: int,
+    status: str, receipt_id: Optional[str] = None,
     message: Optional[str] = None,
 ) -> None:
     r = await get_redis()
-    raw = await r.get(f"batch:{batch_id}")
+    raw = await r.get(f"batch:{user_id}:{batch_id}")
     if not raw:
         return
     data = json.loads(raw)
@@ -157,17 +154,11 @@ async def update_item(
         item["receiptId"] = receipt_id
     if message is not None:
         item["message"] = message
-    await r.setex(f"batch:{batch_id}", BATCH_TTL, json.dumps(data))
+    await r.setex(f"batch:{user_id}:{batch_id}", BATCH_TTL, json.dumps(data))
 
 
-async def delete_batch(batch_id: str) -> None:
+async def delete_batch(user_id: str, batch_id: str) -> None:
     r = await get_redis()
-    raw = await r.get(f"batch:{batch_id}")
-    if raw:
-        data = json.loads(raw)
-        user_id = data.get("userId")
-        if user_id:
-            await r.srem(f"user_batches:{user_id}", batch_id)
-            
-    await r.delete(f"batch:{batch_id}")
+    await r.srem(f"user_batches:{user_id}", batch_id)
+    await r.delete(f"batch:{user_id}:{batch_id}")
     clear_images(batch_id)

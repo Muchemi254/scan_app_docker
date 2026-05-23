@@ -150,6 +150,10 @@ async def get_cached_image(url: str):
     - External URLs: fetches from source → caches in Redis → returns
     """
     # ── Local filesystem path (PostgreSQL-backed receipts) ────────────────
+    #
+    # NOTE: Image requests via <img> tags cannot carry auth headers.
+    # Defense: receipt IDs are opaque UUIDs/strings — unguessable URLs.
+    # For production, add signed URL tokens or short-lived proxy links.
     if url.startswith("/receipt-images/"):
         from app.services.database_service import read_image
         parts = url.rstrip("/").split("/")

@@ -72,10 +72,10 @@ async def _process_batch(batch_id: str, user_id: str, batch_title: str) -> None:
     images = batch_service.get_images(batch_id)
     if not images:
         logger.error(f"Batch {batch_id}: images not found in memory (server restarted?)")
-        await batch_service.set_batch_status(batch_id, "failed")
+        await batch_service.set_batch_status(user_id, batch_id, "failed")
         return
 
-    await batch_service.set_batch_status(batch_id, "processing")
+    await batch_service.set_batch_status(user_id, batch_id, "processing")
     logger.info(f"Batch {batch_id}: processing {len(images)} images for user {user_id}")
 
     # Process in chunks of 5 for AI efficiency
@@ -88,13 +88,13 @@ async def _process_batch(batch_id: str, user_id: str, batch_title: str) -> None:
             # 1. Optimize all images in chunk
             processed_chunk = []
             for idx, (filename, image_bytes, content_type) in zip(chunk_indices, chunk):
-                await batch_service.update_item(batch_id, idx, "processing", message="Optimizing image...")
+                await batch_service.update_item(user_id, batch_id, idx, "processing", message="Optimizing image...")
                 processed, p_type = process_image(image_bytes, content_type)
                 processed_chunk.append((processed, p_type, filename))
 
             # 2. Extract via Gemini (Batch call)
             for idx in chunk_indices:
-                await batch_service.update_item(batch_id, idx, "processing", message="AI batch extraction...")
+                await batch_service.update_item(user_id, batch_id, idx, "processing", message="AI batch extraction...")
             
             # Prepare for AI: [(b64, mime), ...]
             ai_input = [
@@ -109,7 +109,7 @@ async def _process_batch(batch_id: str, user_id: str, batch_title: str) -> None:
             # 3. Save results for each item
             for idx, result, (p_bytes, p_type, filename) in zip(chunk_indices, extracted_results, processed_chunk):
                 if result is None:
-                    await batch_service.update_item(batch_id, idx, "failed", message="AI failed to extract data")
+                    await batch_service.update_item(user_id, batch_id, idx, "failed", message="AI failed to extract data")
                     continue
                 
                 try:
@@ -122,7 +122,7 @@ async def _process_batch(batch_id: str, user_id: str, batch_title: str) -> None:
                     pre_id = str(_batch_uuid.uuid4())
 
                     # Save images
-                    await batch_service.update_item(batch_id, idx, "processing", message="Saving images...")
+                    await batch_service.update_item(user_id, batch_id, idx, "processing", message="Saving images...")
                     thumb = generate_thumbnail(p_bytes, "image/jpeg")
 
                     if settings.USE_POSTGRES:
@@ -135,7 +135,7 @@ async def _process_batch(batch_id: str, user_id: str, batch_title: str) -> None:
                         )
 
                     # Save to database
-                    await batch_service.update_item(batch_id, idx, "processing", message="Saving to database...")
+                    await batch_service.update_item(user_id, batch_id, idx, "processing", message="Saving to database...")
                     data.update(
                         id=pre_id,
                         userId=user_id,
@@ -154,14 +154,14 @@ async def _process_batch(batch_id: str, user_id: str, batch_title: str) -> None:
 
                     item_status = "done" if not has_missing else "needs_review"
                     msg = "Saved successfully" if not has_missing else "Missing fields — saved for review"
-                    await batch_service.update_item(batch_id, idx, item_status, receipt_id=receipt_id, message=msg)
+                    await batch_service.update_item(user_id, batch_id, idx, item_status, receipt_id=receipt_id, message=msg)
                 except Exception as item_exc:
                     logger.error(f"Batch {batch_id} item {idx} failed: {item_exc}")
                     # Clean up orphaned images
                     if settings.USE_POSTGRES:
                         from app.services.database_service import delete_receipt_images
                         delete_receipt_images(pre_id)
-                    await batch_service.update_item(batch_id, idx, "failed", message=str(item_exc)[:200])
+                    await batch_service.update_item(user_id, batch_id, idx, "failed", message=str(item_exc)[:200])
 
         except asyncio.CancelledError:
             raise
@@ -169,12 +169,12 @@ async def _process_batch(batch_id: str, user_id: str, batch_title: str) -> None:
             logger.error(f"Batch {batch_id} chunk failed: {chunk_exc}")
             # Mark remaining items in this chunk as failed
             for idx in chunk_indices:
-                batch_state = await batch_service.get_batch(batch_id)
+                batch_state = await batch_service.get_batch(user_id, batch_id)
                 if batch_state and batch_state["items"][idx]["status"] == "processing":
-                     await batch_service.update_item(batch_id, idx, "failed", message=f"Chunk error: {str(chunk_exc)[:100]}")
+                     await batch_service.update_item(user_id, batch_id, idx, "failed", message=f"Chunk error: {str(chunk_exc)[:100]}")
 
     batch_service.clear_images(batch_id)
-    await batch_service.set_batch_status(batch_id, "done")
+    await batch_service.set_batch_status(user_id, batch_id, "done")
     logger.info(f"Batch {batch_id}: all items processed")
 
 
@@ -224,7 +224,7 @@ async def start_processing(
     if userId != current_user_id:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    batch = await batch_service.get_batch(batchId)
+    batch = await batch_service.get_batch(user_id, batchId)
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
     _require_owner(batch, userId)
@@ -289,7 +289,7 @@ async def get_batch(
     if userId != current_user_id:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    batch = await batch_service.get_batch(batchId)
+    batch = await batch_service.get_batch(user_id, batchId)
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
     _require_owner(batch, userId)
@@ -335,7 +335,7 @@ async def delete_batch(
     if userId != current_user_id:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    batch = await batch_service.get_batch(batchId)
+    batch = await batch_service.get_batch(user_id, batchId)
     if batch:
         _require_owner(batch, userId)
-        await batch_service.delete_batch(batchId)
+        await batch_service.delete_batch(user_id, batchId)

@@ -97,9 +97,39 @@
 4. **🔴 Secure SECRET_KEY** — Crash on default, rotate
 5. **🔴 Strip API keys from backups** — Or encrypt the backup file
 6. **🟡 Restrict Firebase IAM** — Create minimal-permission service account
-7. **🟡 Add Redis auth** — Requirepass in redis.conf
-8. **🟡 Container non-root** — Add USER directives to Dockerfiles
-9. **🟡 Add Content-Security-Policy header**
-10. **🟡 Database backups** — Automated pg_dump schedule
-11. **🟡 Network segmentation** — Separate Docker networks per tier
-12. **🟡 Disable Swagger in production** — `ENABLE_DOCS=false`
+7. ✅ **Add Redis auth** — `--requirepass` in redis.conf, password in REDIS_URL
+8. 🟡 Container non-root — Add USER directives to Dockerfiles
+9. 🟡 Add Content-Security-Policy header
+10. 🟡 Database backups — Automated pg_dump schedule
+11. 🟡 Network segmentation — Separate Docker networks per tier
+12. 🟡 Disable Swagger in production — `ENABLE_DOCS=false`
+
+---
+
+## Redis — Data Isolation & Live Scans
+
+### Architecture
+
+Redis stores two kinds of data:
+
+| Key Pattern | Data | User-Isolated | TTL |
+|---|---|---|---|
+| `batch:{userId}:{batchId}` | Batch scan state (progress, per-file status, receipt IDs) | ✅ Namespaced by userId | 24h |
+| `user_batches:{userId}` | Set of active batch IDs for a user | ✅ Per-user set | None |
+| `heic:img:{url}` | Image proxy cache (JPEG bytes) | ❌ Shared across users | 24h |
+| In-memory `_batch_images` dict | Raw image bytes during batch processing | ❌ No isolation, lost on restart | Process lifetime |
+
+### Security Measures Applied
+
+1. **Redis password authentication** — `redis-server --requirepass` prevents unauthorized access
+2. **Batch keys namespaced by user** — `batch:{userId}:{batchId}` prevents cross-user batch access via Redis directly
+3. **API-level access control** — `_require_owner(batch, userId)` checks `batch.userId` before returning data
+4. **Image cache** — Keys are URL-based. Local receipt image URLs are unguessable UUIDs/strings. For production, add signed URL tokens.
+
+### Remaining Risks
+
+| Risk | Mitigation |
+|---|---|
+| Image proxy no auth (can't send headers via `<img>` tags) | Receipt IDs are opaque — brute-force impractical. Add short-lived tokens for production. |
+| In-memory image store not isolated | Cleared after batch completion. Lost on restart (batch auto-failed). |
+| Redis single-instance, no failover | Add Redis Sentinel or use managed Redis for production. |

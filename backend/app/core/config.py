@@ -48,6 +48,7 @@ class Settings(BaseSettings):
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
+    REDIS_PASSWORD: str = os.getenv("REDIS_PASSWORD", "")
 
     # PostgreSQL
     DATABASE_URL: str = os.getenv(
