@@ -237,6 +237,12 @@ export const receiptApi = {
     return apiRequest('GET', '/receipts/groups');
   },
 
+  /** Full-text search across receipts + items */
+  async search(q: string, limit = 50, offset = 0): Promise<{ total: number; results: any[] }> {
+    const p = new URLSearchParams({ q, limit: String(limit), offset: String(offset) });
+    return apiRequest('GET', `/receipts/search?${p.toString()}`);
+  },
+
   /**
    * Get single receipt by ID
    */
