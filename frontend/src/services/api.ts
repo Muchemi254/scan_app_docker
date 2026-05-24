@@ -251,44 +251,9 @@ export const receiptApi = {
   },
 
   /**
-   * Full-text search across receipts + items
-   * Returns {total, results: [receipt_with_rank]}
-   */
-  async search(query: string, limit?: number, offset?: number): Promise<{ total: number; results: any[] }> {
-    const params = new URLSearchParams({ q: query });
-    if (limit) params.set('limit', String(limit));
-    if (offset) params.set('offset', String(offset));
-    return apiRequest('GET', `/receipts/search?${params.toString()}`);
-  },
-
-  /**
    * Update receipt (partial update)
    * Optionally upload new image
    */
-  async update(receiptId: string, updates: any, file?: File): Promise<any> {
-    return apiUpload('PUT', `/receipts/${receiptId}`, file, updates);
-  },
-
-  /**
-   * Delete receipt
-   */
-  async delete(receiptId: string): Promise<void> {
-    return apiRequest('DELETE', `/receipts/${receiptId}`);
-  },
-
-  /**
-   * Search receipts with filters
-   */
-  async search(filters?: any): Promise<any> {
-    const params = new URLSearchParams();
-
-    if (filters?.supplier) params.append('supplier', filters.supplier);
-    if (filters?.category) params.append('category', filters.category);
-    if (filters?.date_from) params.append('date_from', filters.date_from);
-    if (filters?.date_to) params.append('date_to', filters.date_to);
-
-    return apiRequest('POST', `/receipts/search?${params.toString()}`);
-  },
 
   /**
    * Check for duplicate receipts before creating/updating

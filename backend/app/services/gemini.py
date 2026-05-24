@@ -174,6 +174,69 @@ CATEGORIES = [
     "Repairs & Maintenance", "Emergency Purchases"
 ]
 
+# ── Global extraction prompt (shared by single & batch) ──────────────
+# {batch_instruction} is replaced at call-site:
+#   • single mode  → asks for ONE JSON object
+#   • batch mode   → asks for a JSON ARRAY
+RECEIPT_EXTRACTION_PROMPT = """
+{batch_instruction}
+
+INSTRUCTIONS:
+- exclude symbols like currency symbols if present
+- totalAmount should be without currency symbol
+- taxAmount should be without currency symbol
+-try and identify commas and decimal points in the numeric values
+- Use 'N/A' for missing fields
+- Dates in MM/DD/YYYY format
+- For the category field, analyze the supplier and items, then choose EXACTLY ONE:
+  """ + ', '.join(CATEGORIES) + """
+  Return ONLY the exact category name from the list.
+- KRA PINs: Always start with 'P' or 'A' followed by digits and end with a letter
+  (e.g. 'P05115959U'). The SELLER PIN (kraPin) belongs to the supplier.
+  The BUYER PIN (buyerKraPin) belongs to the customer/your company.
+  Often one appears near the top (seller) and one near the bottom (buyer).
+- cuInvoice: The KRA-issued control unit number, often a long numeric
+  string (e.g. '004084202207080184'), labeled 'CU Invoice', 'CU No',
+  'Control Unit', or similar. This is NOT the supplier's own invoice number.
+
+{response_schema}
+"""
+
+_SINGLE_RESPONSE_SCHEMA = """Return ONLY a JSON object matching this structure:
+{{
+  "supplier": "string",
+  "totalAmount": "string",
+  "taxAmount": "string or N/A",
+  "receiptDate": "MM/DD/YYYY",
+  "category": "category name",
+  "invoiceNumber": "string or N/A",
+  "kraPin": "seller KRA PIN or N/A",
+  "buyerKraPin": "buyer KRA PIN or N/A",
+  "cuInvoice": "KRA CU invoice number or N/A",
+  "items": [
+    {{"name": "string", "quantity": number, "price": "string", "tax": "string", "isZeroRated": boolean}}
+  ]
+}}"""
+
+_BATCH_RESPONSE_SCHEMA = """Return ONLY a JSON array matching this structure:
+[
+  {{
+    "supplier": "string",
+    "totalAmount": "string",
+    "taxAmount": "string or N/A",
+    "receiptDate": "MM/DD/YYYY",
+    "category": "category name",
+    "invoiceNumber": "string or N/A",
+    "kraPin": "seller KRA PIN or N/A",
+    "buyerKraPin": "buyer KRA PIN or N/A",
+    "cuInvoice": "KRA CU invoice number or N/A",
+    "items": [
+      {{"name": "string", "quantity": number, "price": "string", "tax": "string", "isZeroRated": boolean}}
+    ]
+  }},
+  ...
+]"""
+
 
 async def extract_receipt_data(
     image_base64: str,
@@ -206,41 +269,10 @@ async def extract_receipt_data(
                  provider_config = ai_settings.get("configs", {}).get(provider, {})
                  thinking_mode = provider_config.get("thinking_mode", False)
 
-        # Prepare category instructions
-        category_instructions = f"""
-        For the category field, analyze the supplier and items, then choose EXACTLY ONE:
-        {', '.join(CATEGORIES)}
-        Return ONLY the exact category name from the list."""
-
-        prompt = f"""Extract receipt details from this image and return ONLY valid JSON.
-        INSTRUCTIONS:
-        - Include currency symbols if present
-        - Use 'N/A' for missing fields
-        - Dates in MM/DD/YYYY format
-        - {category_instructions}
-        - KRA PINs: Always start with 'P' followed by digits and end with a letter
-          (e.g. 'P05115959U'). The SELLER PIN (kraPin) belongs to the supplier.
-          The BUYER PIN (buyerKraPin) belongs to the customer/your company.
-          Often one appears near the top (seller) and one near the bottom (buyer).
-        - cuInvoice: The KRA-issued control unit number, often a long numeric
-          string (e.g. '004084202207080184'), labeled 'CU Invoice', 'CU No',
-          'Control Unit', or similar. This is NOT the supplier's own invoice number.
-
-        Return ONLY JSON object matching this structure:
-        {{
-        "supplier": "string",
-        "totalAmount": "string",
-        "taxAmount": "string or N/A",
-        "receiptDate": "MM/DD/YYYY",
-        "category": "category name",
-        "invoiceNumber": "string or N/A",
-        "kraPin": "seller KRA PIN or N/A",
-        "buyerKraPin": "buyer KRA PIN or N/A",
-        "cuInvoice": "KRA CU invoice number or N/A",
-        "items": [
-        {{"name": "string", "quantity": number, "price": "string", "tax": "string", "isZeroRated": boolean}}
-        ]
-        }}"""
+        prompt = RECEIPT_EXTRACTION_PROMPT.format(
+            batch_instruction="Extract receipt details from this image and return ONLY valid JSON.",
+            response_schema=_SINGLE_RESPONSE_SCHEMA,
+        )
 
         if provider == "deepseek":
             content = [
@@ -332,43 +364,13 @@ async def extract_receipt_batch(
                  provider_config = ai_settings.get("configs", {}).get(provider, {})
                  thinking_mode = provider_config.get("thinking_mode", False)
 
-        # Prepare category instructions
-        category_instructions = f"""
-For the category field, choose EXACTLY ONE from:
-{', '.join(CATEGORIES)}
-Return ONLY the exact category name from the list."""
-
-        prompt = f"""Extract receipt details from these {len(images)} images.
-Return a JSON ARRAY of objects, one for each image in the EXACT order they were provided.
-
-INSTRUCTIONS per object:
-- Include currency symbols if present
-- Use 'N/A' for missing fields
-- Dates in MM/DD/YYYY format
-- {category_instructions}
-- KRA PINs: Always 'P' + digits + letter (e.g. 'P05115959U').
-  Seller PIN (kraPin) = supplier. Buyer PIN (buyerKraPin) = your company.
-- cuInvoice: KRA control unit number, long numeric string
-  (e.g. '004084202207080184'), labeled 'CU Invoice'/'CU No'.
-
-Return ONLY a JSON array matching this structure:
-[
-  {{
-    "supplier": "string",
-    "totalAmount": "string",
-    "taxAmount": "string or N/A",
-    "receiptDate": "MM/DD/YYYY",
-    "category": "category name",
-    "invoiceNumber": "string or N/A",
-    "kraPin": "seller KRA PIN or N/A",
-    "buyerKraPin": "buyer KRA PIN or N/A",
-    "cuInvoice": "KRA CU invoice number or N/A",
-    "items": [
-        {{"name": "string", "quantity": number, "price": "string", "tax": "string", "isZeroRated": boolean}}
-    ]
-  }},
-  ...
-]"""
+        prompt = RECEIPT_EXTRACTION_PROMPT.format(
+            batch_instruction=(
+                f"Extract receipt details from these {len(images)} images.\n"
+                "Return a JSON ARRAY of objects, one for each image in the EXACT order they were provided."
+            ),
+            response_schema=_BATCH_RESPONSE_SCHEMA,
+        )
         if provider == "deepseek":
             content = []
             for i, (b64, mime) in enumerate(images):

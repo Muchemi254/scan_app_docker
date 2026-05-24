@@ -80,6 +80,13 @@ class DataService:
         return await db.search_receipts(user_id, supplier, category, date_from, date_to)
 
     @classmethod
+    async def search_receipts_fulltext(
+        cls, user_id: str, query: str, limit: int = 50, offset: int = 0,
+    ) -> dict:
+        db, _ = cls._backend()
+        return await db.search_receipts_fulltext(user_id, query, limit, offset)
+
+    @classmethod
     async def check_duplicate(
         cls, user_id: str, supplier: Optional[str] = None,
         totalAmount: Optional[str] = None, receiptDate: Optional[str] = None,

@@ -518,35 +518,8 @@ async def delete_receipt(
 # ADVANCED ENDPOINTS
 # ============================================================================
 
-@router.post(
-    "/{userId}/receipts/search",
-    response_model=list[Receipt],
-    summary="Search receipts"
-)
-async def search_receipts(
-    userId: str,
-    supplier: Optional[str] = Query(None),
-    category: Optional[str] = Query(None),
-    date_from: Optional[str] = Query(None),
-    date_to: Optional[str] = Query(None),
-    current_user_id: str = Depends(get_current_user_id),
-):
-    """Search receipts with multiple filters."""
-    verify_user_access(userId, current_user_id)
 
-    try:
-        receipts = await DataService.search_receipts(
-            userId, supplier=supplier, category=category, date_from=date_from, date_to=date_to
-        )
 
-        return [Receipt(**r) for r in receipts]
-
-    except Exception as e:
-        logger.error(f"Search failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Search failed"
-        )
 
 
 # ============================================================================

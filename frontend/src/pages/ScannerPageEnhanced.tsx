@@ -4,7 +4,6 @@ import { receiptApi, taskApi } from '../services/api';
 import { useReceiptStore } from '../stores/receiptStore';
 import { useTaskStore } from '../stores/taskStore';
 import { useTaskProgress } from '../hooks/useTaskProgress';
-import { indexedDB } from '../utils/indexeddb';
 
 const ScannerPageEnhanced = ({ userId }: { userId: string | null }) => {
   const navigate = useNavigate();
@@ -36,18 +35,18 @@ const ScannerPageEnhanced = ({ userId }: { userId: string | null }) => {
   useEffect(() => {
     const checkForIncompleteTask = async () => {
       if (!userId) return;
-
-      try {
-        const activeTasks = await indexedDB.getActiveTasksForUser(userId);
-        if (activeTasks.length > 0) {
-          setResumeData(activeTasks[0]);
-          setShowResumeDialog(true);
-        }
-      } catch (err) {
-        console.error('Error checking for incomplete tasks:', err);
+      // Use Zustand store's persisted state instead of IndexedDB
+      const storeState = useTaskStore.getState();
+      if (storeState.activeTaskId && storeState.isProcessing) {
+        setResumeData({
+          taskId: storeState.activeTaskId,
+          batchTitle: storeState.batchTitle,
+          totalItems: storeState.totalFiles,
+          completedItems: storeState.currentIndex + 1,
+        });
+        setShowResumeDialog(true);
       }
     };
-
     checkForIncompleteTask();
   }, [userId]);
 
