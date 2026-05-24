@@ -152,12 +152,13 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
     });
 
     return result;
-  }, [receipts, batchParam, filters, sortBy]);
+  }, [receipts, batchParam, filters, sortBy, searchResults]);
 
-  const totalPages   = Math.max(1, Math.ceil(filteredReceipts.length / PAGE_SIZE));
+  const totalPages   = Math.max(1, Math.ceil((searchResults !== null ? searchTotal : filteredReceipts.length) / PAGE_SIZE));
   const clampedPage  = Math.min(page, totalPages);
   const pageReceipts = filteredReceipts.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);
   const selected     = filteredReceipts.find(r => r.id === selectedId);
+  const displayReceipts = searchResults !== null ? searchResults : filteredReceipts;
 
   if (loading && receipts.length === 0) {
     return (
