@@ -41,7 +41,8 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
     const q = e.target.value;
     setSearchQuery(q);
     if (searchTimer.current) clearTimeout(searchTimer.current);
-    if (!q.trim()) { setSearchResults(null); setSearchTotal(0); return; }
+    if (!q.trim()) { setSearchResults(null); setSearchTotal(0); setPage(1); return; }
+    setPage(1);
     searchTimer.current = setTimeout(async () => {
       try {
         const r = await receiptApi.search(q.trim(), PAGE_SIZE, 0);
@@ -49,6 +50,16 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
         setSearchTotal(r.total || 0);
       } catch (_) {}
     }, 300);
+  };
+
+  const loadSearchPage = async (pageNum: number) => {
+    if (!searchQuery.trim()) return;
+    try {
+      const offset = (pageNum - 1) * PAGE_SIZE;
+      const r = await receiptApi.search(searchQuery.trim(), PAGE_SIZE, offset);
+      setSearchResults(r.results || []);
+      setSearchTotal(r.total || 0);
+    } catch (_) {}
   };
 
   const [filters, setFilters] = useState({
@@ -199,15 +210,29 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
         )}
 
         {/* Search */}
-        <div className="px-3 py-2 border-b bg-white">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={handleSearch}
-            placeholder="Search receipts..."
-            className="w-full pl-8 pr-3 py-1.5 text-sm border rounded focus:ring-2 focus:ring-blue-500 outline-none"
-          />
+        <div className="flex-shrink-0 px-3 py-2 border-b bg-white">
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={handleSearch}
+              placeholder="Search everything — supplier, item, invoice, pin..."
+              className="w-full pl-8 pr-8 py-1.5 text-sm border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+            />
+            {searchQuery && (
+              <button onClick={() => { setSearchQuery(''); setSearchResults(null); setSearchTotal(0); }}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+          {searchResults !== null && (
+            <p className="text-xs text-gray-500 mt-1">
+              {searchTotal} match{searchTotal !== 1 ? 'es' : ''}
+              {searchTotal > 0 && <span className="text-blue-500"> · ranked</span>}
+            </p>
+          )}
         </div>
 
         {/* Sort Controls */}
@@ -287,9 +312,15 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
             disabled={clampedPage === 1}
             className="px-2 py-0.5 border rounded disabled:opacity-30 hover:bg-gray-100"
           >‹</button>
+        <span className="px-1">{clampedPage}/{totalPages}</span>
+          <button
+            onClick={() => { const np = Math.max(1, page - 1); setPage(np); if (searchResults !== null) loadSearchPage(np); }}
+            disabled={clampedPage === 1}
+            className="px-2 py-0.5 border rounded disabled:opacity-30 hover:bg-gray-100"
+          >‹</button>
           <span className="px-1">{clampedPage}/{totalPages}</span>
           <button
-            onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+            onClick={() => { const np = Math.min(totalPages, page + 1); setPage(np); if (searchResults !== null) loadSearchPage(np); }}
             disabled={clampedPage >= totalPages}
             className="px-2 py-0.5 border rounded disabled:opacity-30 hover:bg-gray-100"
           >›</button>
