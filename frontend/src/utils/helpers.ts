@@ -52,14 +52,3 @@ export const formatCurrency = (value: string | number): string => {
     currency: 'KES'
   }).format(isNaN(num) ? 0 : num);
 };
-
-// Type definition needed for Gemini responses
-// src/types/gemini.ts
-export interface ResponseSchema {
-  type: string;
-  properties: Record<string, any>;
-  items?: {
-    type: string;
-    properties?: Record<string, any>;
-  };
-}

@@ -1,20 +1,7 @@
 import { auth } from './firebase';
+import { getAuthHeader, getUserId } from './authUtils';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api/v1';
-
-async function getAuthHeader(): Promise<string> {
-  if (auth?.currentUser) {
-    const token = await auth.currentUser.getIdToken();
-    if (token) return `Bearer ${token}`;
-  }
-  throw new Error('Authentication failed');
-}
-
-function getUserId(): string {
-  const userId = auth?.currentUser?.uid;
-  if (!userId) throw new Error('User not authenticated');
-  return userId;
-}
 
 export interface BackupEntry {
   id: string;

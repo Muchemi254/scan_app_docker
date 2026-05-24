@@ -1,33 +1,7 @@
 import { auth } from './firebase';
+import { getAuthHeader, getUserId } from './authUtils';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api/v1';
-
-async function getAuthHeader(): Promise<string> {
-  if (auth?.currentUser) {
-    const token = await auth.currentUser.getIdToken();
-    if (token) return `Bearer ${token}`;
-  }
-  const token = await new Promise<string | null>(resolve => {
-    if (!auth) { resolve(null); return; }
-    const unsubscribe = auth.onAuthStateChanged(user => {
-      unsubscribe();
-      if (user) {
-        user.getIdToken().then(t => resolve(t)).catch(() => resolve(null));
-      } else {
-        resolve(null);
-      }
-    });
-    setTimeout(() => resolve(null), 5000);
-  });
-  if (!token) throw new Error('Authentication failed');
-  return `Bearer ${token}`;
-}
-
-function getUserId(): string {
-  const userId = auth?.currentUser?.uid;
-  if (!userId) throw new Error('User not authenticated');
-  return userId;
-}
 
 async function apiRequest<T>(method: string, endpoint: string, data?: any): Promise<T> {
   const authorization = await getAuthHeader();

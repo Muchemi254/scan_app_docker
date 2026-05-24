@@ -31,11 +31,11 @@ console.log('📋 Config values:', {
 });
 
 // Initialize Firebase immediately
-let app;
-let auth;
-let db;
-let storage;
-let initError: Error | null = null;
+var app: any;
+var auth: any;
+var db: any;
+var storage: any;
+var initError: Error | null = null;
 
 try {
   console.log('🚀 Initializing Firebase App...');

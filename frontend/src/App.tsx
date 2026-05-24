@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { initAuth, initError as firebaseInitError } from './services/firebase';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -8,24 +8,32 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import './utils/firebaseDebug'; // Load Firebase debugger
 import LandingPage from './pages/LandingPage';
 
-import ScannerPage from './pages/ScannerPage';
-import DashboardPage from './pages/DashboardPage';
-import ReceiptDetailsPage from './pages/ReceiptDetailsPage';
-import ReviewPage from './pages/ReviewPage';
-import ExportPage from './pages/ExportPage';
-import LoginPage from './pages/LoginPage';
-import SignupPage from './pages/SignupPage';
-import Layout from './components/Layout';
-import ViewScansPage from './pages/ViewScansPage';
-import GalleryPage from './pages/GalleryPage';
-import DataCleaningPage from './pages/DataCleaningPage';
-import ReviewBatchListPage from './pages/ReviewBatchListPage';
-import ReviewBatchDetailPage from './pages/ReviewBatchDetailPage';
-import SettingsPage from './pages/SettingsPage';
+// Lazy load pages to avoid circular dependency initialization issues
+const ScannerPage = lazy(() => import('./pages/ScannerPage'));
+const DashboardPage = lazy(() => import('./pages/DashboardPage'));
+const ReceiptDetailsPage = lazy(() => import('./pages/ReceiptDetailsPage'));
+const ReviewPage = lazy(() => import('./pages/ReviewPage'));
+const ExportPage = lazy(() => import('./pages/ExportPage'));
+const LoginPage = lazy(() => import('./pages/LoginPage'));
+const SignupPage = lazy(() => import('./pages/SignupPage'));
+const ViewScansPage = lazy(() => import('./pages/ViewScansPage'));
+const GalleryPage = lazy(() => import('./pages/GalleryPage'));
+const DataCleaningPage = lazy(() => import('./pages/DataCleaningPage'));
+const ReviewBatchListPage = lazy(() => import('./pages/ReviewBatchListPage'));
+const ReviewBatchDetailPage = lazy(() => import('./pages/ReviewBatchDetailPage'));
+const SettingsPage = lazy(() => import('./pages/SettingsPage'));
+const PostReceiptPage = lazy(() => import('./pages/PostReceiptPage'));
 
+import Layout from './components/Layout';
 import { ScannerProvider } from './contexts/ScannerContext';
 import PrivateRoute from './contexts/PrivateRoute';
-import PostReceiptPage from './pages/PostReceiptPage';
+
+// Loading fallback for Suspense
+const PageLoader = () => (
+  <div className="min-h-screen flex items-center justify-center bg-gray-50">
+    <div className="animate-spin rounded-full h-10 w-10 border-4 border-blue-500 border-t-transparent" />
+  </div>
+);
 
 // React Query client
 const queryClient = new QueryClient({
@@ -120,15 +128,16 @@ const AppContent = () => {
       <ApiConfigProvider>
         <TaskProvider userId={userId}>
           <ErrorBoundary>
-            {/* Firebase error banner - non-blocking, dismissible */}
-            {!bannerDismissed && (
-              <FirebaseErrorBanner
-                error={firebaseError}
-                onDismiss={() => setBannerDismissed(true)}
-              />
-            )}
+            <Suspense fallback={<PageLoader />}>
+              {/* Firebase error banner - non-blocking, dismissible */}
+              {!bannerDismissed && (
+                <FirebaseErrorBanner
+                  error={firebaseError}
+                  onDismiss={() => setBannerDismissed(true)}
+                />
+              )}
 
-            <Routes>
+              <Routes>
               {/* Public routes */}
               <Route
                 path="/"
@@ -286,6 +295,7 @@ const AppContent = () => {
                 />
               </Route>
             </Routes>
+          </Suspense>
           </ErrorBoundary>
         </TaskProvider>
       </ApiConfigProvider>
