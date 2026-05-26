@@ -463,6 +463,13 @@ export const cleaningApi = {
   async applyActions(actions: any[]): Promise<{ status: string; stats: any }> {
     return apiRequest('POST', '/receipts/clean/apply', { actions });
   },
+
+  /**
+   * Dismiss a suggestion so it won't appear again.
+   */
+  async ignoreSuggestion(suggestion: any): Promise<{ status: string; ignored: boolean }> {
+    return apiRequest('POST', '/receipts/clean/ignore', suggestion);
+  },
 };
 
 // ============================================================================

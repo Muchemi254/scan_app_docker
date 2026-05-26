@@ -44,6 +44,16 @@ const DataCleaningPage = ({ userId }: { userId: string | null }) => {
     }
   };
 
+  const handleIgnore = async (type: string, group: any) => {
+    try {
+      const payload = { type, ...group };
+      await cleaningApi.ignoreSuggestion(payload);
+      await fetchSuggestions();
+    } catch (err: any) {
+      alert(err.message || 'Failed to dismiss');
+    }
+  };
+
   const toggleAction = (id: string) => {
     setSelectedActions(prev => {
       const next = new Set(prev);
@@ -260,6 +270,13 @@ const DataCleaningPage = ({ userId }: { userId: string | null }) => {
                         </div>
                         <p className="text-xs text-gray-400 mt-0.5">{cluster.receipt_ids.length} receipts affected</p>
                       </div>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleIgnore('supplier_merge', cluster); }}
+                        className="p-1 rounded hover:bg-red-50 text-gray-300 hover:text-red-500 flex-shrink-0"
+                        title="Dismiss — not same supplier"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
                     </div>
                     {isExpanded && (
                       <div className="px-5 pb-3 pl-14">
@@ -321,6 +338,13 @@ const DataCleaningPage = ({ userId }: { userId: string | null }) => {
                         <span className="text-xs text-gray-500 ml-2">for {prop.supplier}</span>
                         <p className="text-xs text-gray-400 mt-0.5">{prop.target_receipts.length} receipts missing this field</p>
                       </div>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleIgnore('field_propagation', prop); }}
+                        className="p-1 rounded hover:bg-red-50 text-gray-300 hover:text-red-500 flex-shrink-0"
+                        title="Dismiss"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
                     </div>
                     {isExpanded && (
                       <div className="px-5 pb-3 pl-14">
@@ -373,6 +397,13 @@ const DataCleaningPage = ({ userId }: { userId: string | null }) => {
                           {group.receipts.map((r: any) => r.totalAmount).filter((v: any, i: number, a: any) => a.indexOf(v) === i).join(', ')}
                         </p>
                       </div>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleIgnore('duplicate', group); }}
+                        className="p-1 rounded hover:bg-red-50 text-gray-300 hover:text-red-500 flex-shrink-0"
+                        title="Dismiss — not a duplicate"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
                     </div>
                     {isExpanded && (
                       <div className="px-5 pb-3 pl-14 space-y-3">

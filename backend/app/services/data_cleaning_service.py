@@ -1,6 +1,6 @@
 import logging
 from difflib import SequenceMatcher
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from collections import defaultdict
 
 from app.services.data_adapter import DataService
@@ -48,7 +48,6 @@ def _to_float(v: Any) -> float:
 
 def suggest_supplier_merges(receipts: List[dict]) -> List[dict]:
     """Find supplier names that are similar but not identical, group into clusters."""
-    # Collect unique supplier names
     supplier_map: Dict[str, List[str]] = defaultdict(list)
     for r in receipts:
         name = (r.get("supplier") or "Unknown").strip()
@@ -82,7 +81,6 @@ def suggest_supplier_merges(receipts: List[dict]) -> List[dict]:
                 merged.add(name_b)
 
         if len(cluster["variants"]) > 1:
-            # Sort variants by frequency (most receipts first)
             paired = sorted(
                 zip(cluster["variants"], cluster["receipt_ids"], cluster["scores"]),
                 key=lambda x: -len(supplier_map.get(x[0], []))
@@ -94,7 +92,6 @@ def suggest_supplier_merges(receipts: List[dict]) -> List[dict]:
             clusters.append(cluster)
             merged.add(name_a)
 
-    # Sort clusters by total impact (number of receipts)
     clusters.sort(key=lambda c: -len(c["receipt_ids"]))
     return clusters
 
@@ -107,7 +104,6 @@ def suggest_field_propagation(receipts: List[dict]) -> List[dict]:
     """Find fields that can be propagated from receipts that have them to those that don't (same supplier)."""
     suggestions = []
 
-    # Group receipts by normalized supplier
     supplier_groups: Dict[str, List[dict]] = defaultdict(list)
     for r in receipts:
         norm = normalize_supplier(r.get("supplier") or "Unknown")
@@ -115,7 +111,6 @@ def suggest_field_propagation(receipts: List[dict]) -> List[dict]:
 
     for norm_sup, group in supplier_groups.items():
         for field in PROPAGATABLE_FIELDS:
-            # Find receipts with a non-empty value
             source_ids = []
             known_value = None
             target_ids = []
@@ -125,7 +120,6 @@ def suggest_field_propagation(receipts: List[dict]) -> List[dict]:
                 if val and str(val).strip() and str(val).strip() not in ("N/A", ""):
                     if known_value is None:
                         known_value = str(val).strip()
-                    # Only use as source if it matches the first known value
                     if str(val).strip() == known_value:
                         source_ids.append(r["id"])
                 else:
@@ -140,7 +134,6 @@ def suggest_field_propagation(receipts: List[dict]) -> List[dict]:
                     "target_receipts": target_ids,
                 })
 
-    # Sort by most targets affected
     suggestions.sort(key=lambda s: -len(s["target_receipts"]))
     return suggestions
 
@@ -182,7 +175,6 @@ def suggest_duplicates(receipts: List[dict]) -> List[dict]:
             b_cu = (b.get("cuInvoice") or "").strip()
             b_amt = _to_float(b.get("totalAmount"))
 
-            # Rule 1: Any matching invoice identifier → definite duplicate
             if _ids_match(a_inv, b_inv) or _ids_match(a_cu, b_cu):
                 pair_group["receipts"].append(b)
                 pair_group["scores"].append(1.0)
@@ -190,7 +182,6 @@ def suggest_duplicates(receipts: List[dict]) -> List[dict]:
                 checked.add(a["id"])
                 continue
 
-            # Rule 2: Same totalAmount → high-confidence duplicate
             if a_amt > 0 and b_amt > 0 and a_amt == b_amt:
                 pair_group["receipts"].append(b)
                 pair_group["scores"].append(0.95)
@@ -217,14 +208,60 @@ def suggest_duplicates(receipts: List[dict]) -> List[dict]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Ignore list helpers
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _ignore_key(suggestion: dict) -> str:
+    """Generate a stable ignore key for a suggestion so it can be dismissed."""
+    stype = suggestion.get("type", "")
+    if stype == "duplicate":
+        ids = sorted(r["id"] for r in suggestion.get("receipts", []))
+        return f"dup|{'|'.join(ids)}"
+    if stype == "supplier_merge":
+        variants = sorted(suggestion.get("variants", []))
+        return f"merge|{'|'.join(variants)}"
+    if stype == "field_propagation":
+        return f"prop|{suggestion.get('field','')}|{suggestion.get('supplier','')}"
+    return ""
+
+
+async def _load_ignored(user_id: str) -> set:
+    """Load the user's ignored cleaning suggestions."""
+    try:
+        data = await DataService.get_user_settings(user_id, "cleaning_ignored")
+        if data and "keys" in data:
+            return set(data["keys"])
+    except Exception:
+        pass
+    return set()
+
+
+async def _save_ignored(user_id: str, ignored: set) -> None:
+    """Save the user's ignored cleaning suggestions."""
+    await DataService.update_user_settings(user_id, "cleaning_ignored", {"keys": list(ignored)})
+
+
+def _filter_ignored(suggestions: List[dict], ignored: set) -> List[dict]:
+    """Remove suggestions whose ignore key is in the ignored set."""
+    return [s for s in suggestions if _ignore_key(s) not in ignored]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════════════
 
-def generate_all_suggestions(receipts: List[dict]) -> dict:
-    return {
+def generate_all_suggestions(receipts: List[dict], ignored: Optional[set] = None) -> dict:
+    raw = {
         "supplier_merges": suggest_supplier_merges(receipts),
         "field_propagations": suggest_field_propagation(receipts),
         "duplicates": suggest_duplicates(receipts),
+    }
+    if not ignored:
+        return raw
+    return {
+        "supplier_merges": _filter_ignored(raw["supplier_merges"], ignored),
+        "field_propagations": _filter_ignored(raw["field_propagations"], ignored),
+        "duplicates": _filter_ignored(raw["duplicates"], ignored),
     }
 
 
