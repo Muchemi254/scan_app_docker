@@ -1,8 +1,7 @@
 import logging
 from difflib import SequenceMatcher
-from typing import Optional, List, Dict, Any, Tuple
+from typing import List, Dict, Any
 from collections import defaultdict
-from datetime import datetime
 
 from app.services.data_adapter import DataService
 from app.core.config import settings
@@ -10,7 +9,6 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 SIMILARITY_THRESHOLD = 0.80
-DUPLICATE_THRESHOLD = 0.85
 
 PROPAGATABLE_FIELDS = ["kraPin", "category"]
 
@@ -151,25 +149,18 @@ def suggest_field_propagation(receipts: List[dict]) -> List[dict]:
 # Duplicate suggestions
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _date_diff_days(d1: str, d2: str) -> Optional[int]:
-    """Return absolute difference in days between two MM/DD/YYYY dates, or None if invalid."""
-    try:
-        from datetime import datetime as dt
-        a = dt.strptime(d1, "%m/%d/%Y")
-        b = dt.strptime(d2, "%m/%d/%Y")
-        return abs((a - b).days)
-    except (ValueError, TypeError):
-        return None
+def _ids_match(a_val: str, b_val: str) -> bool:
+    """Two identifier strings match — both non-empty and equal."""
+    return bool(a_val) and bool(b_val) and a_val == b_val
 
 
 def suggest_duplicates(receipts: List[dict]) -> List[dict]:
     """Find receipts that are likely duplicates.
 
-    Rules:
-    - Same invoice number (both non-empty) → definite duplicate regardless of date.
-    - Same date OR adjacent dates + high supplier + high amount match → likely duplicate.
-    - Different dates (>1 day apart) with no invoice match → NOT a duplicate
-      (recurring purchase, e.g. buying fuel weekly).
+    Rules (high-confidence only, no false positives from dates/names):
+    - Any matching invoice identifier (invoiceNumber, cuInvoice) → definite duplicate.
+    - Same totalAmount (exact match, both > 0) → high-confidence duplicate.
+    - Date, supplier name, or KRA PIN alone do NOT constitute a duplicate.
     """
     checked = set()
     duplicates = []
@@ -177,11 +168,9 @@ def suggest_duplicates(receipts: List[dict]) -> List[dict]:
     for i, a in enumerate(receipts):
         if a["id"] in checked:
             continue
-        a_sup = (a.get("supplier") or "").strip()
-        a_amt = _to_float(a.get("totalAmount"))
-        a_date = (a.get("receiptDate") or "").strip()
         a_inv = (a.get("invoiceNumber") or "").strip()
-        a_items = a.get("items") or []
+        a_cu = (a.get("cuInvoice") or "").strip()
+        a_amt = _to_float(a.get("totalAmount"))
 
         pair_group = {"receipts": [a], "keep_id": a["id"], "scores": [1.0]}
 
@@ -189,35 +178,22 @@ def suggest_duplicates(receipts: List[dict]) -> List[dict]:
             b = receipts[j]
             if b["id"] in checked:
                 continue
-            b_sup = (b.get("supplier") or "").strip()
-            b_amt = _to_float(b.get("totalAmount"))
-            b_date = (b.get("receiptDate") or "").strip()
             b_inv = (b.get("invoiceNumber") or "").strip()
-            b_items = b.get("items") or []
+            b_cu = (b.get("cuInvoice") or "").strip()
+            b_amt = _to_float(b.get("totalAmount"))
 
-            # Rule 1: Same non-empty invoice number → definite duplicate
-            if a_inv and b_inv and a_inv == b_inv:
+            # Rule 1: Any matching invoice identifier → definite duplicate
+            if _ids_match(a_inv, b_inv) or _ids_match(a_cu, b_cu):
                 pair_group["receipts"].append(b)
                 pair_group["scores"].append(1.0)
                 checked.add(b["id"])
                 checked.add(a["id"])
                 continue
 
-            # Check date proximity — different dates are likely recurring purchases
-            date_diff = _date_diff_days(a_date, b_date)
-            if date_diff is not None and date_diff > 1:
-                continue  # more than 1 day apart → not a duplicate (recurring)
-
-            # Rule 2: Same/adjacent date + high supplier + high amount
-            sup_sim = similarity(a_sup, b_sup)
-            amt_sim = 1.0 - min(abs(a_amt - b_amt) / max(a_amt, b_amt, 1), 1.0)
-            item_sim = 1.0 if len(a_items) == len(b_items) and len(a_items) > 0 else 0.5
-
-            combined = sup_sim * 0.40 + amt_sim * 0.35 + item_sim * 0.25
-
-            if combined >= DUPLICATE_THRESHOLD:
+            # Rule 2: Same totalAmount → high-confidence duplicate
+            if a_amt > 0 and b_amt > 0 and a_amt == b_amt:
                 pair_group["receipts"].append(b)
-                pair_group["scores"].append(round(combined, 3))
+                pair_group["scores"].append(0.95)
                 checked.add(b["id"])
                 checked.add(a["id"])
 
