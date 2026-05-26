@@ -97,19 +97,13 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
     );
   }
 
-  if (!loading && receipts.length === 0) {
+  if (!loading && receipts.length === 0 && searchResults === null) {
     return (
       <div className="flex items-center justify-center h-[calc(100vh-4rem)]">
         <div className="bg-white rounded-lg shadow p-8 text-center">
-          <div className="text-5xl mb-4">{searchResults !== null ? '🔍' : '✅'}</div>
-          <h2 className="text-xl font-bold text-gray-800 mb-1">
-            {searchResults !== null ? 'No Matching Receipts to Review' : 'Nothing to Review'}
-          </h2>
-          <p className="text-gray-500 text-sm">
-            {searchResults !== null
-              ? 'Try a different search term.'
-              : 'All receipts have been processed.'}
-          </p>
+          <div className="text-5xl mb-4">✅</div>
+          <h2 className="text-xl font-bold text-gray-800 mb-1">Nothing to Review</h2>
+          <p className="text-gray-500 text-sm">All receipts have been processed.</p>
         </div>
       </div>
     );
@@ -143,21 +137,27 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
 
       {/* List */}
       <div className="flex-1 overflow-y-auto divide-y">
-        {pageReceipts.map(receipt => (
-          <div
-            key={receipt.id}
-            onClick={() => handleSelect(receipt.id)}
-            className={`px-3 py-3 cursor-pointer transition-colors border-l-4 ${
-              selectedId === receipt.id
-                ? 'bg-blue-50 border-blue-500'
-                : 'border-transparent hover:bg-gray-50'
-            }`}
-          >
-            <div className="font-medium text-sm truncate">{receipt.supplier}</div>
-            <div className="text-xs text-gray-400 mt-0.5">{receipt.receiptDate}</div>
-            <div className="text-xs text-gray-600 font-medium">{receipt.totalAmount} KES</div>
+        {searchResults !== null && receipts.length === 0 ? (
+          <div className="flex items-center justify-center h-full py-12 px-4 text-sm text-gray-400 text-center">
+            No matches found
           </div>
-        ))}
+        ) : (
+          pageReceipts.map(receipt => (
+            <div
+              key={receipt.id}
+              onClick={() => handleSelect(receipt.id)}
+              className={`px-3 py-3 cursor-pointer transition-colors border-l-4 ${
+                selectedId === receipt.id
+                  ? 'bg-blue-50 border-blue-500'
+                  : 'border-transparent hover:bg-gray-50'
+              }`}
+            >
+              <div className="font-medium text-sm truncate">{receipt.supplier}</div>
+              <div className="text-xs text-gray-400 mt-0.5">{receipt.receiptDate}</div>
+              <div className="text-xs text-gray-600 font-medium">{receipt.totalAmount} KES</div>
+            </div>
+          ))
+        )}
       </div>
 
       {/* Pagination */}
