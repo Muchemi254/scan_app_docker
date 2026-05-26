@@ -1,10 +1,11 @@
 // src/pages/ViewScansPage.tsx
-import { useEffect, useState, useMemo, useRef } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Hash, Calendar, Clock, Filter, X, Search } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Hash, Calendar, Clock, Filter } from 'lucide-react';
 import { useReceiptStore } from '../stores/receiptStore';
 import { receiptApi } from '../services/api';
 import ReviewPanel from '../components/ReviewPanel';
+import SearchBar from '../components/SearchBar';
 import type { ReceiptData } from '../types/gemini';
 import ExportPage from './ExportPage';
 
@@ -35,21 +36,17 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<any[] | null>(null);
   const [searchTotal, setSearchTotal] = useState(0);
-  const searchTimer = useRef<ReturnType<typeof setTimeout>>();
 
-  const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const q = e.target.value;
-    setSearchQuery(q);
-    if (searchTimer.current) clearTimeout(searchTimer.current);
-    if (!q.trim()) { setSearchResults(null); setSearchTotal(0); setPage(1); return; }
+  const onSearchResults = (results: any[], total: number) => {
+    setSearchResults(results);
+    setSearchTotal(total);
     setPage(1);
-    searchTimer.current = setTimeout(async () => {
-      try {
-        const r = await receiptApi.search(q.trim(), PAGE_SIZE, 0);
-        setSearchResults(r.results || []);
-        setSearchTotal(r.total || 0);
-      } catch (_) {}
-    }, 300);
+  };
+
+  const onSearchClear = () => {
+    setSearchResults(null);
+    setSearchTotal(0);
+    setPage(1);
   };
 
   const loadSearchPage = async (pageNum: number) => {
@@ -212,28 +209,11 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
 
         {/* Search */}
         <div className="flex-shrink-0 px-3 py-2 border-b bg-white">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={handleSearch}
-              placeholder="Search everything — supplier, item, invoice, pin..."
-              className="w-full pl-8 pr-8 py-1.5 text-sm border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-            />
-            {searchQuery && (
-              <button onClick={() => { setSearchQuery(''); setSearchResults(null); setSearchTotal(0); }}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
-                <X className="h-4 w-4" />
-              </button>
-            )}
-          </div>
-          {searchResults !== null && (
-            <p className="text-xs text-gray-500 mt-1">
-              {searchTotal} match{searchTotal !== 1 ? 'es' : ''}
-              {searchTotal > 0 && <span className="text-blue-500"> · ranked</span>}
-            </p>
-          )}
+          <SearchBar
+            onResults={onSearchResults}
+            onClear={onSearchClear}
+            onQueryChange={setSearchQuery}
+          />
         </div>
 
         {/* Sort Controls */}

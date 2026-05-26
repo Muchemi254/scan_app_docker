@@ -1,10 +1,11 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { reviewBatchApi, type ReviewBatch } from '../services/reviewBatchApi';
 import { receiptApi } from '../services/api';
 import { useReceiptStore } from '../stores/receiptStore';
 import type { ReceiptData } from '../types/gemini';
 import ReviewPanel from '../components/ReviewPanel';
+import SearchBar from '../components/SearchBar';
 import { ChevronLeft, ChevronRight, CheckCircle, Clock, Eye, Flag, AlertCircle, Download, X } from 'lucide-react';
 
 const STATUS_OPTS = [
@@ -41,6 +42,22 @@ const ReviewBatchDetailPage = ({ userId }: { userId: string | null }) => {
   const [page, setPage] = useState(1);
   const [statusUpdating, setStatusUpdating] = useState(false);
   const [exporting, setExporting] = useState(false);
+
+  // Search
+  const [searchResults, setSearchResults] = useState<any[] | null>(null);
+  const [searchTotal, setSearchTotal] = useState(0);
+
+  const onSearchResults = (results: any[], total: number) => {
+    setSearchResults(results);
+    setSearchTotal(total);
+    setPage(1);
+  };
+
+  const onSearchClear = () => {
+    setSearchResults(null);
+    setSearchTotal(0);
+    setPage(1);
+  };
 
   // ── Load store receipts + batch metadata ──
   const loadAll = useCallback(async () => {
@@ -81,6 +98,13 @@ const ReviewBatchDetailPage = ({ userId }: { userId: string | null }) => {
     })
     .filter(Boolean) as BatchReviewItem[];
 
+  // ── When searching, filter batchItems to matching receipts ──
+  const filteredBatchItems = useMemo(() => {
+    if (searchResults === null) return batchItems;
+    const searchIds = new Set(searchResults.map((r: any) => r.id));
+    return batchItems.filter(bi => searchIds.has(bi.receipt.id));
+  }, [batchItems, searchResults]);
+
   // Count receipts NOT found in store
   const missingCount = (batch?.items || []).length - batchItems.length;
 
@@ -95,10 +119,10 @@ const ReviewBatchDetailPage = ({ userId }: { userId: string | null }) => {
 
   // ── Auto-select first item ──
   useEffect(() => {
-    if (!selectedId && batchItems.length > 0) {
-      setSelectedId(batchItems[0].receipt.id);
+    if (!selectedId && filteredBatchItems.length > 0) {
+      setSelectedId(filteredBatchItems[0].receipt.id);
     }
-  }, [batchItems, selectedId]);
+  }, [filteredBatchItems, selectedId]);
 
   // ── Selection (same pattern as ReviewPage) ──
   const handleSelect = (newId: string) => {
@@ -135,10 +159,10 @@ const ReviewBatchDetailPage = ({ userId }: { userId: string | null }) => {
   }, [selectedId, batch?.id]);
 
   // ── Pagination ──
-  const totalPages = Math.max(1, Math.ceil(batchItems.length / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(filteredBatchItems.length / PAGE_SIZE));
   const clampedPage = Math.min(page, totalPages);
-  const pageItems = batchItems.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);
-  const selected = batchItems.find(bi => bi.receipt.id === selectedId);
+  const pageItems = filteredBatchItems.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);
+  const selected = filteredBatchItems.find(bi => bi.receipt.id === selectedId);
 
   // ── Remove item from batch ──
   const handleRemoveItem = async (e: React.MouseEvent, receiptId: string) => {
@@ -270,7 +294,7 @@ const ReviewBatchDetailPage = ({ userId }: { userId: string | null }) => {
         </button>
         <span className="text-sm font-semibold text-gray-700 truncate flex-1">
           {batch?.name || 'Batch'}
-          <span className="ml-1.5 text-xs font-normal text-gray-400">{batchItems.length}</span>
+          <span className="ml-1.5 text-xs font-normal text-gray-400">{filteredBatchItems.length}</span>
         </span>
         <button
           onClick={() => setSidebarOpen(false)}
@@ -279,6 +303,15 @@ const ReviewBatchDetailPage = ({ userId }: { userId: string | null }) => {
         >
           <ChevronLeft className="h-4 w-4" />
         </button>
+      </div>
+
+      {/* Search */}
+      <div className="flex-shrink-0 px-3 py-2 border-b bg-white">
+        <SearchBar
+          placeholder="Search receipts in this batch..."
+          onResults={onSearchResults}
+          onClear={onSearchClear}
+        />
       </div>
 
       {/* Progress bar */}
@@ -337,8 +370,8 @@ const ReviewBatchDetailPage = ({ userId }: { userId: string | null }) => {
       {/* Pagination (same pattern as ReviewPage) */}
       <div className="flex-shrink-0 border-t px-3 py-2 flex items-center justify-between text-xs text-gray-500 bg-gray-50">
         <span>
-          {`${(clampedPage - 1) * PAGE_SIZE + 1}–${Math.min(clampedPage * PAGE_SIZE, batchItems.length)}`}
-          {' '}/ {batchItems.length}
+          {`${(clampedPage - 1) * PAGE_SIZE + 1}–${Math.min(clampedPage * PAGE_SIZE, filteredBatchItems.length)}`}
+          {' '}/ {filteredBatchItems.length}
         </span>
         <div className="flex gap-1">
           <button

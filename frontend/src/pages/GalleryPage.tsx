@@ -1,8 +1,9 @@
 import { useEffect, useState, useCallback } from 'react';
 import { receiptApi } from '../services/api';
 import ImageViewer from '../components/ImageViewer';
+import SearchBar from '../components/SearchBar';
 import {
-  Search, Image, X, ChevronLeft, ChevronRight,
+  Image, X, ChevronLeft, ChevronRight,
   FolderOpen, Calendar, Layers, ArrowLeft
 } from 'lucide-react';
 
@@ -28,7 +29,20 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
   const [loadingReceipts, setLoadingReceipts] = useState(false);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
-  const [searchQuery, setSearchQuery] = useState('');
+
+  // Search
+  const [searchResults, setSearchResults] = useState<any[] | null>(null);
+  const [searchTotal, setSearchTotal] = useState(0);
+
+  const onSearchResults = (results: any[], total: number) => {
+    setSearchResults(results);
+    setSearchTotal(total);
+  };
+
+  const onSearchClear = () => {
+    setSearchResults(null);
+    setSearchTotal(0);
+  };
 
   // Selected receipt for fullscreen view
   const [selectedReceipt, setSelectedReceipt] = useState<any | null>(null);
@@ -69,7 +83,8 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
   const openGroup = (groupTitle: string) => {
     setActiveGroup(groupTitle);
     setPage(1);
-    setSearchQuery('');
+    setSearchResults(null);
+    setSearchTotal(0);
     loadReceipts(groupTitle, 1);
   };
 
@@ -78,7 +93,8 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
     setActiveGroup(null);
     setReceipts([]);
     setPage(1);
-    setSearchQuery('');
+    setSearchResults(null);
+    setSearchTotal(0);
   };
 
   // Page change
@@ -87,15 +103,13 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
     if (activeGroup) loadReceipts(activeGroup, newPage);
   };
 
-  // Client-side search filter within loaded receipts
-  const displayedReceipts = searchQuery && activeGroup
-    ? receipts.filter(r =>
-        (r.supplier || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (r.category || '').toLowerCase().includes(searchQuery.toLowerCase())
-      )
-    : receipts;
+  // Use search results when available, otherwise loaded receipts
+  const displayedReceipts = searchResults !== null
+    ? searchResults.filter((r: any) => r.imageUrl)
+    : (activeGroup ? receipts.filter((r: any) => r.imageUrl) : []);
 
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const effectiveTotal = searchResults !== null ? searchTotal : total;
+  const totalPages = Math.max(1, Math.ceil(effectiveTotal / PAGE_SIZE));
 
   // ── Loading: groups ──
   if (loadingGroups) {
@@ -201,20 +215,19 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
               {activeGroup}
             </h1>
             <p className="text-sm text-gray-500">
-              {total} receipt{total !== 1 ? 's' : ''} — Page {page} of {totalPages}
+              {searchResults !== null
+                ? `${displayedReceipts.length} result${displayedReceipts.length !== 1 ? 's' : ''}`
+                : `${total} receipt${total !== 1 ? 's' : ''} — Page ${page} of ${totalPages}`}
             </p>
           </div>
         </div>
 
         {/* Search within group */}
-        <div className="relative w-full sm:w-56">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            placeholder="Filter by name..."
-            className="w-full pl-9 pr-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+        <div className="w-full sm:w-64">
+          <SearchBar
+            placeholder="Search receipts in gallery..."
+            onResults={onSearchResults}
+            onClear={onSearchClear}
           />
         </div>
       </div>
@@ -227,7 +240,9 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
       ) : displayedReceipts.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-20 text-gray-400">
           <Image className="h-16 w-16 mb-4" />
-          <p className="text-lg font-medium">No images in this group</p>
+          <p className="text-lg font-medium">
+            {searchResults !== null ? 'No matches found' : 'No images in this group'}
+          </p>
         </div>
       ) : (
         <>
@@ -262,8 +277,8 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
             ))}
           </div>
 
-          {/* Pagination controls */}
-          {totalPages > 1 && (
+          {/* Pagination controls — only when not searching (group mode) */}
+          {searchResults === null && totalPages > 1 && (
             <div className="flex items-center justify-center gap-2 mt-6">
               <button
                 onClick={() => goToPage(page - 1)}

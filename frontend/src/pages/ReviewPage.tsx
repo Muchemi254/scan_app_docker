@@ -1,16 +1,39 @@
 // src/pages/ReviewPage.tsx
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useReceiptStore } from '../stores/receiptStore';
 import { receiptApi } from '../services/api';
 import type { ReceiptData } from '../types/gemini';
 import ReviewPanel from '../components/ReviewPanel';
+import SearchBar from '../components/SearchBar';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 const PAGE_SIZE = 25;
 
 const ReviewPage = ({ userId }: { userId: string | null }) => {
   const { items: allReceipts, loading, load } = useReceiptStore();
-  const receipts = allReceipts.filter(r => r.status === 'needs_review') as ReceiptData[];
+
+  // Search
+  const [searchResults, setSearchResults] = useState<any[] | null>(null);
+  const [searchTotal, setSearchTotal] = useState(0);
+
+  const receipts = useMemo(() => {
+    if (searchResults !== null) {
+      return searchResults.filter((r: any) => r.status === 'needs_review') as ReceiptData[];
+    }
+    return allReceipts.filter(r => r.status === 'needs_review') as ReceiptData[];
+  }, [allReceipts, searchResults]);
+
+  const onSearchResults = (results: any[], total: number) => {
+    setSearchResults(results);
+    setSearchTotal(total);
+    setPage(1);
+  };
+
+  const onSearchClear = () => {
+    setSearchResults(null);
+    setSearchTotal(0);
+    setPage(1);
+  };
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedReceipt, setSelectedReceipt] = useState<ReceiptData | null>(null);
@@ -78,9 +101,15 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
     return (
       <div className="flex items-center justify-center h-[calc(100vh-4rem)]">
         <div className="bg-white rounded-lg shadow p-8 text-center">
-          <div className="text-5xl mb-4">✅</div>
-          <h2 className="text-xl font-bold text-gray-800 mb-1">Nothing to Review</h2>
-          <p className="text-gray-500 text-sm">All receipts have been processed.</p>
+          <div className="text-5xl mb-4">{searchResults !== null ? '🔍' : '✅'}</div>
+          <h2 className="text-xl font-bold text-gray-800 mb-1">
+            {searchResults !== null ? 'No Matching Receipts to Review' : 'Nothing to Review'}
+          </h2>
+          <p className="text-gray-500 text-sm">
+            {searchResults !== null
+              ? 'Try a different search term.'
+              : 'All receipts have been processed.'}
+          </p>
         </div>
       </div>
     );
@@ -93,7 +122,7 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
       <div className="flex-shrink-0 flex items-center justify-between gap-2 px-3 py-2 border-b bg-gray-50">
         <span className="text-sm font-semibold text-gray-700 truncate">
           Needs Review
-          <span className="ml-1.5 text-xs font-normal text-gray-400">{receipts.length}</span>
+          <span className="ml-1.5 text-xs font-normal text-gray-400">{searchResults !== null ? searchResults.filter((r: any) => r.status === 'needs_review').length : allReceipts.filter(r => r.status === 'needs_review').length}</span>
         </span>
         <button
           onClick={() => setSidebarOpen(false)}
@@ -102,6 +131,14 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
         >
           <ChevronLeft className="h-4 w-4" />
         </button>
+      </div>
+
+      {/* Search */}
+      <div className="flex-shrink-0 px-3 py-2 border-b bg-white">
+        <SearchBar
+          onResults={onSearchResults}
+          onClear={onSearchClear}
+        />
       </div>
 
       {/* List */}
