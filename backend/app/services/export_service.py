@@ -16,7 +16,30 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 
 logger = logging.getLogger(__name__)
 
+RECEIPT_FIELDS = ["supplier", "totalAmount", "taxAmount", "receiptDate", "category", "invoiceNumber", "kraPin", "buyerKraPin", "cuInvoice", "batchTitle", "status"]
+RECEIPT_LABELS = {
+    "supplier": "Supplier", "totalAmount": "Total", "taxAmount": "Tax",
+    "receiptDate": "Date", "category": "Category", "invoiceNumber": "Invoice #",
+    "kraPin": "Seller PIN", "buyerKraPin": "Buyer PIN", "cuInvoice": "CU Invoice",
+    "batchTitle": "Batch", "status": "Status",
+}
 MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+
+def receipts_rows(receipts: List[dict], columns: Optional[List[str]] = None) -> List[dict]:
+    """One row per receipt with selected fields."""
+    cols = columns or RECEIPT_FIELDS
+    rows = []
+    for r in receipts:
+        row = {}
+        for c in cols:
+            val = r.get(c, "")
+            if c == "totalAmount":
+                row[c] = sanitize_numeric(val)
+            else:
+                row[c] = val
+        rows.append(row)
+    return rows
 
 # ─── Helpers ──────────────────────────────────────────────────────────────
 
@@ -336,11 +359,20 @@ def _build_pivot_rows(filtered, pc):
 
 
 def generate_excel(receipts: List[dict], report_type: str, date_from: Optional[str] = None,
-                   date_to: Optional[str] = None, pivot_config: Optional[dict] = None) -> bytes:
+                   date_to: Optional[str] = None, pivot_config: Optional[dict] = None,
+                   columns: Optional[List[str]] = None) -> bytes:
     wb = Workbook()
     wb.remove(wb.active)
 
     filtered = aggregate_receipts(receipts, date_from, date_to)
+
+    if report_type == "receipts":
+        cols = columns or RECEIPT_FIELDS
+        headers = [RECEIPT_LABELS.get(c, c) for c in cols]
+        data = []
+        for r in receipts_rows(filtered, cols):
+            data.append([r.get(c, "") for c in cols])
+        _add_excel_sheet(wb, "Receipts", headers, data)
 
     if report_type == "detailed":
         _detail_headers = ["Receipt ID", "Date", "Supplier", "Category", "Invoice", "Item", "Qty", "Price", "Tax", "Disc%", "Item Total", "Receipt Total"]
@@ -444,7 +476,8 @@ def _make_table(doc, headers: List[str], rows: List[list], cell_style) -> Table:
 
 
 def generate_pdf(receipts: List[dict], report_type: str, date_from: Optional[str] = None,
-                 date_to: Optional[str] = None, pivot_config: Optional[dict] = None) -> bytes:
+                 date_to: Optional[str] = None, pivot_config: Optional[dict] = None,
+                 columns: Optional[List[str]] = None) -> bytes:
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=landscape(A4),
                             leftMargin=15*mm, rightMargin=15*mm,
@@ -511,6 +544,14 @@ def generate_pdf(receipts: List[dict], report_type: str, date_from: Optional[str
         if rows:
             elements.append(_make_table(doc, headers, rows, cell_style))
 
+    elif report_type == "receipts":
+        elements.append(Spacer(1, 4*mm))
+        cols = columns or RECEIPT_FIELDS
+        headers = [RECEIPT_LABELS.get(c, c) for c in cols]
+        rows = [[str(r.get(c, "")) for c in cols] for r in receipts_rows(filtered, cols)]
+        if rows:
+            elements.append(_make_table(doc, headers, rows, cell_style))
+
     elif report_type == "category":
         elements.append(Spacer(1, 4*mm))
         data = category_breakdown(filtered)
@@ -545,7 +586,8 @@ def generate_pdf(receipts: List[dict], report_type: str, date_from: Optional[str
 # ═══════════════════════════════════════════════════════════════════════════
 
 def generate_csv(receipts: List[dict], report_type: str, date_from: Optional[str] = None,
-                 date_to: Optional[str] = None, pivot_config: Optional[dict] = None) -> bytes:
+                 date_to: Optional[str] = None, pivot_config: Optional[dict] = None,
+                 columns: Optional[List[str]] = None) -> bytes:
     filtered = aggregate_receipts(receipts, date_from, date_to)
     buf = io.StringIO()
     writer = csv.writer(buf)
@@ -557,6 +599,13 @@ def generate_csv(receipts: List[dict], report_type: str, date_from: Optional[str
         writer.writerow(_detail_headers)
         for r in detailed_rows(filtered):
             writer.writerow([r.get(h, "") for h in _detail_headers])
+
+    elif report_type == "receipts":
+        cols = columns or RECEIPT_FIELDS
+        headers = [RECEIPT_LABELS.get(c, c) for c in cols]
+        writer.writerow(headers)
+        for r in receipts_rows(filtered, cols):
+            writer.writerow([r.get(c, "") for c in cols])
 
     elif report_type == "pivot" and pivot_config:
         pc = pivot_config
@@ -611,6 +660,7 @@ def generate_export(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     pivot_config: Optional[dict] = None,
+    columns: Optional[List[str]] = None,
 ) -> bytes:
     generators = {
         "xlsx": generate_excel,
@@ -620,4 +670,4 @@ def generate_export(
     gen = generators.get(export_format)
     if not gen:
         raise ValueError(f"Unsupported export format: {export_format}")
-    return gen(receipts, report_type, date_from, date_to, pivot_config)
+    return gen(receipts, report_type, date_from, date_to, pivot_config, columns)

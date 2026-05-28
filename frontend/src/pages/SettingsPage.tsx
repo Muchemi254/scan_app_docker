@@ -24,6 +24,7 @@ const CONFLICT_MODES = [
 
 const REPORT_TYPES: { value: ReportType; label: string; icon: any; desc: string }[] = [
   { value: 'detailed', label: 'Detailed Report', icon: Receipt, desc: 'Per-receipt breakdown with line items' },
+  { value: 'receipts', label: 'Receipts', icon: Table2, desc: 'One row per receipt, pick your columns' },
   { value: 'category', label: 'By Category', icon: BarChart3, desc: 'Spending grouped by category' },
   { value: 'supplier', label: 'By Supplier', icon: Building2, desc: 'Spending grouped by supplier' },
   { value: 'monthly', label: 'Monthly Trend', icon: TrendingUp, desc: 'Spending per month, split by year' },
@@ -40,6 +41,20 @@ const PIVOT_FIELDS = [
 const PIVOT_VALUES = [
   { value: 'totalAmount' as const, label: 'Total Amount' },
   { value: 'count' as const, label: 'Receipt Count' },
+];
+
+const RECEIPT_FIELDS = [
+  { key: 'supplier', label: 'Supplier' },
+  { key: 'totalAmount', label: 'Total Amount' },
+  { key: 'taxAmount', label: 'Tax Amount' },
+  { key: 'receiptDate', label: 'Date' },
+  { key: 'category', label: 'Category' },
+  { key: 'invoiceNumber', label: 'Invoice #' },
+  { key: 'kraPin', label: 'Seller PIN' },
+  { key: 'buyerKraPin', label: 'Buyer PIN' },
+  { key: 'cuInvoice', label: 'CU Invoice' },
+  { key: 'batchTitle', label: 'Batch' },
+  { key: 'status', label: 'Status' },
 ];
 
 const SettingsPage = ({ userId }: { userId: string | null }) => {
@@ -78,6 +93,7 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
   const [multiSheet, setMultiSheet] = useState(false);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [selectedColumns, setSelectedColumns] = useState<Set<string>>(new Set(RECEIPT_FIELDS.map(f => f.key)));
 
   useEffect(() => { if (userId) loadStore(userId); }, [userId, loadStore]);
 
@@ -104,6 +120,7 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
           colField: pivotConfig.colField,
           valueField: pivotConfig.valueField,
         } : undefined,
+        columns: reportType === 'receipts' ? Array.from(selectedColumns) : undefined,
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Export failed');
@@ -250,6 +267,32 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
               </div>
             </div>
 
+            {/* Column selector for receipts type */}
+            {reportType === 'receipts' && (
+              <div className="bg-gray-50 rounded-lg p-3">
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-2">Columns</label>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                  {RECEIPT_FIELDS.map(f => {
+                    const checked = selectedColumns.has(f.key);
+                    return (
+                      <label key={f.key} className="flex items-center gap-1.5 cursor-pointer text-sm">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => setSelectedColumns(prev => {
+                            const next = new Set(prev);
+                            checked ? next.delete(f.key) : next.add(f.key);
+                            return next;
+                          })}
+                          className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600"
+                        />
+                        {f.label}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             {/* Pivot config */}
             {reportType === 'pivot' && (
               <div className="grid grid-cols-3 gap-3 bg-gray-50 rounded-lg p-3">

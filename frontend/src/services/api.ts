@@ -544,11 +544,12 @@ export const exportApi = {
    */
   async downloadReport(params: {
     format: 'xlsx' | 'pdf' | 'csv';
-    reportType: 'detailed' | 'category' | 'supplier' | 'monthly' | 'tax' | 'pivot';
+    reportType: 'detailed' | 'category' | 'supplier' | 'monthly' | 'tax' | 'pivot' | 'receipts';
     date_from?: string;
     date_to?: string;
     category?: string;
     pivotConfig?: { rowField: string; colField: string; valueField: string };
+    columns?: string[];
   }): Promise<void> {
     const authorization = await getAuthHeader();
     const userId = getUserId();

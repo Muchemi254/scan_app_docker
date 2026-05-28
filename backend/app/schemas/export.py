@@ -16,6 +16,7 @@ class ReportType(str, Enum):
     MONTHLY = "monthly"
     TAX = "tax"
     PIVOT = "pivot"
+    RECEIPTS = "receipts"
 
 
 class PivotField(str, Enum):
@@ -42,3 +43,4 @@ class ExportRequest(BaseModel):
     date_to: Optional[str] = None
     category: Optional[str] = None
     pivotConfig: Optional[ExportPivotConfig] = None
+    columns: Optional[List[str]] = None

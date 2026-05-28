@@ -376,6 +376,7 @@ async def export_review_batch(
             date_from=body.date_from,
             date_to=body.date_to,
             pivot_config=pivot_dict,
+            columns=body.columns,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

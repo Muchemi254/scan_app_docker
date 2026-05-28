@@ -23,6 +23,7 @@ const EXPORT_FORMATS = [
 
 const EXPORT_TYPES = [
   { value: 'detailed', label: 'Detailed' },
+  { value: 'receipts', label: 'Receipts' },
   { value: 'summary', label: 'Summary' },
   { value: 'itemized', label: 'Itemized' },
 ] as const;
@@ -226,7 +227,11 @@ const ReviewBatchDetailPage = ({ userId }: { userId: string | null }) => {
     if (!batchId) return;
     try {
       setExporting(true);
-      await reviewBatchApi.exportBatch(batchId, { format: exportFormat as any, reportType: exportType });
+      await reviewBatchApi.exportBatch(batchId, {
+        format: exportFormat as any,
+        reportType: exportType,
+        columns: exportType === 'receipts' ? ['supplier', 'totalAmount', 'taxAmount', 'receiptDate', 'category', 'invoiceNumber', 'kraPin', 'buyerKraPin', 'cuInvoice', 'batchTitle', 'status'] : undefined,
+      });
     } catch (e) {
       alert(e instanceof Error ? e.message : 'Export failed');
     } finally {
