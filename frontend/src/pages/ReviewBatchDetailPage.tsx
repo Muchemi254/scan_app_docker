@@ -15,6 +15,18 @@ const STATUS_OPTS = [
   { value: 'flagged', label: 'Flagged', icon: Flag, color: 'bg-red-100 text-red-700 border-red-400' },
 ] as const;
 
+const EXPORT_FORMATS = [
+  { value: 'xlsx', label: 'Excel', color: 'bg-green-100 text-green-700 hover:bg-green-200' },
+  { value: 'csv', label: 'CSV', color: 'bg-blue-100 text-blue-700 hover:bg-blue-200' },
+  { value: 'pdf', label: 'PDF', color: 'bg-red-100 text-red-700 hover:bg-red-200' },
+] as const;
+
+const EXPORT_TYPES = [
+  { value: 'detailed', label: 'Detailed' },
+  { value: 'summary', label: 'Summary' },
+  { value: 'itemized', label: 'Itemized' },
+] as const;
+
 const PAGE_SIZE = 25;
 
 /** Composite item: store receipt data + SQLite review status. */
@@ -42,6 +54,8 @@ const ReviewBatchDetailPage = ({ userId }: { userId: string | null }) => {
   const [page, setPage] = useState(1);
   const [statusUpdating, setStatusUpdating] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [exportFormat, setExportFormat] = useState('xlsx');
+  const [exportType, setExportType] = useState('detailed');
 
   // Search
   const [searchResults, setSearchResults] = useState<any[] | null>(null);
@@ -212,7 +226,7 @@ const ReviewBatchDetailPage = ({ userId }: { userId: string | null }) => {
     if (!batchId) return;
     try {
       setExporting(true);
-      await reviewBatchApi.exportBatch(batchId, { format: 'xlsx', reportType: 'detailed' });
+      await reviewBatchApi.exportBatch(batchId, { format: exportFormat as any, reportType: exportType });
     } catch (e) {
       alert(e instanceof Error ? e.message : 'Export failed');
     } finally {
@@ -407,14 +421,34 @@ const ReviewBatchDetailPage = ({ userId }: { userId: string | null }) => {
           <span className="text-xs text-amber-600 flex-shrink-0">({missingCount} not found)</span>
         )}
         <div className="flex-1" />
-        <button
-          onClick={handleExport}
-          disabled={exporting || batchItems.length === 0}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-green-500 text-white rounded hover:bg-green-600 disabled:opacity-50 transition-colors"
-        >
-          <Download className="h-3.5 w-3.5" />
-          {exporting ? 'Exporting...' : 'Export'}
-        </button>
+        <div className="flex items-center gap-1.5">
+          <select
+            value={exportType}
+            onChange={e => setExportType(e.target.value)}
+            className="text-xs border border-gray-300 rounded px-2 py-1.5 bg-white text-gray-600 focus:ring-1 focus:ring-blue-500 outline-none"
+          >
+            {EXPORT_TYPES.map(t => (
+              <option key={t.value} value={t.value}>{t.label}</option>
+            ))}
+          </select>
+          <select
+            value={exportFormat}
+            onChange={e => setExportFormat(e.target.value)}
+            className="text-xs border border-gray-300 rounded px-2 py-1.5 bg-white text-gray-600 focus:ring-1 focus:ring-blue-500 outline-none"
+          >
+            {EXPORT_FORMATS.map(f => (
+              <option key={f.value} value={f.value}>{f.label}</option>
+            ))}
+          </select>
+          <button
+            onClick={handleExport}
+            disabled={exporting || batchItems.length === 0}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-green-500 text-white rounded hover:bg-green-600 disabled:opacity-50 transition-colors"
+          >
+            <Download className="h-3.5 w-3.5" />
+            {exporting ? 'Exporting...' : 'Export'}
+          </button>
+        </div>
       </div>
 
       {/* ── Main body: sidebar + detail ── */}

@@ -254,6 +254,18 @@ export const receiptApi = {
    * Update receipt (partial update)
    * Optionally upload new image
    */
+  async update(receiptId: string, updates: any, file?: File): Promise<any> {
+    return apiUpload('PUT', `/receipts/${receiptId}`, file, updates);
+  },
+
+  /**
+   * Delete receipt
+   */
+  async delete(receiptId: string): Promise<void> {
+    return apiRequest('DELETE', `/receipts/${receiptId}`);
+  },
+
+  /**
 
   /**
    * Check for duplicate receipts before creating/updating
