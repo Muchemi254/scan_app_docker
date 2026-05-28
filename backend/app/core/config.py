@@ -64,6 +64,9 @@ class Settings(BaseSettings):
         os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "images"),
     )
 
+    # Backup storage
+    BACKUP_STORAGE_DIR: str = os.getenv("BACKUP_STORAGE_DIR", "/app/backups")
+
     # Gemini API
     GEMINI_API_KEY: str
 

@@ -41,6 +41,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: scan-app-backend
+    user: "0:0"  # root — entrypoint fixes volume permissions then drops to appuser
     ports:
       - "8003:8000"
     volumes:
@@ -62,6 +63,8 @@ services:
       USE_POSTGRES: "true"
       # Image storage
       IMAGE_STORAGE_DIR: /app/data/images
+      # Backup storage
+      BACKUP_STORAGE_DIR: /app/backups
       # Firebase Configuration - Uses service account JSON file mounted at /app/firebaseservice.json
       FIREBASE_CREDENTIALS_PATH: /app/firebaseservice.json
 

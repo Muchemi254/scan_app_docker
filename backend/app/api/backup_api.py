@@ -30,9 +30,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/users", tags=["backup"])
 
 # Store backup history in a simple JSON file (can be upgraded to DB later)
-BACKUP_DB = os.path.join(
-    os.path.dirname(settings.IMAGE_STORAGE_DIR), "backup_history.json"
-)
+BACKUP_DB = os.path.join(settings.BACKUP_STORAGE_DIR, "backup_history.json")
 
 
 def _verify_access(user_id: str, current_user_id: str):
@@ -76,7 +74,7 @@ async def create_backup(
     filename = f"scanapp_backup_{userId[:8]}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.tar.gz"
 
     # Store backup file
-    backup_dir = os.path.join(os.path.dirname(settings.IMAGE_STORAGE_DIR), "backups")
+    backup_dir = settings.BACKUP_STORAGE_DIR
     os.makedirs(backup_dir, exist_ok=True)
     backup_path = os.path.join(backup_dir, f"{backup_id}.tar.gz")
     with open(backup_path, "wb") as f:
@@ -120,7 +118,7 @@ async def list_backups(
     # Check if files still exist
     for h in user_backups:
         backup_path = os.path.join(
-            os.path.dirname(settings.IMAGE_STORAGE_DIR), "backups",
+            settings.BACKUP_STORAGE_DIR,
             f"{h['id']}.tar.gz"
         )
         h["available"] = os.path.exists(backup_path)
@@ -159,7 +157,7 @@ async def download_backup(
         raise HTTPException(status_code=404, detail="Backup not found")
 
     backup_path = os.path.join(
-        os.path.dirname(settings.IMAGE_STORAGE_DIR), "backups",
+        settings.BACKUP_STORAGE_DIR,
         f"{backupId}.tar.gz"
     )
     if not os.path.exists(backup_path):
@@ -260,7 +258,7 @@ async def delete_backup(
     )
     if entry:
         backup_path = os.path.join(
-            os.path.dirname(settings.IMAGE_STORAGE_DIR), "backups",
+            settings.BACKUP_STORAGE_DIR,
             f"{backupId}.tar.gz"
         )
         try:

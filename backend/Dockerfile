@@ -41,13 +41,23 @@ ENV PATH="/opt/venv/bin:$PATH"
 COPY app/ ./app/
 
 # Ensure data directories exist and belong to appuser
-RUN mkdir -p /app/data /app/data/images && chown -R appuser:appuser /app
+RUN mkdir -p /app/data /app/data/images /app/backups && chown -R appuser:appuser /app
+
+# Entrypoint script to fix volume permissions at runtime
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]
+
+# Copy entrypoint script (runs as root to fix volume permissions, then drops to appuser)
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-# Drop to non-root user
+# Drop to non-root user (entrypoint runs as root via docker-compose user: root)
 USER appuser
 
 # Health check (needs curl, runs as appuser)
