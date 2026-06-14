@@ -13,6 +13,7 @@ Benefits:
 
 import io
 import logging
+import os
 from typing import Tuple, Optional
 from PIL import Image
 
@@ -25,7 +26,11 @@ THUMB_QUALITY = 60     # smaller file for thumbnails
 
 # Number of images per Gemini batch call — keep small to limit
 # memory per API request and isolate chunk failures.
-BATCH_CHUNK_SIZE = 5
+BATCH_CHUNK_SIZE = 10
+
+# Max concurrent Gemini calls during batch extraction.
+# Tune based on your Gemini tier (free: 2, pay-as-you-go: 5-10).
+MAX_AI_CONCURRENCY = int(os.getenv("MAX_AI_CONCURRENCY", "4"))
 
 
 def _open_and_normalise(file_data: bytes, content_type: str):

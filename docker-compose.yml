@@ -127,7 +127,7 @@ services:
       dockerfile: Dockerfile
     container_name: scan-app-worker
     user: "0:0"  # root — entrypoint fixes volume permissions then drops to appuser
-    command: celery -A app.core.celery_app worker --loglevel=info
+    command: celery -A app.core.celery_app worker --loglevel=info --concurrency=4
     volumes:
       - ./firebaseservice.json:/app/firebaseservice.json:ro
       - image_data:/app/data/images
@@ -138,6 +138,7 @@ services:
       USE_POSTGRES: "true"
       DATABASE_URL: postgresql://scanapp:${DB_PASSWORD:-scanapp_dev}@postgres:5432/scanapp
       IMAGE_STORAGE_DIR: /app/data/images
+      MAX_AI_CONCURRENCY: ${MAX_AI_CONCURRENCY:-4}
     depends_on:
       - redis
       - postgres

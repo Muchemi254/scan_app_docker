@@ -7,7 +7,7 @@ import uuid
 from app.core.celery_app import celery_app
 from app.services.gemini import extract_receipt_data, extract_receipt_batch
 from app.services.task_service import TaskService
-from app.services.image_service import BATCH_CHUNK_SIZE, process_image, generate_thumbnail, has_missing_fields
+from app.services.image_service import BATCH_CHUNK_SIZE, MAX_AI_CONCURRENCY, process_image, generate_thumbnail, has_missing_fields
 from app.services.data_adapter import DataService
 from app.services.audit_service import AuditService
 from app.schemas.task import TaskStatus, TaskProgressUpdate
@@ -65,38 +65,61 @@ async def _extract_receipt_batch_sync(user_id: str, task_id: str, batch_dir: str
             message=f"Starting batch of {total_items} with {active_provider}..."
         ))
 
-        # ── Extract via Gemini in sub-batches ──
-        all_results = []
-        for chunk_start in range(0, total_items, BATCH_CHUNK_SIZE):
-            chunk = image_entries[chunk_start : chunk_start + BATCH_CHUNK_SIZE]
-            pct = 10 + int(40 * chunk_start / total_items)
-            await TaskService.update_progress(user_id, task_id, TaskProgressUpdate(
-                status=TaskStatus.PROCESSING, percentage=pct,
-                message=f"AI: {chunk_start + 1}–{min(chunk_start + len(chunk), total_items)} of {total_items}..."
-            ))
+        # ── Extract via Gemini — parallel chunks with concurrency cap ──
+        all_results = [None] * total_items  # pre-allocated for index-based insertion
 
+        async def process_chunk(chunk_start, chunk):
+            """Process one chunk: encode images, call Gemini, return results with global index."""
             b64_images = []
+            img_bytes_list = []
             for entry in chunk:
                 fpath = os.path.join(batch_dir, entry["filename"])
                 with open(fpath, "rb") as f:
                     img_bytes = f.read()
                 b64 = base64.standard_b64encode(img_bytes).decode()
                 b64_images.append((b64, entry.get("mime", "image/jpeg")))
+                img_bytes_list.append(img_bytes)
 
             chunk_results = await extract_receipt_batch(
                 b64_images, api_key, model_id, active_provider, user_id=user_id
             )
-            # Pair each result with its original image bytes for saving
-            for idx_in_chunk, res in enumerate(chunk_results):
-                img_bytes = None
-                if res is not None:
-                    fpath = os.path.join(batch_dir, chunk[idx_in_chunk]["filename"])
-                    with open(fpath, "rb") as f:
-                        img_bytes = f.read()
-                all_results.append((img_bytes, res))
+            return [(chunk_start + i, img_bytes_list[i] if chunk_results[i] is not None else None, chunk_results[i])
+                    for i in range(len(chunk_results))]
+
+        sem = asyncio.Semaphore(MAX_AI_CONCURRENCY)
+
+        async def bounded(chunk_start, chunk):
+            async with sem:
+                return await process_chunk(chunk_start, chunk)
+
+        tasks = []
+        for chunk_start in range(0, total_items, BATCH_CHUNK_SIZE):
+            chunk = image_entries[chunk_start : chunk_start + BATCH_CHUNK_SIZE]
+            tasks.append(bounded(chunk_start, chunk))
+
+        await TaskService.update_progress(user_id, task_id, TaskProgressUpdate(
+            status=TaskStatus.PROCESSING, percentage=10,
+            message=f"AI: {total_items} images in {len(tasks)} chunks ({MAX_AI_CONCURRENCY} parallel)..."
+        ))
+        chunk_results = await asyncio.gather(*tasks)
+        await TaskService.update_progress(user_id, task_id, TaskProgressUpdate(
+            status=TaskStatus.PROCESSING, percentage=40,
+            message="AI extraction done — saving receipts..."
+        ))
+
+        # Flatten into indexed list: all_results[global_index] = (img_bytes, receipt)
+        for results in chunk_results:
+            for global_idx, img_bytes, receipt in results:
+                all_results[global_idx] = (img_bytes, receipt)
 
         # ── Save receipts + images + audit ──
-        for i, (img_bytes, res) in enumerate(all_results):
+        for i in range(total_items):
+            item = all_results[i]
+            if item is None:
+                await TaskService.add_task_result(user_id, task_id, f"item_{i}", None)
+                continue
+
+            img_bytes, res = item
             if res is None:
                 await TaskService.add_task_result(user_id, task_id, f"item_{i}", None)
                 continue
