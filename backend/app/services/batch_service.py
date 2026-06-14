@@ -140,4 +140,3 @@ async def delete_batch(user_id: str, batch_id: str) -> None:
     r = await get_redis()
     await r.srem(f"user_batches:{user_id}", batch_id)
     await r.delete(f"batch:{user_id}:{batch_id}")
-    clear_images(batch_id)
