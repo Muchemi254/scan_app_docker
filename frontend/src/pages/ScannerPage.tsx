@@ -381,7 +381,7 @@ const ScannerPage = ({ userId }: { userId: string | null }) => {
                   </p>
                 )}
               </div>
-              {isOverLimit && (
+              {isOverLimit && !willChunk && (
                 <p className="text-xs text-red-600 mt-1 font-semibold">
                   ⚠️ Selection exceeds {MAX_UPLOAD_SIZE_MB}MB limit. Please remove some files.
                 </p>
@@ -421,7 +421,7 @@ const ScannerPage = ({ userId }: { userId: string | null }) => {
 
             <button
               onClick={handleProcess}
-              disabled={!batchTitle.trim() || selectedFiles.length === 0 || isOverLimit}
+              disabled={!batchTitle.trim() || selectedFiles.length === 0 || (isOverLimit && !willChunk)}
               className="w-full py-2 px-4 rounded-md text-white font-medium text-lg transition
                 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 disabled:cursor-not-allowed"
             >
