@@ -26,7 +26,7 @@ from app.services.data_adapter import DataService
 from app.services.database_service import save_image, save_thumbnail
 from app.services.firebase_service import StorageService
 from app.services.gemini import extract_receipt_data, extract_receipt_batch
-from app.services.image_service import process_image, generate_thumbnail
+from app.services.image_service import process_image, generate_thumbnail, BATCH_CHUNK_SIZE
 from app.services.audit_service import AuditService
 
 logger = logging.getLogger(__name__)
@@ -79,10 +79,9 @@ async def _process_batch(batch_id: str, user_id: str, batch_title: str) -> None:
     await batch_service.set_batch_status(user_id, batch_id, "processing")
     logger.info(f"Batch {batch_id}: processing {len(entries)} images for user {user_id}")
 
-    # Process in chunks of 5 for AI efficiency
-    CHUNK_SIZE = 5
-    for i in range(0, len(entries), CHUNK_SIZE):
-            chunk = entries[i : i + CHUNK_SIZE]
+    # Process in chunks for AI efficiency (shared BATCH_CHUNK_SIZE from image_service)
+    for i in range(0, len(entries), BATCH_CHUNK_SIZE):
+            chunk = entries[i : i + BATCH_CHUNK_SIZE]
             chunk_indices = list(range(i, i + len(chunk)))
 
             try:

@@ -18,10 +18,14 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
-MAX_DIMENSION = 1600  # px — enough for OCR/receipt reading
+MAX_DIMENSION = 1024  # px — enough for OCR/receipt reading (was 1600, 56% fewer tokens)
 THUMB_DIMENSION = 400  # px — quick preview in lists
-JPEG_QUALITY = 85
-THUMB_QUALITY = 70  # smaller file for thumbnails
+JPEG_QUALITY = 75      # good balance: readable, ~15% smaller than 85
+THUMB_QUALITY = 60     # smaller file for thumbnails
+
+# Number of images per Gemini batch call — keep small to limit
+# memory per API request and isolate chunk failures.
+BATCH_CHUNK_SIZE = 5
 
 
 def _open_and_normalise(file_data: bytes, content_type: str):

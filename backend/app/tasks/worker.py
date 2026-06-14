@@ -6,12 +6,10 @@ import shutil
 from app.core.celery_app import celery_app
 from app.services.gemini import extract_receipt_data, extract_receipt_batch
 from app.services.task_service import TaskService
+from app.services.image_service import BATCH_CHUNK_SIZE
 from app.schemas.task import TaskStatus, TaskProgressUpdate
 
 logger = logging.getLogger(__name__)
-
-# Process images in sub-batches to limit memory per Gemini call
-BATCH_CHUNK_SIZE = 10
 
 
 @celery_app.task(name="tasks.extract_receipt")
