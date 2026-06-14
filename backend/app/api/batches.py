@@ -200,7 +200,7 @@ async def delete_batch(
     if userId != current_user_id:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    batch = await batch_service.get_batch(user_id, batchId)
+    batch = await batch_service.get_batch(userId, batchId)
     if batch:
         _require_owner(batch, userId)
-        await batch_service.delete_batch(user_id, batchId)
+        await batch_service.delete_batch(userId, batchId)

@@ -196,7 +196,9 @@ def process_batch_task(user_id: str, batch_id: str, batch_dir: str, entries: lis
     entries: [{"filename", "mime", "orig_filename"}, ...]
     batch_dir: temp directory with pre-processed JPEGs from upload
     """
-    return asyncio.run(_process_batch_sync(user_id, batch_id, batch_dir, entries, batch_title))
+    import asyncio as _asyncio
+    loop = _asyncio.get_event_loop()
+    return loop.run_until_complete(_process_batch_sync(user_id, batch_id, batch_dir, entries, batch_title))
 
 
 async def _process_batch_sync(user_id: str, batch_id: str, batch_dir: str,
