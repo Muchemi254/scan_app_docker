@@ -126,6 +126,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: scan-app-worker
+    user: "0:0"  # root — entrypoint fixes volume permissions then drops to appuser
     command: celery -A app.core.celery_app worker --loglevel=info
     volumes:
       - ./firebaseservice.json:/app/firebaseservice.json:ro
