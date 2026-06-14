@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { settingsApi } from '../services/api';
-import { Settings, Save, Database, Shield, AlertCircle, CheckCircle, Trash2, Key, RefreshCcw, Eye, EyeOff } from 'lucide-react';
+import { Settings, Database, Shield, AlertCircle, CheckCircle, Trash2, Key, RefreshCcw, Eye, EyeOff, Check } from 'lucide-react';
 
 interface AIModel {
   id: string;
@@ -40,6 +40,9 @@ const AiScanningEnginePage = ({ userId }: { userId: string | null }) => {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showKey, setShowKey] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
+  const [savedSettings, setSavedSettings] = useState<AISettings | null>(null);
+
+  const hasChanges = savedSettings !== null && JSON.stringify(settings) !== JSON.stringify(savedSettings);
 
   const activeConfig = settings.configs[settings.provider] || { api_key: '', enabled: true, thinking_mode: false };
   const isKeyConfigured = activeConfig.api_key?.startsWith('********');
@@ -62,7 +65,9 @@ const AiScanningEnginePage = ({ userId }: { userId: string | null }) => {
           deepseek: { api_key: '', enabled: true },
           ...settingsData.configs
         };
-        setSettings({ ...settingsData, configs: mergedConfigs });
+        const mergedSettings = { ...settingsData, configs: mergedConfigs };
+        setSettings(mergedSettings);
+        setSavedSettings(mergedSettings);
       } catch (error) {
         console.error('Failed to fetch AI settings:', error);
         setMessage({ type: 'error', text: 'Failed to load settings. Please try again.' });
@@ -84,7 +89,7 @@ const AiScanningEnginePage = ({ userId }: { userId: string | null }) => {
     }));
   };
 
-  const handleSave = async () => {
+  const handleApply = async () => {
     setSaving(true);
     setMessage(null);
     try {
@@ -96,12 +101,14 @@ const AiScanningEnginePage = ({ userId }: { userId: string | null }) => {
         thinking_mode: activeConfig.thinking_mode,
         max_ai_concurrency: settings.max_ai_concurrency,
       });
-      // Re-map updated back to structure
-      setSettings(prev => ({ ...prev, ...updated }));
-      setMessage({ type: 'success', text: 'Settings saved successfully!' });
+      const merged = { ...settings, ...updated };
+      setSettings(merged);
+      setSavedSettings(merged);
+      setMessage({ type: 'success', text: 'Settings applied' });
+      setTimeout(() => setMessage(null), 2500);
     } catch (error) {
       console.error('Failed to save settings:', error);
-      setMessage({ type: 'error', text: 'Failed to save settings. Please try again.' });
+      setMessage({ type: 'error', text: 'Failed to save settings' });
     } finally {
       setSaving(false);
     }
@@ -139,8 +146,10 @@ const AiScanningEnginePage = ({ userId }: { userId: string | null }) => {
         api_key: "",
         enabled: true
       });
-      setSettings(prev => ({ ...prev, ...updated }));
-      setMessage({ type: 'success', text: 'API Key removed successfully' });
+      const merged = { ...settings, ...updated };
+      setSettings(merged);
+      setSavedSettings(merged);
+      setMessage({ type: 'success', text: 'API Key removed' });
     } catch (error) {
       setMessage({ type: 'error', text: 'Failed to remove API key' });
     } finally {
@@ -311,18 +320,21 @@ const AiScanningEnginePage = ({ userId }: { userId: string | null }) => {
               </div>
             </div>
 
-            <div className="p-6 border-t border-gray-200 flex justify-end">
+            <div className="p-6 border-t border-gray-200 flex items-center justify-end gap-3">
+              <span className={`text-xs transition-opacity ${hasChanges ? 'opacity-100' : 'opacity-0'}`}>
+                <span className="text-amber-600">Unsaved changes</span>
+              </span>
               <button
-                onClick={handleSave}
-                disabled={saving || testing}
-                className="flex items-center gap-2 px-6 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 disabled:bg-blue-300 transition-colors shadow-sm"
+                onClick={handleApply}
+                disabled={saving || testing || !hasChanges}
+                className="flex items-center gap-2 px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:bg-gray-200 disabled:text-gray-400 disabled:cursor-not-allowed transition-all shadow-sm"
               >
                 {saving ? (
                   <span className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full"></span>
                 ) : (
-                  <Save className="h-4 w-4" />
+                  <Check className="h-4 w-4" />
                 )}
-                {saving ? 'Saving...' : 'Save Settings'}
+                {saving ? 'Applying...' : 'Apply'}
               </button>
             </div>
           </div>
@@ -369,11 +381,18 @@ const AiScanningEnginePage = ({ userId }: { userId: string | null }) => {
           </div>
 
           {message && (
-            <div className={`p-4 rounded-lg flex items-center gap-3 animate-in fade-in zoom-in duration-200 ${
-              message.type === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'
-            }`}>
-              {message.type === 'success' ? <CheckCircle className="h-5 w-5" /> : <AlertCircle className="h-5 w-5" />}
-              {message.text}
+            <div className="fixed top-20 right-6 z-50 animate-in slide-in-from-top-2 fade-in duration-200">
+              <div className={`px-4 py-3 rounded-lg shadow-lg flex items-center gap-2 text-sm font-medium ${
+                message.type === 'success'
+                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                  : 'bg-red-50 text-red-700 border border-red-200'
+              }`}>
+                {message.type === 'success'
+                  ? <CheckCircle className="h-4 w-4 flex-shrink-0" />
+                  : <AlertCircle className="h-4 w-4 flex-shrink-0" />
+                }
+                {message.text}
+              </div>
             </div>
           )}
         </div>
