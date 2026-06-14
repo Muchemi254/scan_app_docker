@@ -56,6 +56,7 @@ function clearBatchId(userId: string) {
 
 const POLL_INTERVAL_MS = 2000;
 const MAX_UPLOAD_SIZE_MB = 500;
+const CHUNK_SIZE_MB = 250;  // auto-split into sub-batches above this
 
 function formatFileSize(bytes: number): string {
   if (bytes === 0) return '0 Bytes';
@@ -84,6 +85,32 @@ const ScannerPage = ({ userId }: { userId: string | null }) => {
 
   const totalSize = selectedFiles.reduce((acc, file) => acc + file.size, 0);
   const isOverLimit = totalSize > MAX_UPLOAD_SIZE_MB * 1024 * 1024;
+
+  // Duplicate detection
+  const [duplicates, setDuplicates] = useState<Map<string, File[]>>(new Map());
+
+  function fingerprint(file: File): string {
+    return `${file.size}_${file.lastModified}_${file.name}`;
+  }
+
+  function detectDuplicates(files: File[]): Map<string, File[]> {
+    const groups = new Map<string, File[]>();
+    for (const f of files) {
+      const fp = fingerprint(f);
+      if (!groups.has(fp)) groups.set(fp, []);
+      groups.get(fp)!.push(f);
+    }
+    // Keep only groups with >1 file
+    const dupes = new Map<string, File[]>();
+    for (const [k, v] of groups) {
+      if (v.length > 1) dupes.set(k, v);
+    }
+    return dupes;
+  }
+
+  const totalDupes = Array.from(duplicates.values()).reduce((acc, g) => acc + g.length - 1, 0);
+  const willChunk = totalSize > CHUNK_SIZE_MB * 1024 * 1024;
+  const chunkCount = willChunk ? Math.ceil(totalSize / (CHUNK_SIZE_MB * 1024 * 1024)) : 1;
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -179,37 +206,55 @@ const ScannerPage = ({ userId }: { userId: string | null }) => {
     if (selectedFiles.length === 0) { setFormError('Select at least one image.'); return; }
     setFormError('');
 
-    try {
-      // 1. Create batch record → get batchId
-      setPageStatus('uploading');
-      setUploadProgress(0);
-      const { batchId } = await batchApi.create(
-        batchTitle.trim(),
-        selectedFiles.map(f => f.name),
-      );
+    // Build chunks (one chunk if total < 250MB, otherwise auto-split)
+    const chunks: File[][] = [];
+    let currentChunk: File[] = [];
+    let currentSize = 0;
+    for (const f of selectedFiles) {
+      if (currentSize + f.size > CHUNK_SIZE_MB * 1024 * 1024 && currentChunk.length > 0) {
+        chunks.push(currentChunk);
+        currentChunk = [];
+        currentSize = 0;
+      }
+      currentChunk.push(f);
+      currentSize += f.size;
+    }
+    if (currentChunk.length > 0) chunks.push(currentChunk);
 
-      // 2. Store batchId immediately so refresh can reconnect
-      saveBatchId(userId, batchId);
+    // Upload each chunk as a separate batch
+    let firstBatch: Batch | null = null;
+    for (let ci = 0; ci < chunks.length; ci++) {
+      const chunk = chunks[ci];
+      const chunkLabel = chunks.length > 1 ? ` (${ci + 1}/${chunks.length})` : '';
+      const chunkTitle = chunks.length > 1 ? `${batchTitle.trim()} ${ci + 1}` : batchTitle.trim();
 
-      // 3. Upload files and start backend processing
       try {
-        await batchApi.process(batchId, selectedFiles, (percent) => {
-          setUploadProgress(percent);
+        setPageStatus('uploading');
+        setUploadProgress(0);
+        const { batchId } = await batchApi.create(
+          chunkTitle,
+          chunk.map(f => f.name),
+        );
+
+        if (!firstBatch) {
+          firstBatch = { batchId, userId, batchTitle: chunkTitle, status: 'uploading', createdAt: Date.now(), items: [] };
+          saveBatchId(userId, batchId);
+        }
+
+        await batchApi.process(batchId, chunk, (percent) => {
+          setUploadProgress(ci === 0 ? percent : Math.round(percent));
         });
       } catch (uploadErr: any) {
-        // IMPORTANT: Notify backend that upload failed so other devices don't get stuck
-        await batchApi.dismiss(batchId).catch(() => {}); 
+        await batchApi.dismiss(batchId).catch(() => {});
         throw uploadErr;
       }
+    }
 
-      // 4. Fetch initial state and start polling
-
-      const initial: Batch = await batchApi.status(batchId);
+    // Start polling the first batch
+    if (firstBatch) {
+      const initial: Batch = await batchApi.status(firstBatch.batchId);
       setBatch(initial);
       setPageStatus('processing');
-    } catch (err: any) {
-      setFormError(err.message ?? 'Failed to start batch — please try again.');
-      setPageStatus('idle');
     }
   };
 
@@ -312,7 +357,9 @@ const ScannerPage = ({ userId }: { userId: string | null }) => {
                 accept="image/*"
                 onChange={e => {
                   if (e.target.files) {
-                    setSelectedFiles(Array.from(e.target.files));
+                    const files = Array.from(e.target.files);
+                    setSelectedFiles(files);
+                    setDuplicates(detectDuplicates(files));
                     setFormError('');
                   }
                 }}
@@ -337,6 +384,35 @@ const ScannerPage = ({ userId }: { userId: string | null }) => {
               {isOverLimit && (
                 <p className="text-xs text-red-600 mt-1 font-semibold">
                   ⚠️ Selection exceeds {MAX_UPLOAD_SIZE_MB}MB limit. Please remove some files.
+                </p>
+              )}
+              {totalDupes > 0 && (
+                <div className="mt-2 p-2 bg-amber-50 border border-amber-200 rounded text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-amber-700 font-medium">
+                      ⚠️ {totalDupes} duplicate file{totalDupes > 1 ? 's' : ''} detected
+                    </span>
+                    <button
+                      onClick={() => {
+                        const keep = new Map<string, File>();
+                        for (const f of selectedFiles) {
+                          const fp = fingerprint(f);
+                          if (!keep.has(fp)) keep.set(fp, f);
+                        }
+                        const deduped = Array.from(keep.values());
+                        setSelectedFiles(deduped);
+                        setDuplicates(new Map());
+                      }}
+                      className="px-2 py-0.5 bg-amber-200 text-amber-800 rounded hover:bg-amber-300 font-medium"
+                    >
+                      Remove duplicates
+                    </button>
+                  </div>
+                </div>
+              )}
+              {willChunk && selectedFiles.length > 0 && (
+                <p className="text-xs text-blue-600 mt-1">
+                  ℹ️ {selectedFiles.length} files ({formatFileSize(totalSize)}) — will auto-split into {chunkCount} sub-batches of ~{CHUNK_SIZE_MB}MB each
                 </p>
               )}
             </div>
