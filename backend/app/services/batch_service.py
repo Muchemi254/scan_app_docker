@@ -35,7 +35,7 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import redis.asyncio as aioredis
 
@@ -62,32 +62,6 @@ async def close_redis() -> None:
     if _redis:
         await _redis.aclose()
         _redis = None
-
-
-# ─── Disk-based image store (no bytes in memory) ──────────────────────────────
-
-# batchId → { "dir": str, "files": [{"filename": str, "mime": str, "orig_filename": str}, ...] }
-_batch_image_dirs: Dict[str, dict] = {}
-
-
-def store_images(batch_id: str, batch_dir: str, entries: List[dict]) -> None:
-    """Store batch image directory reference — entries are {filename, mime, orig_filename}."""
-    _batch_image_dirs[batch_id] = {"dir": batch_dir, "files": entries}
-
-
-def get_image_dir(batch_id: str) -> Optional[dict]:
-    return _batch_image_dirs.get(batch_id)
-
-
-def clear_images(batch_id: str) -> None:
-    info = _batch_image_dirs.pop(batch_id, None)
-    if info and os.path.isdir(info["dir"]):
-        import shutil
-        shutil.rmtree(info["dir"], ignore_errors=True)
-
-
-def has_images(batch_id: str) -> bool:
-    return batch_id in _batch_image_dirs
 
 
 # ─── Batch CRUD ─────────────────────────────────────────────────────────────
