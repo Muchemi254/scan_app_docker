@@ -12,12 +12,12 @@ DELETE /users/{userId}/backup/{id}             Delete a backup
 import json
 import logging
 import os
-import uuid
+import shutil
 from datetime import datetime, timezone
 from typing import Optional, List
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 
 from app.core.security import get_current_user_id
 import firebase_admin
@@ -29,7 +29,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/users", tags=["backup"])
 
-# Store backup history in a simple JSON file (can be upgraded to DB later)
 BACKUP_DB = os.path.join(settings.BACKUP_STORAGE_DIR, "backup_history.json")
 
 
@@ -59,26 +58,19 @@ async def create_backup(
     userId: str,
     current_user_id: str = Depends(get_current_user_id),
 ):
-    """Create a backup of all user data + images and return as download."""
+    """Create a backup of all user data + images and stream as download."""
     _verify_access(userId, current_user_id)
 
     try:
-        backup_bytes = await export_user_data(userId)
+        result = await export_user_data(userId)
     except Exception as e:
         logger.error("Backup export failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Backup failed: {e}")
 
-    # Save history
-    backup_id = uuid.uuid4().hex[:8]
+    filepath = result["path"]
+    backup_id = result["id"]
     timestamp = datetime.now(timezone.utc).isoformat()
     filename = f"scanapp_backup_{userId[:8]}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.tar.gz"
-
-    # Store backup file
-    backup_dir = settings.BACKUP_STORAGE_DIR
-    os.makedirs(backup_dir, exist_ok=True)
-    backup_path = os.path.join(backup_dir, f"{backup_id}.tar.gz")
-    with open(backup_path, "wb") as f:
-        f.write(backup_bytes)
 
     # Record in history
     history = _load_history()
@@ -87,17 +79,17 @@ async def create_backup(
         "user_id": userId,
         "filename": filename,
         "created_at": timestamp,
-        "size_bytes": len(backup_bytes),
-        "size_kb": len(backup_bytes) // 1024,
+        "size_bytes": result["size_bytes"],
+        "size_kb": result["size_bytes"] // 1024,
     })
     _save_history(history)
 
-    return Response(
-        content=backup_bytes,
+    return FileResponse(
+        path=filepath,
         media_type="application/gzip",
+        filename=filename,
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
-            "Content-Length": str(len(backup_bytes)),
         },
     )
 
@@ -115,12 +107,8 @@ async def list_backups(
     history = _load_history()
     user_backups = [h for h in history if h["user_id"] == userId]
 
-    # Check if files still exist
     for h in user_backups:
-        backup_path = os.path.join(
-            settings.BACKUP_STORAGE_DIR,
-            f"{h['id']}.tar.gz"
-        )
+        backup_path = os.path.join(settings.BACKUP_STORAGE_DIR, f"{h['id']}.tar.gz")
         h["available"] = os.path.exists(backup_path)
 
     return user_backups
@@ -137,9 +125,7 @@ async def download_backup(
 ):
     """Download a previously created backup. Accepts ?token= for direct browser downloads."""
     if token:
-        # Validate token manually (bypasses Bearer header requirement)
         try:
-            from app.core.security import verify_firebase_token
             decoded = firebase_auth.verify_id_token(token)
             if decoded.get("uid") != userId:
                 raise HTTPException(status_code=403, detail="Access denied")
@@ -156,22 +142,16 @@ async def download_backup(
     if not entry:
         raise HTTPException(status_code=404, detail="Backup not found")
 
-    backup_path = os.path.join(
-        settings.BACKUP_STORAGE_DIR,
-        f"{backupId}.tar.gz"
-    )
+    backup_path = os.path.join(settings.BACKUP_STORAGE_DIR, f"{backupId}.tar.gz")
     if not os.path.exists(backup_path):
         raise HTTPException(status_code=404, detail="Backup file no longer available")
 
-    with open(backup_path, "rb") as f:
-        content = f.read()
-
-    return Response(
-        content=content,
+    return FileResponse(
+        path=backup_path,
         media_type="application/gzip",
+        filename=entry["filename"],
         headers={
             "Content-Disposition": f'attachment; filename="{entry["filename"]}"',
-            "Content-Length": str(len(content)),
         },
     )
 
@@ -187,19 +167,24 @@ async def preview_backup(
     """Preview a backup file before importing — shows receipt list."""
     _verify_access(userId, current_user_id)
 
-    contents = await file.read()
-    if not contents:
-        raise HTTPException(status_code=400, detail="Empty file")
-
+    tmp_path = os.path.join(settings.BACKUP_STORAGE_DIR, f"_preview_{userId[:8]}.tar.gz")
     try:
-        preview = parse_backup(contents)
+        with open(tmp_path, "wb") as dst:
+            shutil.copyfileobj(file.file, dst, 65536)
+
+        preview = parse_backup(tmp_path)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid backup file: {e}")
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
 
     return preview
 
 
-# ── Import ────────────────────────────────────────────────────────────────────
+# ── Import ───────────────────────────────────────────────────────────────────
 
 @router.post("/{userId}/backup/import")
 async def import_backup(
@@ -227,20 +212,25 @@ async def import_backup(
         except json.JSONDecodeError:
             raise HTTPException(status_code=400, detail="selected_ids must be valid JSON array")
 
-    contents = await file.read()
-    if not contents:
-        raise HTTPException(status_code=400, detail="Empty file")
-
+    tmp_path = os.path.join(settings.BACKUP_STORAGE_DIR, f"_import_{userId[:8]}.tar.gz")
     try:
-        stats = await import_user_data(userId, contents, conflict=conflict, selected_ids=ids)
+        with open(tmp_path, "wb") as dst:
+            shutil.copyfileobj(file.file, dst, 65536)
+
+        stats = await import_user_data(userId, tmp_path, conflict=conflict, selected_ids=ids)
     except Exception as e:
         logger.error("Import failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Import failed: {e}")
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
 
     return {"status": "ok", "stats": stats}
 
 
-# ── Delete ────────────────────────────────────────────────────────────────────
+# ── Delete ───────────────────────────────────────────────────────────────────
 
 @router.delete("/{userId}/backup/{backupId}", status_code=204)
 async def delete_backup(
@@ -257,13 +247,12 @@ async def delete_backup(
         None,
     )
     if entry:
-        backup_path = os.path.join(
-            settings.BACKUP_STORAGE_DIR,
-            f"{backupId}.tar.gz"
-        )
+        backup_path = os.path.join(settings.BACKUP_STORAGE_DIR, f"{backupId}.tar.gz")
         try:
             os.remove(backup_path)
         except FileNotFoundError:
             pass
         history = [h for h in history if h["id"] != backupId]
         _save_history(history)
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
