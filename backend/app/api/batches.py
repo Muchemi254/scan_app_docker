@@ -25,8 +25,8 @@ from app.services import batch_service
 from app.services.data_adapter import DataService
 from app.services.database_service import save_image, save_thumbnail
 from app.services.firebase_service import StorageService
-from app.services.gemini import extract_receipt_data, extract_receipt_batch
-from app.services.image_service import process_image, generate_thumbnail, BATCH_CHUNK_SIZE
+from app.services.gemini import extract_receipt_batch
+from app.services.image_service import process_image, generate_thumbnail, BATCH_CHUNK_SIZE, has_missing_fields
 from app.services.audit_service import AuditService
 
 logger = logging.getLogger(__name__)
@@ -40,27 +40,6 @@ router = APIRouter(prefix="/users", tags=["batches"])
 def _require_owner(batch: dict, user_id: str) -> None:
     if batch["userId"] != user_id:
         raise HTTPException(status_code=http_status.HTTP_403_FORBIDDEN, detail="Access denied")
-
-
-def _has_missing_fields(data: dict) -> bool:
-    """Mirror the frontend's hasMissingFields logic."""
-    required = [
-        "supplier", "receiptDate", "totalAmount", "taxAmount",
-        "category", "invoiceNumber", "kraPin", "cuInvoice",
-    ]
-    for field in required:
-        val = data.get(field)
-        if not val or str(val).strip() == "" or val == "N/A":
-            return True
-    items = data.get("items") or []
-    if not items:
-        return True
-    for item in items:
-        if not item.get("name") or not item.get("quantity"):
-            return True
-        if not item.get("isZeroRated") and not item.get("tax"):
-            return True
-    return False
 
 
 # ─── Background task ────────────────────────────────────────────────────────
@@ -151,6 +130,7 @@ async def _process_batch(batch_id: str, user_id: str, batch_title: str) -> None:
 
                         await AuditService.log_create(user_id, receipt_id, data, user_id)
 
+                        has_missing = has_missing_fields(data)
                         item_status = "done" if not has_missing else "needs_review"
                         msg = "Saved successfully" if not has_missing else "Missing fields — saved for review"
                         await batch_service.update_item(user_id, batch_id, idx, item_status, receipt_id=receipt_id, message=msg)

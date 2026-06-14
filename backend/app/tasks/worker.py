@@ -7,25 +7,12 @@ import uuid
 from app.core.celery_app import celery_app
 from app.services.gemini import extract_receipt_data, extract_receipt_batch
 from app.services.task_service import TaskService
-from app.services.image_service import BATCH_CHUNK_SIZE, process_image, generate_thumbnail
+from app.services.image_service import BATCH_CHUNK_SIZE, process_image, generate_thumbnail, has_missing_fields
 from app.services.data_adapter import DataService
 from app.services.audit_service import AuditService
 from app.schemas.task import TaskStatus, TaskProgressUpdate
 
 logger = logging.getLogger(__name__)
-
-
-def _has_missing_fields(data: dict) -> bool:
-    """Mirror the frontend's hasMissingFields logic."""
-    required = [
-        "supplier", "receiptDate", "totalAmount", "taxAmount",
-        "category", "invoiceNumber", "kraPin", "cuInvoice",
-    ]
-    for field in required:
-        val = data.get(field)
-        if not val or str(val).strip() == "" or val == "N/A":
-            return True
-    return False
 
 
 # ── Single-receipt task (unchanged) ──────────────────────────────────────────
@@ -123,7 +110,7 @@ async def _extract_receipt_batch_sync(user_id: str, task_id: str, batch_dir: str
             try:
                 data = res.model_dump(exclude_unset=True)
                 data["status"] = "needs_review"
-                has_missing = _has_missing_fields(data)
+                has_missing = has_missing_fields(data)
 
                 receipt_id = str(uuid.uuid4())
 

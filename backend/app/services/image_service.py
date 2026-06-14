@@ -138,3 +138,24 @@ def generate_thumbnail(file_data: bytes, content_type: str) -> bytes | None:
     except Exception as e:
         logger.warning(f"Thumbnail generation failed (non-fatal): {e}")
         return None
+
+
+def has_missing_fields(data: dict) -> bool:
+    """Check if receipt data has critical missing fields (mirrors frontend logic)."""
+    required = [
+        "supplier", "receiptDate", "totalAmount", "taxAmount",
+        "category", "invoiceNumber", "kraPin", "cuInvoice",
+    ]
+    for field in required:
+        val = data.get(field)
+        if not val or str(val).strip() == "" or val == "N/A":
+            return True
+    items = data.get("items") or []
+    if not items:
+        return True
+    for item in items:
+        if not item.get("name") or not item.get("quantity"):
+            return True
+        if not item.get("isZeroRated") and not item.get("tax"):
+            return True
+    return False
