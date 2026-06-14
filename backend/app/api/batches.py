@@ -11,6 +11,7 @@ Endpoints:
 import asyncio
 import base64
 import logging
+import os
 from datetime import datetime, timezone
 from typing import List
 
@@ -66,112 +67,109 @@ def _has_missing_fields(data: dict) -> bool:
 
 
 async def _process_batch(batch_id: str, user_id: str, batch_title: str) -> None:
-    """
-    Process every image in a batch using AI batching.
-    """
-    images = batch_service.get_images(batch_id)
-    if not images:
-        logger.error(f"Batch {batch_id}: images not found in memory (server restarted?)")
+    """Process every image in a batch using AI batching.  Reads images from disk."""
+    info = batch_service.get_image_dir(batch_id)
+    if not info:
+        logger.error(f"Batch {batch_id}: images not found on disk (server restarted?)")
         await batch_service.set_batch_status(user_id, batch_id, "failed")
         return
 
+    entries = info["files"]
+    batch_dir = info["dir"]
     await batch_service.set_batch_status(user_id, batch_id, "processing")
-    logger.info(f"Batch {batch_id}: processing {len(images)} images for user {user_id}")
+    logger.info(f"Batch {batch_id}: processing {len(entries)} images for user {user_id}")
 
     # Process in chunks of 5 for AI efficiency
     CHUNK_SIZE = 5
-    for i in range(0, len(images), CHUNK_SIZE):
-        chunk = images[i : i + CHUNK_SIZE]
-        chunk_indices = list(range(i, i + len(chunk)))
-        
-        try:
-            # 1. Optimize all images in chunk
-            processed_chunk = []
-            for idx, (filename, image_bytes, content_type) in zip(chunk_indices, chunk):
-                await batch_service.update_item(user_id, batch_id, idx, "processing", message="Optimizing image...")
-                processed, p_type = process_image(image_bytes, content_type)
-                processed_chunk.append((processed, p_type, filename))
+    for i in range(0, len(entries), CHUNK_SIZE):
+            chunk = entries[i : i + CHUNK_SIZE]
+            chunk_indices = list(range(i, i + len(chunk)))
 
-            # 2. Extract via Gemini (Batch call)
-            for idx in chunk_indices:
-                await batch_service.update_item(user_id, batch_id, idx, "processing", message="AI batch extraction...")
-            
-            # Prepare for AI: [(b64, mime), ...]
-            ai_input = [
-                (base64.standard_b64encode(p[0]).decode(), p[1])
-                for p in processed_chunk
-            ]
-            
-            from app.services.gemini import get_gemini_config
-            api_key, model_id, provider = await get_gemini_config(user_id)
-            extracted_results = await extract_receipt_batch(ai_input, api_key, model_id, provider)
+            try:
+                # 1. Optimize all images in chunk — read from disk
+                processed_chunk = []
+                for idx, entry in zip(chunk_indices, chunk):
+                    await batch_service.update_item(user_id, batch_id, idx, "processing", message="Optimizing image...")
+                    fpath = os.path.join(batch_dir, entry["filename"])
+                    with open(fpath, "rb") as f:
+                        raw = f.read()
+                    processed, p_type = process_image(raw, entry.get("mime", "image/jpeg"))
+                    processed_chunk.append((processed, p_type, entry.get("orig_filename", entry["filename"])))
 
-            # 3. Save results for each item
-            for idx, result, (p_bytes, p_type, filename) in zip(chunk_indices, extracted_results, processed_chunk):
-                if result is None:
-                    await batch_service.update_item(user_id, batch_id, idx, "failed", message="AI failed to extract data")
-                    continue
-                
-                try:
-                    data = result.model_dump(exclude_unset=True)
-                    # All scans require manual review — never auto-process
-                    receipt_status = "needs_review"
+                # 2. Extract via Gemini (Batch call)
+                for idx in chunk_indices:
+                    await batch_service.update_item(user_id, batch_id, idx, "processing", message="AI batch extraction...")
 
-                    # Pre-generate UUID for image filename
-                    import uuid as _batch_uuid
-                    pre_id = str(_batch_uuid.uuid4())
+                # Prepare for AI: [(b64, mime), ...]
+                ai_input = [
+                    (base64.standard_b64encode(p[0]).decode(), p[1])
+                    for p in processed_chunk
+                ]
 
-                    # Save images
-                    await batch_service.update_item(user_id, batch_id, idx, "processing", message="Saving images...")
-                    thumb = generate_thumbnail(p_bytes, "image/jpeg")
+                from app.services.gemini import get_gemini_config
+                api_key, model_id, provider = await get_gemini_config(user_id)
+                extracted_results = await extract_receipt_batch(ai_input, api_key, model_id, provider)
 
-                    if settings.USE_POSTGRES:
-                        img_filename = save_image(pre_id, p_bytes)
-                        thumb_filename = save_thumbnail(pre_id, thumb) if thumb else None
-                    else:
-                        base_name = f"receipt_{int(datetime.now(timezone.utc).timestamp())}_{idx}"
-                        image_url, _ = await StorageService.upload_receipt_images(
-                            user_id, base_name, p_bytes, thumb,
+                # 3. Save results for each item
+                for idx, result, (p_bytes, p_type, filename) in zip(chunk_indices, extracted_results, processed_chunk):
+                    if result is None:
+                        await batch_service.update_item(user_id, batch_id, idx, "failed", message="AI failed to extract data")
+                        continue
+
+                    try:
+                        data = result.model_dump(exclude_unset=True)
+                        receipt_status = "needs_review"
+
+                        import uuid as _batch_uuid
+                        pre_id = str(_batch_uuid.uuid4())
+
+                        await batch_service.update_item(user_id, batch_id, idx, "processing", message="Saving images...")
+                        thumb = generate_thumbnail(p_bytes, "image/jpeg")
+
+                        if settings.USE_POSTGRES:
+                            img_filename = save_image(pre_id, p_bytes)
+                            thumb_filename = save_thumbnail(pre_id, thumb) if thumb else None
+                        else:
+                            base_name = f"receipt_{int(datetime.now(timezone.utc).timestamp())}_{idx}"
+                            image_url, _ = await StorageService.upload_receipt_images(
+                                user_id, base_name, p_bytes, thumb,
+                            )
+
+                        await batch_service.update_item(user_id, batch_id, idx, "processing", message="Saving to database...")
+                        data.update(
+                            id=pre_id,
+                            userId=user_id,
+                            batchTitle=batch_title,
+                            status=receipt_status,
                         )
+                        if settings.USE_POSTGRES:
+                            data["image_filename"] = img_filename
+                            if thumb_filename:
+                                data["thumbnail_filename"] = thumb_filename
+                        else:
+                            data["imageUrl"] = image_url
+                        receipt_id = await DataService.create_receipt(user_id, data)
 
-                    # Save to database
-                    await batch_service.update_item(user_id, batch_id, idx, "processing", message="Saving to database...")
-                    data.update(
-                        id=pre_id,
-                        userId=user_id,
-                        batchTitle=batch_title,
-                        status=receipt_status,
-                    )
-                    if settings.USE_POSTGRES:
-                        data["image_filename"] = img_filename
-                        if thumb_filename:
-                            data["thumbnail_filename"] = thumb_filename
-                    else:
-                        data["imageUrl"] = image_url
-                    receipt_id = await DataService.create_receipt(user_id, data)
+                        await AuditService.log_create(user_id, receipt_id, data, user_id)
 
-                    await AuditService.log_create(user_id, receipt_id, data, user_id)
+                        item_status = "done" if not has_missing else "needs_review"
+                        msg = "Saved successfully" if not has_missing else "Missing fields — saved for review"
+                        await batch_service.update_item(user_id, batch_id, idx, item_status, receipt_id=receipt_id, message=msg)
+                    except Exception as item_exc:
+                        logger.error(f"Batch {batch_id} item {idx} failed: {item_exc}")
+                        if settings.USE_POSTGRES:
+                            from app.services.database_service import delete_receipt_images
+                            delete_receipt_images(pre_id)
+                        await batch_service.update_item(user_id, batch_id, idx, "failed", message=str(item_exc)[:200])
 
-                    item_status = "done" if not has_missing else "needs_review"
-                    msg = "Saved successfully" if not has_missing else "Missing fields — saved for review"
-                    await batch_service.update_item(user_id, batch_id, idx, item_status, receipt_id=receipt_id, message=msg)
-                except Exception as item_exc:
-                    logger.error(f"Batch {batch_id} item {idx} failed: {item_exc}")
-                    # Clean up orphaned images
-                    if settings.USE_POSTGRES:
-                        from app.services.database_service import delete_receipt_images
-                        delete_receipt_images(pre_id)
-                    await batch_service.update_item(user_id, batch_id, idx, "failed", message=str(item_exc)[:200])
-
-        except asyncio.CancelledError:
-            raise
-        except Exception as chunk_exc:
-            logger.error(f"Batch {batch_id} chunk failed: {chunk_exc}")
-            # Mark remaining items in this chunk as failed
-            for idx in chunk_indices:
-                batch_state = await batch_service.get_batch(user_id, batch_id)
-                if batch_state and batch_state["items"][idx]["status"] == "processing":
-                     await batch_service.update_item(user_id, batch_id, idx, "failed", message=f"Chunk error: {str(chunk_exc)[:100]}")
+            except asyncio.CancelledError:
+                raise
+            except Exception as chunk_exc:
+                logger.error(f"Batch {batch_id} chunk failed: {chunk_exc}")
+                for idx in chunk_indices:
+                    batch_state = await batch_service.get_batch(user_id, batch_id)
+                    if batch_state and batch_state["items"][idx]["status"] == "processing":
+                        await batch_service.update_item(user_id, batch_id, idx, "failed", message=f"Chunk error: {str(chunk_exc)[:100]}")
 
     batch_service.clear_images(batch_id)
     await batch_service.set_batch_status(user_id, batch_id, "done")
@@ -233,19 +231,26 @@ async def start_processing(
         raise HTTPException(status_code=409, detail=f"Batch is already {batch['status']}")
 
     allowed_types = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
-    images: List[tuple] = []
-    for f in files:
+    batch_dir = os.path.join(settings.IMAGE_STORAGE_DIR, f"_scan_{batchId}")
+    os.makedirs(batch_dir, exist_ok=True)
+    entries: List[dict] = []
+    for idx, f in enumerate(files):
         if f.content_type and f.content_type not in allowed_types:
             raise HTTPException(status_code=400, detail=f"Unsupported file type: {f.content_type}")
         contents = await f.read()
         if len(contents) > settings.MAX_UPLOAD_SIZE:
             raise HTTPException(status_code=413, detail=f"File too large: {f.filename} ({len(contents)} bytes)")
-        images.append((f.filename or "image.jpg", contents, f.content_type or "image/jpeg"))
+        processed, p_type = process_image(contents, f.content_type or "image/jpeg")
+        fname = f"{idx:04d}.jpg"
+        fpath = os.path.join(batch_dir, fname)
+        with open(fpath, "wb") as outf:
+            outf.write(processed)
+        entries.append({"filename": fname, "mime": p_type, "orig_filename": f.filename or "image.jpg"})
 
-    batch_service.store_images(batchId, images)
+    batch_service.store_images(batchId, batch_dir, entries)
     background_tasks.add_task(_process_batch, batchId, userId, batch["batchTitle"])
 
-    return {"batchId": batchId, "status": "processing", "total": len(images)}
+    return {"batchId": batchId, "status": "processing", "total": len(entries)}
 
 
 @router.get("/{userId}/batches")

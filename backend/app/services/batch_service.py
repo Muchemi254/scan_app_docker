@@ -32,6 +32,7 @@ In-memory image store (dict keyed by batchId):
 
 import json
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
@@ -63,26 +64,30 @@ async def close_redis() -> None:
         _redis = None
 
 
-# ─── In-memory image store ───────────────────────────────────────────────────
+# ─── Disk-based image store (no bytes in memory) ──────────────────────────────
 
-# batchId → [(filename, image_bytes, content_type), ...]
-_batch_images: Dict[str, List[Tuple[str, bytes, str]]] = {}
-
-
-def store_images(batch_id: str, images: List[Tuple[str, bytes, str]]) -> None:
-    _batch_images[batch_id] = images
+# batchId → { "dir": str, "files": [{"filename": str, "mime": str, "orig_filename": str}, ...] }
+_batch_image_dirs: Dict[str, dict] = {}
 
 
-def get_images(batch_id: str) -> Optional[List[Tuple[str, bytes, str]]]:
-    return _batch_images.get(batch_id)
+def store_images(batch_id: str, batch_dir: str, entries: List[dict]) -> None:
+    """Store batch image directory reference — entries are {filename, mime, orig_filename}."""
+    _batch_image_dirs[batch_id] = {"dir": batch_dir, "files": entries}
+
+
+def get_image_dir(batch_id: str) -> Optional[dict]:
+    return _batch_image_dirs.get(batch_id)
 
 
 def clear_images(batch_id: str) -> None:
-    _batch_images.pop(batch_id, None)
+    info = _batch_image_dirs.pop(batch_id, None)
+    if info and os.path.isdir(info["dir"]):
+        import shutil
+        shutil.rmtree(info["dir"], ignore_errors=True)
 
 
 def has_images(batch_id: str) -> bool:
-    return batch_id in _batch_images
+    return batch_id in _batch_image_dirs
 
 
 # ─── Batch CRUD ─────────────────────────────────────────────────────────────

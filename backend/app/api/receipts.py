@@ -13,6 +13,7 @@ POST   /api/v1/users/{userId}/receipts/summary      - Generate AI summary
 """
 
 import logging
+import os
 from typing import Optional
 import json
 from fastapi import APIRouter, Depends, File, Form, UploadFile, HTTPException, status, Query
@@ -84,19 +85,23 @@ async def batch_extract_receipts(
     ai_settings = await DataService.get_user_settings(userId, "ai_config")
     provider = ai_settings.get("provider", "gemini") if ai_settings else "gemini"
 
-    # 2. Process files
-    processed_images = []
-    for file in files:
+    # 2. Process files — stream to disk, accumulate paths only (no base64 in memory)
+    batch_dir = os.path.join(settings.IMAGE_STORAGE_DIR, f"_batch_{task_id}")
+    os.makedirs(batch_dir, exist_ok=True)
+    image_entries = []
+    for idx, file in enumerate(files):
         contents = await file.read()
         if len(contents) > settings.MAX_UPLOAD_SIZE:
             raise HTTPException(status_code=413, detail=f"File too large: {file.filename}")
         processed, processed_type = process_image(contents, file.content_type or "image/jpeg")
-        import base64
-        base64_data = base64.standard_b64encode(processed).decode()
-        processed_images.append((base64_data, processed_type))
+        fname = f"{idx:04d}.jpg"
+        fpath = os.path.join(batch_dir, fname)
+        with open(fpath, "wb") as f:
+            f.write(processed)
+        image_entries.append({"filename": fname, "mime": processed_type})
 
-    # 3. Dispatch Celery task
-    extract_receipt_batch_task.delay(userId, task_id, processed_images, provider=provider)
+    # 3. Dispatch Celery task with disk paths (tiny payload, no base64 in Redis)
+    extract_receipt_batch_task.delay(userId, task_id, batch_dir, image_entries, provider=provider)
 
     # 4. Return task ID
     return {"task_id": task_id}
