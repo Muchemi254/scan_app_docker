@@ -104,6 +104,9 @@ async def update_ai_settings(
 
     if "thinking_mode" in update_data:
         current["configs"][active_provider]["thinking_mode"] = update_data["thinking_mode"]
+
+    if "max_ai_concurrency" in update_data:
+        current["max_ai_concurrency"] = update_data["max_ai_concurrency"]
         
     await DataService.update_user_settings(userId, "ai_config", current)
     

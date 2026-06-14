@@ -19,6 +19,7 @@ interface AISettings {
   provider: string;
   model_id: string;
   configs: Record<string, ProviderConfig>;
+  max_ai_concurrency: number;
 }
 
 const AiScanningEnginePage = ({ userId }: { userId: string | null }) => {
@@ -29,7 +30,8 @@ const AiScanningEnginePage = ({ userId }: { userId: string | null }) => {
     configs: {
       gemini: { api_key: '', enabled: true, thinking_mode: false },
       deepseek: { api_key: '', enabled: true, thinking_mode: false }
-    }
+    },
+    max_ai_concurrency: 4,
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -91,7 +93,8 @@ const AiScanningEnginePage = ({ userId }: { userId: string | null }) => {
         model_id: settings.model_id,
         api_key: activeConfig.api_key,
         enabled: activeConfig.enabled,
-        thinking_mode: activeConfig.thinking_mode
+        thinking_mode: activeConfig.thinking_mode,
+        max_ai_concurrency: settings.max_ai_concurrency,
       });
       // Re-map updated back to structure
       setSettings(prev => ({ ...prev, ...updated }));
@@ -321,6 +324,47 @@ const AiScanningEnginePage = ({ userId }: { userId: string | null }) => {
                 )}
                 {saving ? 'Saving...' : 'Save Settings'}
               </button>
+            </div>
+          </div>
+
+          {/* Batch Concurrency */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+            <div className="p-6">
+              <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                <Settings className="h-5 w-5 text-blue-500" />
+                Batch Speed
+              </h2>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Parallel AI calls during batch scanning
+                </label>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {[
+                    { value: 1, label: '1×', desc: 'Serial — slow', tier: 'free' },
+                    { value: 2, label: '2×', desc: 'Free tier', tier: 'free' },
+                    { value: 4, label: '4×', desc: 'Recommended', tier: 'paid' },
+                    { value: 8, label: '8×', desc: 'Pro tier', tier: 'paid' },
+                  ].map(opt => (
+                    <button
+                      key={opt.value}
+                      onClick={() => setSettings(s => ({ ...s, max_ai_concurrency: opt.value }))}
+                      className={`p-3 rounded-lg border text-center transition-colors ${
+                        settings.max_ai_concurrency === opt.value
+                          ? 'border-blue-400 bg-blue-50 text-blue-700'
+                          : 'border-gray-200 hover:bg-gray-50 text-gray-600'
+                      }`}
+                    >
+                      <div className="text-lg font-bold">{opt.label}</div>
+                      <div className="text-[10px] text-gray-400">{opt.desc}</div>
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-2 text-xs text-gray-500">
+                  How many image chunks the AI processes at once.
+                  <span className="text-amber-600 font-medium"> Stick to 1–2 on the free Gemini tier</span>
+                  {' '}to avoid rate limits. Paid tiers can use 4–8 for ~3–8× faster batch results.
+                </p>
+              </div>
             </div>
           </div>
 
