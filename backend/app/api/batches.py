@@ -201,7 +201,7 @@ async def start_processing(
     if userId != current_user_id:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    batch = await batch_service.get_batch(user_id, batchId)
+    batch = await batch_service.get_batch(userId, batchId)
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
     _require_owner(batch, userId)
@@ -273,7 +273,7 @@ async def get_batch(
     if userId != current_user_id:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    batch = await batch_service.get_batch(user_id, batchId)
+    batch = await batch_service.get_batch(userId, batchId)
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")
     _require_owner(batch, userId)

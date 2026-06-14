@@ -206,6 +206,7 @@ const ScannerPage = ({ userId }: { userId: string | null }) => {
     if (selectedFiles.length === 0) { setFormError('Select at least one image.'); return; }
     setFormError('');
 
+    try {
     // Build chunks (one chunk if total < 250MB, otherwise auto-split)
     const chunks: File[][] = [];
     let currentChunk: File[] = [];
@@ -225,7 +226,6 @@ const ScannerPage = ({ userId }: { userId: string | null }) => {
     let firstBatch: Batch | null = null;
     for (let ci = 0; ci < chunks.length; ci++) {
       const chunk = chunks[ci];
-      const chunkLabel = chunks.length > 1 ? ` (${ci + 1}/${chunks.length})` : '';
       const chunkTitle = chunks.length > 1 ? `${batchTitle.trim()} ${ci + 1}` : batchTitle.trim();
 
       try {
@@ -255,6 +255,11 @@ const ScannerPage = ({ userId }: { userId: string | null }) => {
       const initial: Batch = await batchApi.status(firstBatch.batchId);
       setBatch(initial);
       setPageStatus('processing');
+    }
+    } catch (err: any) {
+      clearBatchId(userId);
+      setFormError(err.message ?? 'Upload failed — please try again.');
+      setPageStatus('idle');
     }
   };
 
