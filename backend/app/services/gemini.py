@@ -21,18 +21,64 @@ def get_deepseek_client(api_key: str):
     return AsyncOpenAI(api_key=api_key, base_url="https://api.deepseek.com")
 
 from openai import AsyncOpenAI, APIStatusError
+from app.core.config import settings
 
-# ...
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
-async def call_deepseek_api(api_key: str, model_id: str, prompt: str, content: Any = None, thinking_mode: bool = False):
-    client = get_deepseek_client(api_key)
+# Alibaba Qwen (QwenCloud International / Model Studio) OpenAI-compatible
+# endpoint. Keys issued at home.qwencloud.com MUST be used against the
+# *international* domain (dashscope-intl.aliyuncs.com) — using the China
+# region endpoint (dashscope.aliyuncs.com) returns invalid_api_key 401.
+# US/alternate regions:
+#   https://dashscope-us.aliyuncs.com/compatible-mode/v1
+DASHSCOPE_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+
+def get_openai_compatible_client(api_key: str, base_url: str):
+    """OpenAI-compatible chat client (DeepSeek, OpenRouter, Qwen, etc.)."""
+    return AsyncOpenAI(api_key=api_key, base_url=base_url)
+
+def get_deepseek_client(api_key: str):
+    return get_openai_compatible_client(api_key, "https://api.deepseek.com")
+
+def get_openrouter_client(api_key: str):
+    return get_openai_compatible_client(api_key, OPENROUTER_BASE_URL)
+
+def get_qwen_client(api_key: str):
+    return get_openai_compatible_client(api_key, DASHSCOPE_BASE_URL)
+
+async def call_openai_compatible_api(
+    api_key: str,
+    base_url: str,
+    model_id: str,
+    prompt: str,
+    content: Any = None,
+    thinking_mode: bool = False,
+    provider_label: str = "provider",
+    extra_body_override: Optional[dict] = None,
+):
+    """Generic chat-completions call shared by OpenAI-compatible providers.
+
+    Builds the messages array, applies provider-specific thinking params,
+    and maps HTTP errors to the app's error vocabulary.
+    """
+    client = get_openai_compatible_client(api_key, base_url)
     messages = [{"role": "user", "content": content if content else prompt}]
 
-    # Prepare optional arguments for thinking mode
+    # Thinking-mode params vary by provider:
+    #   DeepSeek  → {"thinking": {"type": "enabled"}} + reasoning_effort
+    #   OpenRouter → {"reasoning": {"effort": "high"}}
+    #   Qwen      → {"enable_thinking": bool} via extra_body_override
     extra_params = {}
-    if thinking_mode:
-        extra_params["extra_body"] = {"thinking": {"type": "enabled"}}
-        extra_params["reasoning_effort"] = "high"
+    if extra_body_override is not None:
+        # Provider decides exactly which extra body to send (e.g. Qwen setting
+        # enable_thinking: False on hybrid models, or nothing for -instruct).
+        extra_params["extra_body"] = extra_body_override
+    elif thinking_mode:
+        if base_url == OPENROUTER_BASE_URL:
+            extra_params["extra_body"] = {"reasoning": {"effort": "high"}}
+        else:
+            extra_params["extra_body"] = {"thinking": {"type": "enabled"}}
+            extra_params["reasoning_effort"] = "high"
 
     try:
         response = await client.chat.completions.create(
@@ -44,26 +90,55 @@ async def call_deepseek_api(api_key: str, model_id: str, prompt: str, content: A
         return response.choices[0].message.content
     except APIStatusError as e:
         status_code = getattr(e, 'status_code', 500)
-        # DeepSeek error response body
         error_body = e.response.json() if hasattr(e, 'response') else str(e)
-        
-        logger.error(f"DeepSeek API Error {status_code}: {error_body}")
-        
+
+        logger.error(f"{provider_label} API Error {status_code}: {error_body}")
+
         error_map = {
             400: ("Invalid Format", "Invalid request body format."),
             401: ("Authentication Fails", "Wrong API key."),
             402: ("Insufficient Balance", "Ran out of balance."),
             422: ("Invalid Parameters", "Request contains invalid parameters."),
             429: ("Rate Limit Reached", "Requests too fast."),
-            500: ("Server Error", "DeepSeek server issue."),
+            500: ("Server Error", f"{provider_label} server issue."),
             503: ("Server Overloaded", "Server overloaded."),
         }
-        
-        desc, solution = error_map.get(status_code, ("Unknown Error", "Please check DeepSeek API documentation."))
-        raise ValueError(f"DeepSeek API Error {status_code} ({desc}): {solution}")
+
+        desc, solution = error_map.get(status_code, ("Unknown Error", f"Please check {provider_label} API documentation."))
+        raise ValueError(f"{provider_label} API Error {status_code} ({desc}): {solution}")
     except Exception as e:
-        logger.error(f"Unexpected DeepSeek API error: {str(e)}")
+        logger.error(f"Unexpected {provider_label} API error: {str(e)}")
         raise
+
+async def call_deepseek_api(api_key: str, model_id: str, prompt: str, content: Any = None, thinking_mode: bool = False):
+    return await call_openai_compatible_api(
+        api_key, "https://api.deepseek.com", model_id,
+        prompt, content, thinking_mode=thinking_mode, provider_label="DeepSeek",
+    )
+
+async def call_openrouter_api(api_key: str, model_id: str, prompt: str, content: Any = None, thinking_mode: bool = False):
+    return await call_openai_compatible_api(
+        api_key, OPENROUTER_BASE_URL, model_id,
+        prompt, content, thinking_mode=thinking_mode, provider_label="OpenRouter",
+    )
+
+async def call_qwen_api(api_key: str, model_id: str, prompt: str, content: Any = None, thinking_mode: bool = False):
+    """Alibaba Qwen (DashScope) OpenAI-compatible chat call.
+
+    DashScope hybrid-thinking models (qwen3-vl-flash, qwen3-vl-plus,
+    qwen3.6-flash, qwen3.7-plus) accept an explicit `enable_thinking` toggle;
+    send False unless the user opted in so JSON output stays deterministic.
+    `-instruct` models don't support the parameter at all, so omit it.
+    """
+    extra_body = None
+    if not (model_id and model_id.endswith("-instruct")):
+        extra_body = {"enable_thinking": bool(thinking_mode)}
+    return await call_openai_compatible_api(
+        api_key, DASHSCOPE_BASE_URL, model_id,
+        prompt, content, thinking_mode=thinking_mode,
+        provider_label="Alibaba Qwen",
+        extra_body_override=extra_body,
+    )
 
 def sanitize_numeric(value: Any) -> str:
     """Strip all characters except digits and decimal point."""
@@ -81,6 +156,8 @@ logger = logging.getLogger(__name__)
 # genai.configure() modifies global state. Serialize all Gemini SDK calls
 # that depend on it so concurrent requests with different per-user API keys
 # cannot leak one user's data to another user's API key.
+# Track current configured key to avoid redundant global re-configs
+_current_configured_key: Optional[str] = None
 _gemini_lock = asyncio.Lock()
 
 
@@ -90,11 +167,35 @@ async def _gemini_generate_content(
     contents,
     generation_config=None,
 ):
-    """Atomically configure genai and generate content under lock."""
-    async with _gemini_lock:
+    """Atomically configure genai and generate content via a worker thread.
+
+    Why to_thread, not generate_content_async:
+    The google-generativeai SDK initializes its async gRPC transport bound to
+    whichever event loop is current at first import/use. In a Celery prefork
+    worker each task runs under a brand-new asyncio.run() loop, but the SDK
+    still holds references to the parent process's (now-closed) loop —
+    resulting in 'Event loop is closed' on every extraction call. Running the
+    sync API inside asyncio.to_thread sidesteps the SDK's asyncio internals
+    entirely and is loop-agnostic, which makes it the right primitive for
+    both FastAPI request handlers and Celery workers.
+    """
+    global _current_configured_key
+
+    def _sync_call():
         model = genai.GenerativeModel(model_id)
-        genai.configure(api_key=api_key)
         return model.generate_content(contents, generation_config=generation_config)
+
+    # Hot path: same key as currently configured, no lock needed.
+    if _current_configured_key == api_key:
+        return await asyncio.to_thread(_sync_call)
+
+    # Cold path: key change requires serialized re-configure of global SDK state.
+    async with _gemini_lock:
+        if _current_configured_key != api_key:
+            logger.info("Re-configuring Gemini SDK with new API key")
+            genai.configure(api_key=api_key)
+            _current_configured_key = api_key
+        return await asyncio.to_thread(_sync_call)
 
 
 async def get_gemini_config(user_id: Optional[str]) -> Tuple[str, str, str]:
@@ -103,7 +204,7 @@ async def get_gemini_config(user_id: Optional[str]) -> Tuple[str, str, str]:
     """
     # Defaults
     api_key = settings.GEMINI_API_KEY
-    model_id = "gemini-3-flash-preview"
+    model_id = "gemini-3.1-flash-lite-preview"
     provider = "gemini"
     
     if user_id:
@@ -146,8 +247,8 @@ def get_model(api_key: str, model_id: str):
 
 # Pricing for Gemini models
 MODEL_PRICING = {
-    "gemini-2.5-flash": {"input": 0.075, "cachedInput": 0.0225, "output": 0.3},
-    "gemini-1.5-flash": {"input": 0.075, "cachedInput": 0.0225, "output": 0.3},
+    "gemini-2.0-flash": {"input": 0.075, "cachedInput": 0.0225, "output": 0.3},
+    "gemini-3.1-flash-lite-preview": {"input": 0.075, "cachedInput": 0.0225, "output": 0.3},
 }
 
 # Category list (reusable for caching)
@@ -238,6 +339,20 @@ _BATCH_RESPONSE_SCHEMA = """Return ONLY a JSON array matching this structure:
 ]"""
 
 
+def _clean_json_response(text: str) -> str:
+    """Strip markdown code blocks and whitespace from AI response."""
+    text = text.strip()
+    if text.startswith("```"):
+        # Split by ``` and take the content between them
+        parts = text.split("```")
+        if len(parts) >= 3:
+            text = parts[1]
+            # Remove "json" language identifier if present
+            if text.lower().startswith("json"):
+                text = text[4:]
+    return text.strip()
+
+
 async def extract_receipt_data(
     image_base64: str,
     mime_type: str,
@@ -280,6 +395,18 @@ async def extract_receipt_data(
                 {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_base64}"}}
             ]
             response_text = await call_deepseek_api(api_key, model_id, prompt, content, thinking_mode=thinking_mode)
+        elif provider == "openrouter":
+            content = [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_base64}"}}
+            ]
+            response_text = await call_openrouter_api(api_key, model_id, prompt, content, thinking_mode=thinking_mode)
+        elif provider == "qwen":
+            content = [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_base64}"}}
+            ]
+            response_text = await call_qwen_api(api_key, model_id, prompt, content, thinking_mode=thinking_mode)
         else:
             image_part = {
                 "mime_type": mime_type,
@@ -293,13 +420,9 @@ async def extract_receipt_data(
                     temperature=0.1,
                 )
             )
-            response_text = response.text.strip()
-        if response_text.startswith("```"):
-            response_text = response_text.split("```")[1]
-            if response_text.startswith("json"):
-                response_text = response_text[4:]
-        response_text = response_text.strip()
-
+            response_text = response.text
+            
+        response_text = _clean_json_response(response_text)
         data = json.loads(response_text)
 
         # Validate and sanitize
@@ -334,10 +457,10 @@ async def extract_receipt_data(
         return receipt
 
     except json.JSONDecodeError as e:
-        logger.error(f"Failed to parse Gemini response as JSON: {e}")
+        logger.exception("Failed to parse Gemini response as JSON")
         raise ValueError(f"Invalid response from Gemini: {str(e)}")
     except Exception as e:
-        logger.error(f"Receipt extraction failed: {e}")
+        logger.exception("Receipt extraction failed")
         raise ValueError(f"Receipt extraction failed: {str(e)}")
 
 
@@ -378,6 +501,20 @@ async def extract_receipt_batch(
                 content.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
             content.append({"type": "text", "text": prompt})
             response_text = await call_deepseek_api(api_key, model_id, prompt, content, thinking_mode=thinking_mode)
+        elif provider == "openrouter":
+            content = []
+            for i, (b64, mime) in enumerate(images):
+                content.append({"type": "text", "text": f"Image index {i}:"})
+                content.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+            content.append({"type": "text", "text": prompt})
+            response_text = await call_openrouter_api(api_key, model_id, prompt, content, thinking_mode=thinking_mode)
+        elif provider == "qwen":
+            content = []
+            for i, (b64, mime) in enumerate(images):
+                content.append({"type": "text", "text": f"Image index {i}:"})
+                content.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+            content.append({"type": "text", "text": prompt})
+            response_text = await call_qwen_api(api_key, model_id, prompt, content, thinking_mode=thinking_mode)
         else:
             # Prepare multimodal content
             content = []
@@ -399,7 +536,9 @@ async def extract_receipt_batch(
                     temperature=0.1,
                 )
             )
-            response_text = response.text.strip()
+            response_text = response.text
+        
+        response_text = _clean_json_response(response_text)
         data_list = json.loads(response_text)
         
         if not isinstance(data_list, list):
@@ -411,6 +550,11 @@ async def extract_receipt_batch(
             if i >= len(images): break
             
             try:
+                if not isinstance(data, dict):
+                    logger.warning(f"Item {i} in batch is not a dict: {type(data)}")
+                    results.append(None)
+                    continue
+
                 # Sanitize items
                 items = []
                 for item in data.get("items", []):
@@ -449,7 +593,7 @@ async def extract_receipt_batch(
         return results
 
     except Exception as e:
-        logger.error(f"Batch extraction failed: {e}")
+        logger.exception("Batch extraction failed")
         raise ValueError(f"Batch extraction failed: {str(e)}")
 
 
@@ -469,7 +613,7 @@ Provide:
 
 Use bullet points. Be concise but insightful."""
         response = await _gemini_generate_content(
-            key, "gemini-1.5-flash",
+            key, "gemini-3.1-flash-lite-preview",
             prompt,
             generation_config=genai.types.GenerationConfig(
                 temperature=0.2,
@@ -482,21 +626,43 @@ Use bullet points. Be concise but insightful."""
         return "AI summary unavailable."
 
 
-async def test_api_key(api_key: str, model_id: str = "gemini-3-flash-preview", provider: str = "gemini") -> bool:
+async def test_api_key(api_key: str, model_id: str = "gemini-3-flash-preview", provider: str = "gemini") -> Tuple[bool, Optional[str]]:
     """
     Test if an API key is valid by making a minimal request.
+
+    Returns (ok, error_detail) so callers can surface/log the specific failure
+    (e.g. payment/quota 402, 401, 429) instead of a generic message.
     """
     try:
         if provider == "gemini":
             response = await _gemini_generate_content(api_key, model_id, "ping")
-            return True if response.text else False
+            if response.text:
+                return True, None
+            return False, "Empty response from model"
         elif provider == "deepseek":
             # Actual DeepSeek auth test
             client = get_deepseek_client(api_key)
             # Minimal model list request to test auth
             await client.models.list()
-            return True 
-        return False
+            return True, None
+        elif provider == "openrouter":
+            # OpenRouter is OpenAI-compatible — auth test via model list
+            client = get_openrouter_client(api_key)
+            await client.models.list()
+            return True, None
+        elif provider == "qwen":
+            # DashScope compatible-mode — a tiny chat completion is the most
+            # reliable auth check (the /models endpoint is not guaranteed).
+            client = get_qwen_client(api_key)
+            resp = await client.chat.completions.create(
+                model=model_id,
+                messages=[{"role": "user", "content": "ping"}],
+                max_tokens=1,
+            )
+            if resp.choices:
+                return True, None
+            return False, "Empty response from model"
+        return False, "Unsupported provider config"
     except Exception as e:
         logger.error(f"API Key test failed: {e}")
-        return False
+        return False, str(e)[:600]

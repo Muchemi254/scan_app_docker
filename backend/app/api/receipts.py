@@ -30,7 +30,7 @@ from app.services.data_adapter import DataService
 from app.services.database_service import save_image, save_thumbnail, delete_receipt_images
 from app.services.firebase_service import StorageService
 from app.services.gemini import extract_receipt_data, generate_ai_summary
-from app.services.image_service import process_image, generate_thumbnail
+from app.services.image_service import process_image, generate_thumbnail, prepare_for_ai
 from app.services.task_service import TaskService
 from app.services.audit_service import AuditService
 from app.tasks.worker import extract_receipt_batch_task

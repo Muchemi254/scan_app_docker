@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { settingsApi } from '../services/api';
+import { toast } from '../stores/toastStore';
 import { Settings, Database, Shield, AlertCircle, CheckCircle, Trash2, Key, RefreshCcw, Eye, EyeOff, Check } from 'lucide-react';
 
 interface AIModel {
@@ -29,7 +30,9 @@ const AiScanningEnginePage = ({ userId }: { userId: string | null }) => {
     model_id: 'gemini-3-flash-preview',
     configs: {
       gemini: { api_key: '', enabled: true, thinking_mode: false },
-      deepseek: { api_key: '', enabled: true, thinking_mode: false }
+      deepseek: { api_key: '', enabled: true, thinking_mode: false },
+      openrouter: { api_key: '', enabled: true, thinking_mode: false },
+      qwen: { api_key: '', enabled: true, thinking_mode: false }
     },
     max_ai_concurrency: 4,
   });
@@ -63,6 +66,8 @@ const AiScanningEnginePage = ({ userId }: { userId: string | null }) => {
         const mergedConfigs = {
           gemini: { api_key: '', enabled: true },
           deepseek: { api_key: '', enabled: true },
+          openrouter: { api_key: '', enabled: true },
+          qwen: { api_key: '', enabled: true },
           ...settingsData.configs
         };
         const mergedSettings = { ...settingsData, configs: mergedConfigs };
@@ -129,6 +134,7 @@ const AiScanningEnginePage = ({ userId }: { userId: string | null }) => {
         setMessage({ type: 'success', text: result.message });
       } else {
         setMessage({ type: 'error', text: result.message });
+        toast.error('API key test failed', result.message, { duration: 10000 });
       }
     } catch (error: any) {
       setMessage({ type: 'error', text: error.message || 'Test failed' });
@@ -193,6 +199,8 @@ const AiScanningEnginePage = ({ userId }: { userId: string | null }) => {
                   >
                     <option value="gemini">Google Gemini</option>
                     <option value="deepseek">DeepSeek</option>
+                    <option value="openrouter">OpenRouter (Qwen3 VL)</option>
+                    <option value="qwen">Alibaba Qwen (DashScope)</option>
                   </select>
                 </div>
 

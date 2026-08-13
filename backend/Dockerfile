@@ -39,6 +39,9 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy application code
 COPY app/ ./app/
+COPY alembic.ini .
+COPY alembic/ ./alembic/
+COPY scripts/ ./scripts/
 
 # Ensure data directories exist and belong to appuser
 RUN mkdir -p /app/data /app/data/images /app/backups && chown -R appuser:appuser /app

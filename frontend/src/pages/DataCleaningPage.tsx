@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { cleaningApi, receiptApi } from '../services/api';
-import { Sparkles, Merge, GitBranch, Copy, Trash2, CheckCircle, Loader2, AlertTriangle, Search, X, ChevronDown, ChevronRight, Image } from 'lucide-react';
+import { Sparkles, Merge, GitBranch, Copy, Trash2, CheckCircle, Loader2, AlertTriangle, Search, X, ChevronDown, ChevronRight, Image, Scale, ExternalLink } from 'lucide-react';
 import ImageViewer from '../components/ImageViewer';
 
 interface CleaningAction {
-  type: 'supplier_merge' | 'field_propagation' | 'duplicate';
+  type: 'supplier_merge' | 'field_propagation' | 'duplicate' | 'total_recompute';
   canonical?: string;
   variants?: string[];
   field?: string;
@@ -14,6 +15,19 @@ interface CleaningAction {
   keep_id?: string;
   delete_ids?: string[];
 }
+
+type TabKey = 'suppliers' | 'fields' | 'duplicates' | 'mismatches';
+
+const TABS: { key: TabKey; label: string; icon: any; iconClass: string; badgeActive: string; badgeIdle: string }[] = [
+  { key: 'suppliers',  label: 'Suppliers',        icon: Merge,     iconClass: 'text-orange-500', badgeActive: 'bg-orange-100 text-orange-700', badgeIdle: 'bg-gray-100 text-gray-600' },
+  { key: 'fields',     label: 'Field Fills',      icon: GitBranch, iconClass: 'text-blue-500',   badgeActive: 'bg-blue-100 text-blue-700',     badgeIdle: 'bg-gray-100 text-gray-600' },
+  { key: 'duplicates', label: 'Duplicates',       icon: Copy,      iconClass: 'text-red-500',    badgeActive: 'bg-red-100 text-red-700',       badgeIdle: 'bg-gray-100 text-gray-600' },
+  { key: 'mismatches', label: 'Total Mismatches', icon: Scale,     iconClass: 'text-amber-500',  badgeActive: 'bg-amber-100 text-amber-700',   badgeIdle: 'bg-gray-100 text-gray-600' },
+];
+
+// Route all stored image URLs through the same cached proxy ImageViewer uses.
+// /receipt-images/{id} is not a real route — only /api/images/cached?url=... serves bytes.
+const proxiedImageUrl = (url: string) => `/api/images/cached?url=${encodeURIComponent(url)}`;
 
 const DataCleaningPage = ({ userId }: { userId: string | null }) => {
   const [suggestions, setSuggestions] = useState<any>(null);
@@ -25,6 +39,12 @@ const DataCleaningPage = ({ userId }: { userId: string | null }) => {
   const [error, setError] = useState<string | null>(null);
   const [detailMode, setDetailMode] = useState<'all' | 'item'>('all');
   const [compareImage, setCompareImage] = useState<{ url: string; label: string } | null>(null);
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const VALID_TABS: TabKey[] = ['suppliers', 'fields', 'duplicates', 'mismatches'];
+  const tabFromUrl = searchParams.get('tab') as TabKey | null;
+  const activeTab: TabKey = tabFromUrl && VALID_TABS.includes(tabFromUrl) ? tabFromUrl : 'suppliers';
+  const setActiveTab = (t: TabKey) => setSearchParams({ tab: t }, { replace: true });
 
   useEffect(() => {
     if (!userId) return;
@@ -124,6 +144,16 @@ const DataCleaningPage = ({ userId }: { userId: string | null }) => {
       }
     }
 
+    for (const [idx, m] of (suggestions.total_mismatches || []).entries()) {
+      if (selectedActions.has(`total_mismatch:${idx}`)) {
+        actions.push({
+          type: 'total_recompute',
+          keep_id: m.id,
+          value: String(m.items_total),
+        });
+      }
+    }
+
     return actions;
   };
 
@@ -145,10 +175,20 @@ const DataCleaningPage = ({ userId }: { userId: string | null }) => {
   };
 
   const actionCount = buildActions().length;
-  const totalSuggestions =
-    (suggestions?.supplier_merges?.length || 0) +
-    (suggestions?.field_propagations?.length || 0) +
-    (suggestions?.duplicates?.length || 0);
+  const counts = useMemo(() => ({
+    suppliers:  suggestions?.supplier_merges?.length || 0,
+    fields:     suggestions?.field_propagations?.length || 0,
+    duplicates: suggestions?.duplicates?.length || 0,
+    mismatches: suggestions?.total_mismatches?.length || 0,
+  }), [suggestions]);
+  const totalSuggestions = counts.suppliers + counts.fields + counts.duplicates + counts.mismatches;
+
+  useEffect(() => {
+    if (!suggestions) return;
+    if (counts[activeTab] > 0) return;
+    const first = (Object.keys(counts) as TabKey[]).find(k => counts[k] > 0);
+    if (first) setActiveTab(first);
+  }, [suggestions, counts, activeTab]);
 
   if (loading) {
     return (
@@ -208,28 +248,54 @@ const DataCleaningPage = ({ userId }: { userId: string | null }) => {
             <span className="font-medium">
               Applied! {result.stats?.supplier_renames > 0 && `${result.stats.supplier_renames} renamed, `}
               {result.stats?.fields_filled > 0 && `${result.stats.fields_filled} fields filled, `}
-              {result.stats?.duplicates_removed > 0 && `${result.stats.duplicates_removed} duplicates removed`}
+              {result.stats?.duplicates_removed > 0 && `${result.stats.duplicates_removed} duplicates removed, `}
+              {result.stats?.totals_recomputed > 0 && `${result.stats.totals_recomputed} totals updated from items`}
             </span>
           </div>
           <button onClick={() => setResult(null)} className="text-green-600 hover:text-green-800"><X className="h-4 w-4" /></button>
         </div>
       )}
 
-      {/* ── Detail mode toggle ── */}
-      <div className="flex gap-2 mb-4">
-        <button onClick={() => setDetailMode('all')}
-          className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-all ${detailMode === 'all' ? 'bg-blue-50 border-blue-300 text-blue-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>
-          Select All / Group
-        </button>
-        <button onClick={() => setDetailMode('item')}
-          className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-all ${detailMode === 'item' ? 'bg-blue-50 border-blue-300 text-blue-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>
-          Item by Item
-        </button>
+      {/* ── Tab bar ── */}
+      <div className="flex flex-wrap gap-1 mb-4 border-b border-gray-200">
+        {TABS.map(t => {
+          const Icon = t.icon;
+          const n = counts[t.key];
+          const isActive = activeTab === t.key;
+          return (
+            <button key={t.key} onClick={() => setActiveTab(t.key)}
+              className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                isActive
+                  ? 'border-purple-500 text-purple-700'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}>
+              <Icon className={`h-4 w-4 ${isActive ? t.iconClass : 'text-gray-400'}`} />
+              <span>{t.label}</span>
+              <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
+                n === 0 ? 'bg-gray-100 text-gray-400' : (isActive ? t.badgeActive : t.badgeIdle)
+              }`}>{n}</span>
+            </button>
+          );
+        })}
       </div>
+
+      {/* ── Detail mode toggle (Suppliers tab only) ── */}
+      {activeTab === 'suppliers' && (
+        <div className="flex gap-2 mb-4">
+          <button onClick={() => setDetailMode('all')}
+            className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-all ${detailMode === 'all' ? 'bg-blue-50 border-blue-300 text-blue-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>
+            Select All / Group
+          </button>
+          <button onClick={() => setDetailMode('item')}
+            className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-all ${detailMode === 'item' ? 'bg-blue-50 border-blue-300 text-blue-700' : 'border-gray-200 text-gray-500 hover:bg-gray-50'}`}>
+            Item by Item
+          </button>
+        </div>
+      )}
 
       <div className="space-y-6">
         {/* ── Supplier Merges ── */}
-        {suggestions.supplier_merges?.length > 0 && (
+        {activeTab === 'suppliers' && suggestions.supplier_merges?.length > 0 && (
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
             <div className="flex items-center justify-between px-5 py-3 bg-gray-50 border-b">
               <div className="flex items-center gap-2">
@@ -302,7 +368,7 @@ const DataCleaningPage = ({ userId }: { userId: string | null }) => {
         )}
 
         {/* ── Field Propagation ── */}
-        {suggestions.field_propagations?.length > 0 && (
+        {activeTab === 'fields' && suggestions.field_propagations?.length > 0 && (
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
             <div className="flex items-center justify-between px-5 py-3 bg-gray-50 border-b">
               <div className="flex items-center gap-2">
@@ -360,7 +426,7 @@ const DataCleaningPage = ({ userId }: { userId: string | null }) => {
         )}
 
         {/* ── Duplicates ── */}
-        {suggestions.duplicates?.length > 0 && (
+        {activeTab === 'duplicates' && suggestions.duplicates?.length > 0 && (
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
             <div className="flex items-center justify-between px-5 py-3 bg-gray-50 border-b">
               <div className="flex items-center gap-2">
@@ -420,7 +486,7 @@ const DataCleaningPage = ({ userId }: { userId: string | null }) => {
                             return (
                               <button onClick={() => setCompareImage({ url: keep.imageUrl, label: 'Keep: ' + keep.supplier })}
                                 className="relative group border-2 border-green-400 rounded-lg overflow-hidden aspect-[3/4] bg-gray-100 hover:shadow-md transition-shadow">
-                                <img src={keep.imageUrl} alt="Keep" className="w-full h-full object-cover" loading="lazy" />
+                                <img src={proxiedImageUrl(keep.imageUrl)} alt="Keep" className="w-full h-full object-cover" loading="lazy" />
                                 <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-1.5">
                                   <p className="text-[10px] text-white font-semibold truncate">✓ Keep</p>
                                 </div>
@@ -434,7 +500,7 @@ const DataCleaningPage = ({ userId }: { userId: string | null }) => {
                             <button key={r.id} onClick={() => setCompareImage({ url: r.imageUrl, label: 'Remove: ' + r.supplier })}
                               className="relative group border-2 border-red-200 rounded-lg overflow-hidden aspect-[3/4] bg-gray-100 hover:shadow-md hover:border-red-400 transition-all">
                               {r.imageUrl ? (
-                                <img src={r.imageUrl} alt="Duplicate" className="w-full h-full object-cover" loading="lazy"
+                                <img src={proxiedImageUrl(r.imageUrl)} alt="Duplicate" className="w-full h-full object-cover" loading="lazy"
                                   onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
                               ) : (
                                 <div className="flex items-center justify-center h-full text-gray-300"><Image className="h-6 w-6" /></div>
@@ -467,6 +533,150 @@ const DataCleaningPage = ({ userId }: { userId: string | null }) => {
                 );
               })}
             </div>
+          </div>
+        )}
+
+        {/* ── Total Mismatches ── */}
+        {activeTab === 'mismatches' && suggestions.total_mismatches?.length > 0 && (
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-3 bg-gray-50 border-b">
+              <div className="flex items-center gap-2">
+                <Scale className="h-4 w-4 text-amber-500" />
+                <h2 className="font-semibold text-gray-800">Total ≠ Sum of Items</h2>
+                <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">{suggestions.total_mismatches.length}</span>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => selectAllInGroup('total_mismatch', suggestions.total_mismatches.map((_: any, i: number) => i))}
+                  className="text-xs text-blue-600 hover:text-blue-800">Select all</button>
+                <button onClick={() => deselectAllInGroup('total_mismatch', suggestions.total_mismatches.map((_: any, i: number) => i))}
+                  className="text-xs text-gray-500 hover:text-gray-700">Clear</button>
+              </div>
+            </div>
+            <p className="px-5 py-2 text-xs text-gray-500 bg-amber-50/50 border-b border-amber-100">
+              These receipts have a stored total that disagrees with the sum of their line items.
+              Selecting one replaces <code>totalAmount</code> with the computed item-total — only approve when the items look right (large variances often mean a misread unit price).
+            </p>
+            <div className="divide-y">
+              {suggestions.total_mismatches.map((m: any, idx: number) => {
+                const actionId = `total_mismatch:${idx}`;
+                const isSelected = selectedActions.has(actionId);
+                const isExpanded = expandedGroups.has(actionId);
+                const sign = m.variance >= 0 ? '+' : '';
+                const fmt = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                const thumb = m.thumbnailUrl || m.imageUrl;
+                return (
+                  <div key={m.id} className={`${isSelected ? 'bg-blue-50/50' : ''}`}>
+                    <div className="flex items-center gap-3 px-5 py-3">
+                      <input type="checkbox" checked={isSelected} onChange={() => toggleAction(actionId)}
+                        className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
+                      <button onClick={() => toggleGroup(actionId)} className="p-0.5 hover:bg-gray-100 rounded">
+                        {isExpanded ? <ChevronDown className="h-3.5 w-3.5 text-gray-400" /> : <ChevronRight className="h-3.5 w-3.5 text-gray-400" />}
+                      </button>
+                      {thumb ? (
+                        <button onClick={() => setCompareImage({ url: m.imageUrl || thumb, label: m.supplier })}
+                          className="h-20 w-20 rounded border border-gray-200 overflow-hidden flex-shrink-0 bg-gray-100 hover:border-blue-400 hover:shadow-md transition-all">
+                          <img src={proxiedImageUrl(thumb)} alt="" className="w-full h-full object-cover" loading="lazy" />
+                        </button>
+                      ) : (
+                        <div className="h-20 w-20 rounded border border-gray-200 bg-gray-50 flex items-center justify-center flex-shrink-0">
+                          <Image className="h-6 w-6 text-gray-300" />
+                        </div>
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-semibold text-sm text-gray-800 truncate">{m.supplier}</span>
+                          <span className="text-xs text-gray-400">{m.receiptDate}</span>
+                          {m.invoiceNumber && <span className="text-xs text-gray-400 font-mono">{m.invoiceNumber}</span>}
+                          <span className="text-xs text-gray-400">· {m.n_items} item{m.n_items !== 1 ? 's' : ''}</span>
+                        </div>
+                        <div className="flex items-center gap-3 mt-0.5 text-xs">
+                          <span className="text-gray-500">Receipt: <span className="font-mono text-gray-800">{fmt(m.receipt_total)}</span></span>
+                          <span className="text-gray-300">→</span>
+                          <span className="text-gray-500">Items: <span className="font-mono text-gray-800">{fmt(m.items_total)}</span></span>
+                          <span className={`font-mono font-semibold ${m.variance > 0 ? 'text-red-600' : 'text-blue-600'}`}>
+                            {sign}{fmt(m.variance)}
+                          </span>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => navigate(`/receipts/${m.id}?returnTo=${encodeURIComponent('/cleaning?tab=mismatches')}`)}
+                        className="p-1.5 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-700 flex-shrink-0"
+                        title="Open receipt to edit (returns here on save/cancel)"
+                      >
+                        <ExternalLink className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleIgnore('total_mismatch', { keep_id: m.id }); }}
+                        className="p-1 rounded hover:bg-red-50 text-gray-300 hover:text-red-500 flex-shrink-0"
+                        title="Dismiss — totals are intentional"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                    {isExpanded && (
+                      <div className="px-5 pb-4 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)] gap-4">
+                        <div className="bg-gray-50 rounded-lg border border-gray-200 overflow-hidden">
+                          {m.imageUrl ? (
+                            <ImageViewer imageUrl={m.imageUrl} altText={m.supplier} containerClass="min-h-[24rem] max-h-[32rem]" />
+                          ) : (
+                            <div className="flex flex-col items-center justify-center h-64 text-gray-400">
+                              <Image className="h-10 w-10 mb-2" />
+                              <p className="text-xs">No image on this receipt</p>
+                            </div>
+                          )}
+                        </div>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-xs border border-gray-200 rounded">
+                            <thead className="bg-gray-50 text-gray-600">
+                              <tr>
+                                <th className="px-2 py-1.5 text-left">#</th>
+                                <th className="px-2 py-1.5 text-left">Item</th>
+                                <th className="px-2 py-1.5 text-right">Qty</th>
+                                <th className="px-2 py-1.5 text-right">Price</th>
+                                <th className="px-2 py-1.5 text-right">Tax</th>
+                                <th className="px-2 py-1.5 text-right">Line Total</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y">
+                              {(m.items || []).map((it: any, i: number) => (
+                                <tr key={i} className="hover:bg-gray-50">
+                                  <td className="px-2 py-1 text-gray-400">{i + 1}</td>
+                                  <td className="px-2 py-1 truncate max-w-[14rem]">{it.name || '—'}</td>
+                                  <td className="px-2 py-1 text-right font-mono">{it.quantity}</td>
+                                  <td className="px-2 py-1 text-right font-mono">{fmt(it.price)}</td>
+                                  <td className="px-2 py-1 text-right font-mono text-gray-500">{it.tax ? fmt(it.tax) : '—'}</td>
+                                  <td className="px-2 py-1 text-right font-mono font-semibold">{fmt(it.line_total)}</td>
+                                </tr>
+                              ))}
+                              <tr className="bg-gray-50 font-semibold">
+                                <td colSpan={5} className="px-2 py-1.5 text-right text-gray-600">Items total</td>
+                                <td className="px-2 py-1.5 text-right font-mono">{fmt(m.items_total)}</td>
+                              </tr>
+                              <tr className="bg-gray-50">
+                                <td colSpan={5} className="px-2 py-1.5 text-right text-gray-600">Receipt total</td>
+                                <td className="px-2 py-1.5 text-right font-mono">{fmt(m.receipt_total)}</td>
+                              </tr>
+                              <tr className={m.variance > 0 ? 'bg-red-50' : 'bg-blue-50'}>
+                                <td colSpan={5} className="px-2 py-1.5 text-right font-semibold text-gray-700">Variance</td>
+                                <td className={`px-2 py-1.5 text-right font-mono font-bold ${m.variance > 0 ? 'text-red-700' : 'text-blue-700'}`}>{sign}{fmt(m.variance)}</td>
+                              </tr>
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* ── Empty-tab placeholder ── */}
+        {counts[activeTab] === 0 && (
+          <div className="bg-white rounded-xl border border-gray-200 px-6 py-12 text-center">
+            <CheckCircle className="h-10 w-10 text-green-400 mx-auto mb-3" />
+            <p className="text-sm text-gray-500">Nothing to clean in this category.</p>
           </div>
         )}
       </div>

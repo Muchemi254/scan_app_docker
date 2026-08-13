@@ -21,7 +21,7 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from app.core.config import settings
-from app.api import health, receipts, tasks, images, batches, exports, cleaning, dashboard, review_batches, backup_api, settings as settings_api
+from app.api import health, receipts, tasks, images, batches, exports, cleaning, dashboard, review_batches, backup_api, scan_errors, settings as settings_api
 
 # Configure logging
 logging.basicConfig(
@@ -228,6 +228,12 @@ def create_app() -> FastAPI:
     # Review batches (SQLite-backed manual review workflow)
     app.include_router(
         review_batches.router,
+        prefix=settings.API_V1_STR,
+    )
+
+    # Scan errors (durable, user-reviewable failure log)
+    app.include_router(
+        scan_errors.router,
         prefix=settings.API_V1_STR,
     )
 

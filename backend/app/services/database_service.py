@@ -229,6 +229,7 @@ class DatabaseService:
 
         items = receipt_data.get("items") or []
         image_filename = receipt_data.get("image_filename")
+        image_sha256 = receipt_data.get("image_sha256")
         # Allow caller to pre-generate an ID (needed for image filenames)
         use_id = receipt_data.get("id")
 
@@ -239,8 +240,8 @@ class DatabaseService:
                     """
                     INSERT INTO receipts (id, user_id, status, supplier, total_amount, tax_amount,
                         receipt_date, category, invoice_number, kra_pin, buyer_kra_pin, cu_invoice,
-                        batch_title, image_filename, scanned_at, created_at, updated_at)
-                    VALUES (COALESCE($17, gen_random_uuid()), $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+                        batch_title, image_filename, image_sha256, scanned_at, created_at, updated_at)
+                    VALUES (COALESCE($18, gen_random_uuid()), $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
                     RETURNING id
                     """,
                     user_id,
@@ -256,6 +257,7 @@ class DatabaseService:
                     receipt_data.get("cuInvoice"),
                     receipt_data.get("batchTitle"),
                     image_filename,
+                    image_sha256,
                     now,
                     now,
                     now,
@@ -628,6 +630,32 @@ class DatabaseService:
                     seen.add(rid)
 
             return results
+
+    @staticmethod
+    async def find_receipts_by_image_hashes(
+        user_id: str, hashes: List[str]
+    ) -> Dict[str, str]:
+        """
+        Look up existing receipts for this user by image SHA256.
+
+        Returns: {sha256 -> receipt_id} for any hashes already in the database.
+        Used to skip re-scanning images we've already extracted.
+        """
+        if not hashes:
+            return {}
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, image_sha256
+                FROM receipts
+                WHERE user_id = $1
+                  AND image_sha256 = ANY($2::text[])
+                """,
+                user_id,
+                hashes,
+            )
+            return {r["image_sha256"]: str(r["id"]) for r in rows}
 
     @staticmethod
     async def search_receipts_fulltext(

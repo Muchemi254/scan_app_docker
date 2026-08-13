@@ -100,6 +100,16 @@ class DataService:
         db, _ = cls._backend()
         return await db.get_receipt_groups(user_id)
 
+    @classmethod
+    async def find_receipts_by_image_hashes(
+        cls, user_id: str, hashes: List[str]
+    ) -> Dict[str, str]:
+        """Return {sha256 -> receipt_id} for existing receipts. PG only."""
+        db, backend = cls._backend()
+        if backend != "postgres" or not hasattr(db, "find_receipts_by_image_hashes"):
+            return {}
+        return await db.find_receipts_by_image_hashes(user_id, hashes)
+
     # ── User AI Settings ─────────────────────────────────────────────────
 
     @classmethod

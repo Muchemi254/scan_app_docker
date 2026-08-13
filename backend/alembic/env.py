@@ -21,6 +21,8 @@ if config.config_file_name is not None:
 
 # Override sqlalchemy.url from DATABASE_URL env var
 database_url = os.getenv("DATABASE_URL", config.get_main_option("sqlalchemy.url"))
+if database_url and database_url.startswith("postgresql://"):
+    database_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 config.set_main_option("sqlalchemy.url", database_url)
 
 target_metadata = None  # We author DDL manually — no ORM metadata needed

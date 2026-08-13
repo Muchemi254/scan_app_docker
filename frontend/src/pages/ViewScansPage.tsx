@@ -1,7 +1,7 @@
 // src/pages/ViewScansPage.tsx
 import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Hash, Calendar, Clock, Filter } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Hash, Calendar, Clock, Filter, X } from 'lucide-react';
 import { useReceiptStore } from '../stores/receiptStore';
 import { receiptApi } from '../services/api';
 import ReviewPanel from '../components/ReviewPanel';
@@ -288,12 +288,6 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
           } / {filteredReceipts.length}
         </span>
         <div className="flex gap-1">
-          <button
-            onClick={() => setPage(p => Math.max(1, p - 1))}
-            disabled={clampedPage === 1}
-            className="px-2 py-0.5 border rounded disabled:opacity-30 hover:bg-gray-100"
-          >‹</button>
-        <span className="px-1">{clampedPage}/{totalPages}</span>
           <button
             onClick={() => { const np = Math.max(1, page - 1); setPage(np); if (searchResults !== null) loadSearchPage(np); }}
             disabled={clampedPage === 1}

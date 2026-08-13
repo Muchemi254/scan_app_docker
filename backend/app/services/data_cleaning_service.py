@@ -208,6 +208,66 @@ def suggest_duplicates(receipts: List[dict]) -> List[dict]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Total-mismatch suggestions (receipt total ≠ sum of line items)
+# ═══════════════════════════════════════════════════════════════════════════
+
+TOTAL_MISMATCH_TOLERANCE = 1.0  # KSh; below this we treat as rounding noise
+
+def _line_total(item: dict) -> float:
+    """Inclusive line total: qty * (price + tax) * (1 - discount/100)."""
+    qty = _to_float(item.get("quantity")) or 1.0
+    price = _to_float(item.get("price"))
+    tax = _to_float(item.get("tax"))
+    discount = _to_float(item.get("discount"))
+    factor = (1 - discount / 100) if discount else 1.0
+    return qty * (price + tax) * factor
+
+
+def suggest_total_mismatches(receipts: List[dict], tolerance: float = TOTAL_MISMATCH_TOLERANCE) -> List[dict]:
+    """Find receipts where the stored totalAmount disagrees with the sum of line items.
+
+    These usually indicate Gemini extraction errors (e.g. unit price misread as
+    line total or vice versa). Sorted by largest absolute variance first so the
+    user can disposition outliers quickly.
+    """
+    out = []
+    for r in receipts:
+        items = r.get("items") or []
+        if not items:
+            continue
+        receipt_total = _to_float(r.get("totalAmount"))
+        items_total = round(sum(_line_total(i) for i in items), 2)
+        variance = round(items_total - receipt_total, 2)
+        if abs(variance) < tolerance:
+            continue
+        out.append({
+            "id": r["id"],
+            "supplier": r.get("supplier") or "Unknown",
+            "receiptDate": r.get("receiptDate", ""),
+            "invoiceNumber": r.get("invoiceNumber", ""),
+            "receipt_total": receipt_total,
+            "items_total": items_total,
+            "variance": variance,
+            "n_items": len(items),
+            "imageUrl": r.get("imageUrl") or "",
+            "thumbnailUrl": r.get("thumbnailUrl") or r.get("imageUrl") or "",
+            "items": [
+                {
+                    "name": i.get("name", ""),
+                    "quantity": _to_float(i.get("quantity")) or 1.0,
+                    "price": _to_float(i.get("price")),
+                    "tax": _to_float(i.get("tax")),
+                    "discount": _to_float(i.get("discount")),
+                    "line_total": round(_line_total(i), 2),
+                }
+                for i in items
+            ],
+        })
+    out.sort(key=lambda m: -abs(m["variance"]))
+    return out
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Ignore list helpers
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -222,6 +282,8 @@ def _ignore_key(suggestion: dict) -> str:
         return f"merge|{'|'.join(variants)}"
     if stype == "field_propagation":
         return f"prop|{suggestion.get('field','')}|{suggestion.get('supplier','')}"
+    if stype == "total_mismatch":
+        return f"mismatch|{suggestion.get('id','') or suggestion.get('keep_id','')}"
     return ""
 
 
@@ -255,13 +317,17 @@ def generate_all_suggestions(receipts: List[dict], ignored: Optional[set] = None
         "supplier_merges": suggest_supplier_merges(receipts),
         "field_propagations": suggest_field_propagation(receipts),
         "duplicates": suggest_duplicates(receipts),
+        "total_mismatches": suggest_total_mismatches(receipts),
     }
     if not ignored:
         return raw
+    # total_mismatches uses {id} not {type}; filter manually.
+    mismatches = [m for m in raw["total_mismatches"] if f"mismatch|{m['id']}" not in ignored]
     return {
         "supplier_merges": _filter_ignored(raw["supplier_merges"], ignored),
         "field_propagations": _filter_ignored(raw["field_propagations"], ignored),
         "duplicates": _filter_ignored(raw["duplicates"], ignored),
+        "total_mismatches": mismatches,
     }
 
 
@@ -270,7 +336,7 @@ def generate_all_suggestions(receipts: List[dict], ignored: Optional[set] = None
 # ═══════════════════════════════════════════════════════════════════════════
 
 async def apply_actions(user_id: str, actions: List[dict]) -> dict:
-    stats = {"supplier_renames": 0, "fields_filled": 0, "duplicates_removed": 0}
+    stats = {"supplier_renames": 0, "fields_filled": 0, "duplicates_removed": 0, "totals_recomputed": 0}
 
     for action in actions:
         atype = action.get("type")
@@ -293,6 +359,17 @@ async def apply_actions(user_id: str, actions: List[dict]) -> dict:
                     if not current_val or str(current_val).strip() in ("", "N/A"):
                         await DataService.update_receipt(user_id, rid, {field: value})
                         stats["fields_filled"] += 1
+
+        elif atype == "total_recompute":
+            # Accept item totals as the true receipt total.
+            # keep_id carries the receipt id, value carries the new total as a string.
+            rid = action.get("keep_id") or ""
+            new_total = action.get("value") or ""
+            if rid and new_total:
+                current = await DataService.get_receipt(user_id, rid)
+                if current:
+                    await DataService.update_receipt(user_id, rid, {"totalAmount": str(new_total)})
+                    stats["totals_recomputed"] = stats.get("totals_recomputed", 0) + 1
 
         elif atype == "duplicate":
             keep_id = action.get("keep_id")

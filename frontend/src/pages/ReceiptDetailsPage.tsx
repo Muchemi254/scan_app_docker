@@ -1,13 +1,17 @@
 import { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { ArrowLeft } from 'lucide-react';
 import { receiptApi } from '../services/api';
 import { useReceiptStore } from '../stores/receiptStore';
 import ReceiptForm from '../components/ReceiptForm';
 import AuditTrail from '../components/AuditTrail';
+import ImageViewer from '../components/ImageViewer';
 
 const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const returnTo = searchParams.get('returnTo');
   const { upsert, remove } = useReceiptStore();
   const [receipt, setReceipt] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -42,6 +46,10 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
       setReceipt(updated);
       setEditing(false);
       setNewImage(null);
+      if (returnTo) {
+        navigate(returnTo);
+        return;
+      }
     } catch (error) {
       console.error("Error updating receipt:", error);
       alert(error instanceof Error ? error.message : "Update failed");
@@ -70,16 +78,33 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
   if (loading) return <div className="flex items-center justify-center min-h-screen"><div>Loading...</div></div>;
   if (!receipt) return <div className="flex items-center justify-center min-h-screen"><div>Receipt not found</div></div>;
 
+  const imageUrl = newImage ? URL.createObjectURL(newImage) : receipt.imageUrl;
+
   return (
     <div className="w-full px-4 py-4 sm:py-6">
       <div className="bg-white p-4 sm:p-6 rounded-lg shadow">
         <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-4 sm:mb-6">
-          <h2 className="text-lg sm:text-xl font-bold truncate">
-            {receipt.supplier || 'Receipt Details'}
-          </h2>
+          <div className="flex items-center gap-3 min-w-0">
+            {returnTo && (
+              <button
+                onClick={() => navigate(returnTo)}
+                className="flex items-center gap-1 px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded transition-colors"
+                title="Back to cleaning"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                Back
+              </button>
+            )}
+            <h2 className="text-lg sm:text-xl font-bold truncate">
+              {receipt.supplier || 'Receipt Details'}
+            </h2>
+          </div>
           <div className="flex gap-2">
             <button
-              onClick={() => setEditing(!editing)}
+              onClick={() => {
+                if (editing && returnTo) { navigate(returnTo); return; }
+                setEditing(!editing);
+              }}
               className="flex-1 sm:flex-none px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
               disabled={loading}
             >
@@ -96,12 +121,31 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
         </div>
 
         {editing ? (
-          <ReceiptForm
-            initialData={receipt}
-            onSubmit={handleUpdate}
-            onImageChange={setNewImage}
-            loading={loading}
-          />
+          /* Edit mode: form + image side-by-side on lg (same pattern as ReviewPanel) */
+          <div className="flex flex-col lg:flex-row lg:gap-4">
+            {imageUrl && (
+              <div className="sticky top-0 z-10 lg:static lg:w-1/2 xl:w-[55%] flex-shrink-0 bg-gray-50 rounded border border-gray-200 order-first lg:order-last flex flex-col">
+                <div className="flex-shrink-0 px-3 pt-2 pb-1 text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                  Receipt Image
+                </div>
+                <div className="p-2 lg:flex-1">
+                  <ImageViewer
+                    imageUrl={imageUrl}
+                    altText="Receipt"
+                    containerClass="h-48 sm:h-64 lg:h-full lg:min-h-[60vh]"
+                  />
+                </div>
+              </div>
+            )}
+            <div className={`flex-1 min-w-0 ${!imageUrl ? 'w-full' : ''}`}>
+              <ReceiptForm
+                initialData={receipt}
+                onSubmit={handleUpdate}
+                onImageChange={setNewImage}
+                loading={loading}
+              />
+            </div>
+          </div>
         ) : (
           <div className="space-y-2">
             <p><strong>Supplier:</strong> {receipt.supplier}</p>
@@ -113,8 +157,13 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
             {receipt.buyerKraPin && <p><strong>Buyer KRA PIN:</strong> {receipt.buyerKraPin}</p>}
             {receipt.cuInvoice && <p><strong>CU Invoice:</strong> {receipt.cuInvoice}</p>}
             {receipt.imageUrl && (
-              <div>
-                <img src={receipt.imageUrl} alt="Receipt" className="max-w-md mt-4" />
+              <div className="mt-4">
+                <h3 className="font-semibold text-gray-700 mb-2">Receipt Image</h3>
+                <ImageViewer
+                  imageUrl={receipt.imageUrl}
+                  altText="Receipt"
+                  containerClass="h-56 sm:h-80 md:h-96"
+                />
               </div>
             )}
 

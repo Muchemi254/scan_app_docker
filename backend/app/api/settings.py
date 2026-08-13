@@ -139,12 +139,35 @@ async def test_ai_settings(
             return AITestResponse(success=False, message="API key is empty")
     
     # Note: need a way to test different providers
-    success = await test_api_key(api_key, test_request.model_id, test_request.provider)
+    success, error_detail = await test_api_key(api_key, test_request.model_id, test_request.provider)
     
     if success:
         return AITestResponse(success=True, message="API Key is valid!")
     else:
-        return AITestResponse(success=False, message="Invalid API Key or connection error")
+        # Persist the failure so the user can review the specific reason
+        # (payment/quota 402, auth 401, rate-limit 429, ...) even if they
+        # navigate away from the settings page.
+        try:
+            from app.services.scan_error_service import log_error
+            from app.services.error_codes import ErrorCode, classify_exception
+            code = ErrorCode.UNKNOWN
+            if error_detail:
+                scan_error = classify_exception(Exception(error_detail))
+                code = scan_error.code
+            await log_error(
+                userId,
+                kind="system",
+                code=code,
+                message=error_detail or "API key validation failed",
+                title=f"API key test failed ({test_request.provider})",
+                data={
+                    "provider": test_request.provider,
+                    "model_id": test_request.model_id,
+                },
+            )
+        except Exception:
+            logger.exception("Failed to persist API key test failure")
+        return AITestResponse(success=False, message=error_detail or "Invalid API Key or connection error")
 
 from app.services.model_registry import get_all_models
 

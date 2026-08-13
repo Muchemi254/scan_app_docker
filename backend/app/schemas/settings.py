@@ -7,6 +7,8 @@ class AIProvider(str, Enum):
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
     DEEPSEEK = "deepseek"
+    OPENROUTER = "openrouter"
+    QWEN = "qwen"
 
 class ProviderConfig(BaseModel):
     api_key: Optional[str] = None

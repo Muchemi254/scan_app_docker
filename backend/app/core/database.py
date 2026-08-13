@@ -11,10 +11,11 @@ before each request — the pool wrapper injects it into each
 connection automatically.
 """
 
+import asyncio
 import logging
 from contextvars import ContextVar
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Optional, Tuple
 
 import asyncpg
 
@@ -25,7 +26,10 @@ logger = logging.getLogger(__name__)
 # Context variable set by auth middleware before each request
 _current_user: ContextVar[str] = ContextVar("current_user_id", default="")
 
-_pool: Optional[asyncpg.Pool] = None
+# Cache (loop, pool) tuples keyed by id(loop). See batch_service._redis_cache
+# for the full rationale — same bug class: id() reuse across Celery tasks can
+# return a dead pool from a previous task's closed event loop.
+_pool_cache: dict[int, Tuple[asyncio.AbstractEventLoop, "_RLSPool"]] = {}
 _rls_initialized = False
 
 
@@ -77,13 +81,27 @@ class _RLSConnection:
 
 
 async def init_pool() -> _RLSPool:
-    """Create the asyncpg connection pool and enable RLS.  Idempotent."""
-    global _pool, _rls_initialized
-    if _pool is not None:
-        return _pool
+    """Create the asyncpg connection pool and enable RLS for the current loop. Idempotent per loop."""
+    global _rls_initialized
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        raise RuntimeError("init_pool must be called within an active event loop")
+
+    loop_id = id(loop)
+    cached = _pool_cache.get(loop_id)
+    if cached is not None:
+        cached_loop, cached_pool = cached
+        if cached_loop is loop and not loop.is_closed():
+            return cached_pool
+        # id() reused after a previous Celery task's loop was GC'd — drop it.
+        _pool_cache.pop(loop_id, None)
+        logger.info("Dropping stale Postgres pool for reused loop id %d", loop_id)
 
     logger.info(
-        "Creating PostgreSQL pool → %s (min=%d, max=%d)",
+        "Creating PostgreSQL pool for loop %d → %s (min=%d, max=%d)",
+        loop_id,
         _masked_url(settings.DATABASE_URL),
         settings.DATABASE_POOL_MIN,
         settings.DATABASE_POOL_MAX,
@@ -96,23 +114,19 @@ async def init_pool() -> _RLSPool:
         command_timeout=30,
     )
 
-    # Verify connectivity
-    async with raw_pool.acquire() as conn:
-        version = await conn.fetchval("SELECT version()")
-    logger.info("PostgreSQL connected — %s", version)
-
-    # Enable Row-Level Security on all user-data tables
+    # Enable Row-Level Security once per process (tables are shared)
     if not _rls_initialized:
         await _enable_rls(raw_pool)
         _rls_initialized = True
 
-    _pool = _RLSPool(raw_pool)
-    return _pool
+    pool = _RLSPool(raw_pool)
+    _pool_cache[loop_id] = (loop, pool)
+    return pool
 
 
 async def _enable_rls(pool: asyncpg.Pool) -> None:
     """Enable RLS on all multi-tenant tables with user_id column."""
-    tables = ["receipts", "tasks", "review_batches", "audit_logs"]
+    tables = ["receipts", "tasks", "review_batches", "audit_logs", "scan_errors"]
     async with pool.acquire() as conn:
         for table in tables:
             exists = await conn.fetchval(
@@ -145,19 +159,47 @@ async def _enable_rls(pool: asyncpg.Pool) -> None:
 
 
 async def close_pool() -> None:
-    """Gracefully close the pool."""
-    global _pool
-    if _pool is not None:
-        await _pool.close()
-        _pool = None
-        logger.info("PostgreSQL pool closed")
+    """Gracefully close the pool for the current loop.
+
+    Narrow exception handling: previous `except: pass` silently masked
+    cleanup failures that allowed stale cache entries to persist across
+    Celery tasks.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    loop_id = id(loop)
+    cached = _pool_cache.pop(loop_id, None)
+    if cached is None:
+        return
+    _, pool = cached
+    try:
+        await pool.close()
+        logger.info("PostgreSQL pool for loop %d closed", loop_id)
+    except Exception as e:
+        logger.warning("close_pool: failed to close cleanly for loop %d: %s", loop_id, e)
 
 
 async def get_pool() -> _RLSPool:
-    """Return the pool, raising if not initialised."""
-    if _pool is None:
-        raise RuntimeError("Database pool not initialised — call init_pool() first")
-    return _pool
+    """Return the pool for current loop, raising if not initialised."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        raise RuntimeError("get_pool must be called within an active event loop")
+
+    loop_id = id(loop)
+    cached = _pool_cache.get(loop_id)
+    if cached is not None:
+        cached_loop, cached_pool = cached
+        if cached_loop is loop and not loop.is_closed():
+            return cached_pool
+        # Stale — drop it and fall through to init_pool which will validate again.
+        _pool_cache.pop(loop_id, None)
+        logger.info("Dropping stale Postgres pool for reused loop id %d", loop_id)
+
+    # Auto-initialize if missing or just-dropped (safer for deep service calls)
+    return await init_pool()
 
 
 def _masked_url(url: str) -> str:

@@ -1,13 +1,14 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { logout } from '../services/firebase';
 import { auth } from '../services/firebase';
 import {
   Home, Camera, FileText, ClipboardCheck, Download,
   LogOut, Menu, X, ChevronDown, User, Settings,
-  Images, Sparkles, Search, ListChecks,
+  Images, Sparkles, Search, ListChecks, Bell,
   Shield, PlusCircle,
 } from 'lucide-react';
+import { scanErrorApi } from '../services/api';
 
 const Layout = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -18,6 +19,30 @@ const Layout = () => {
 
   const receiptsRef = useRef<HTMLDivElement>(null);
   const profileRef = useRef<HTMLDivElement>(null);
+
+  // Unread scan/error notifications badge
+  const [unread, setUnread] = useState(0);
+  const currentUid = auth?.currentUser?.uid;
+  const refreshUnread = useCallback(async () => {
+    if (!currentUid) return;
+    try {
+      const { unread: n } = await scanErrorApi.unreadCount();
+      setUnread(n ?? 0);
+    } catch {
+      /* badge is best-effort */
+    }
+  }, [currentUid]);
+
+  useEffect(() => {
+    refreshUnread();
+    const timer = setInterval(refreshUnread, 30000);
+    return () => clearInterval(timer);
+  }, [refreshUnread]);
+
+  // Refresh the badge immediately after visiting the notifications page.
+  useEffect(() => {
+    if (location.pathname === '/notifications') refreshUnread();
+  }, [location.pathname, refreshUnread]);
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -117,8 +142,21 @@ const Layout = () => {
               </div>
             </div>
 
-            {/* Right: Profile Dropdown */}
+            {/* Right: Notifications bell + Profile Dropdown */}
             <div className="flex items-center gap-2">
+              <Link
+                to="/notifications"
+                className="relative p-2 rounded-lg text-gray-600 hover:bg-gray-100 transition"
+                aria-label="Notifications"
+              >
+                <Bell className="h-5 w-5" />
+                {unread > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-semibold flex items-center justify-center">
+                    {unread > 99 ? '99+' : unread}
+                  </span>
+                )}
+              </Link>
+
               <div ref={profileRef} className="relative hidden md:block">
                 <button onClick={() => setProfileOpen(!profileOpen)}
                   className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-gray-600 hover:bg-gray-100 transition-colors">

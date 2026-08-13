@@ -40,7 +40,7 @@ export const useTaskProgress = (options: UseTaskProgressOptions = {}) => {
   );
 
   const updateFileStatus = useCallback(
-    (index: number, status: 'pending' | 'processing' | 'done' | 'needs_review' | 'failed', message?: string, receiptId?: string) => {
+    (index: number, status: 'pending' | 'optimizing' | 'processing' | 'done' | 'needs_review' | 'failed', message?: string, receiptId?: string) => {
       taskStore.updateFileStatus(index, status, message, receiptId);
     },
     [taskStore]

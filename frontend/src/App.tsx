@@ -23,9 +23,11 @@ const ReviewBatchListPage = lazy(() => import('./pages/ReviewBatchListPage'));
 const ReviewBatchDetailPage = lazy(() => import('./pages/ReviewBatchDetailPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 const PostReceiptPage = lazy(() => import('./pages/PostReceiptPage'));
+const NotificationsPage = lazy(() => import('./pages/NotificationsPage'));
 
 import Layout from './components/Layout';
 import { ScannerProvider } from './contexts/ScannerContext';
+import { ToastContainer } from './components/ToastContainer';
 import PrivateRoute from './contexts/PrivateRoute';
 
 // Loading fallback for Suspense
@@ -136,6 +138,9 @@ const AppContent = () => {
                   onDismiss={() => setBannerDismissed(true)}
                 />
               )}
+
+              {/* Global toast notifications (top-right) */}
+              <ToastContainer />
 
               <Routes>
               {/* Public routes */}
@@ -268,6 +273,16 @@ const AppContent = () => {
                   element={
                     <PrivateRoute userId={userId} authLoading={authLoading}>
                       <SettingsPage userId={userId} />
+                    </PrivateRoute>
+                  }
+                />
+
+                {/* Notifications (durable scan/error log) */}
+                <Route
+                  path="/notifications"
+                  element={
+                    <PrivateRoute userId={userId} authLoading={authLoading}>
+                      <NotificationsPage userId={userId} />
                     </PrivateRoute>
                   }
                 />

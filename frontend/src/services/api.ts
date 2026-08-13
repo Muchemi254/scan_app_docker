@@ -451,6 +451,66 @@ export const batchApi = {
   async dismiss(batchId: string): Promise<void> {
     return apiRequest('DELETE', `/batches/${batchId}`);
   },
+
+  /** Retry a single failed chunk inside a batch. */
+  async retryChunk(batchId: string, chunkIndex: number): Promise<any> {
+    return apiRequest('POST', `/batches/${batchId}/chunks/${chunkIndex}/retry`);
+  },
+
+  /** Retry a single failed item inside a batch (cost: 1 Gemini call). */
+  async retryItem(batchId: string, itemIndex: number): Promise<any> {
+    return apiRequest('POST', `/batches/${batchId}/items/${itemIndex}/retry`);
+  },
+};
+
+// ============================================================================
+// Scan Errors API — durable, reviewable failure log
+// ============================================================================
+
+export interface ScanError {
+  id: string;
+  kind: 'batch' | 'chunk' | 'item' | 'system';
+  code: string;
+  message: string;
+  title: string | null;
+  batch_id: string | null;
+  item_index: number | null;
+  receipt_id: string | null;
+  data: any;
+  read: boolean;
+  created_at: number | null;
+}
+
+export const scanErrorApi = {
+  /** List the user's recorded scan/batch errors, newest first. */
+  async list(limit = 100): Promise<{ errors: ScanError[]; total: number }> {
+    return apiRequest('GET', `/scan-errors?limit=${limit}`);
+  },
+
+  /** Unread error count for the header bell badge. */
+  async unreadCount(): Promise<{ unread: number }> {
+    return apiRequest('GET', '/scan-errors/unread-count');
+  },
+
+  /** Mark a single error as read. */
+  async markRead(id: string): Promise<{ ok: boolean }> {
+    return apiRequest('POST', `/scan-errors/${id}/read`);
+  },
+
+  /** Mark every error as read. Returns the number marked. */
+  async markAllRead(): Promise<{ marked: number }> {
+    return apiRequest('POST', '/scan-errors/read-all');
+  },
+
+  /** Dismiss a single error record. */
+  async remove(id: string): Promise<void> {
+    return apiRequest('DELETE', `/scan-errors/${id}`);
+  },
+
+  /** Clear the whole error log. */
+  async clearAll(): Promise<void> {
+    return apiRequest('DELETE', '/scan-errors');
+  },
 };
 
 // ============================================================================
@@ -465,6 +525,7 @@ export const cleaningApi = {
     supplier_merges: any[];
     field_propagations: any[];
     duplicates: any[];
+    total_mismatches: any[];
   }> {
     return apiRequest('GET', '/receipts/clean/suggestions');
   },
