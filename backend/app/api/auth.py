@@ -12,7 +12,7 @@ Signup is intentionally closed: accounts are created by an administrator
 """
 
 import logging
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -20,6 +20,9 @@ from pydantic import BaseModel
 from app.core.security import get_current_user_id
 from app.core.config import settings
 from app.services import auth_service
+from app.core import trusted_hosts
+from app.services import app_settings_service
+from app.services import admin_keys_service
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +65,39 @@ class AdminUserOut(BaseModel):
     is_admin: bool
     display_name: Optional[str] = None
     created_at: Optional[str] = None
+
+
+class TrustedHostsRequest(BaseModel):
+    hosts: List[str] = []
+
+
+class TrustedHostsResponse(BaseModel):
+    hosts: List[str]
+
+
+class AdminAIProviderConfig(BaseModel):
+    api_key: Optional[str] = None
+    enabled: bool = True
+    model_id: Optional[str] = None
+    thinking_mode: bool = False
+
+
+class AdminAIProvidersRequest(BaseModel):
+    providers: Dict[str, AdminAIProviderConfig] = {}
+
+
+class AdminAIProvidersResponse(BaseModel):
+    providers: Dict[str, AdminAIProviderConfig]
+
+
+class AdminAIProviderTestRequest(BaseModel):
+    provider: str = "gemini"
+    model_id: Optional[str] = None
+
+
+class AdminAIProviderTestResponse(BaseModel):
+    success: bool
+    message: str
 
 
 def _public_user(user: dict) -> UserOut:
@@ -182,3 +218,159 @@ async def admin_delete_user(uid: str, admin_uid: str = Depends(require_admin)):
 
     await auth_service.delete_user(uid)
     return None
+
+
+@router.get("/admin/settings/trusted-hosts", response_model=TrustedHostsResponse)
+async def admin_get_trusted_hosts(_admin_uid: str = Depends(require_admin)):
+    """Return the current trusted-hosts whitelist (admin only)."""
+    return TrustedHostsResponse(hosts=trusted_hosts.get_allowed_hosts())
+
+
+@router.put("/admin/settings/trusted-hosts", response_model=TrustedHostsResponse)
+async def admin_update_trusted_hosts(
+    body: TrustedHostsRequest,
+    _admin_uid: str = Depends(require_admin),
+):
+    """Replace the trusted-hosts whitelist. Persists to Postgres and applies immediately.
+
+    Hosts are stored hostname-only (port stripped) and lower-cased; use "*" to
+    allow any Host header (disables the check — useful for roaming laptops).
+    """
+    try:
+        hosts = trusted_hosts.normalize(body.hosts)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    try:
+        await app_settings_service.set_trusted_hosts(hosts)
+    except Exception as e:
+        logger.error("Failed to persist trusted hosts: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to persist trusted hosts",
+        )
+
+    trusted_hosts.set_allowed_hosts(hosts)
+    logger.info("Trusted hosts updated: %s", ", ".join(hosts) if hosts else "(empty)")
+    return TrustedHostsResponse(hosts=trusted_hosts.get_allowed_hosts())
+
+
+def _mask_api_key(key: str) -> Optional[str]:
+    if not key:
+        return None
+    return "********" + key[-4:] if len(key) > 4 else "********"
+
+
+def _providers_response(config: dict) -> Dict[str, AdminAIProviderConfig]:
+    """Mask keys and ensure every implemented provider is represented."""
+    providers: Dict[str, AdminAIProviderConfig] = {}
+    for provider in admin_keys_service.ALL_PROVIDERS:
+        cfg = config.get(provider) or {}
+        providers[provider] = AdminAIProviderConfig(
+            api_key=_mask_api_key(cfg.get("api_key", "")) if cfg.get("api_key") else None,
+            enabled=cfg.get("enabled", True),
+            model_id=cfg.get("model_id") or admin_keys_service.default_model_for(provider),
+            thinking_mode=bool(cfg.get("thinking_mode", False)),
+        )
+    return providers
+
+
+@router.get("/admin/settings/ai-providers", response_model=AdminAIProvidersResponse)
+async def admin_get_ai_providers(_admin_uid: str = Depends(require_admin)):
+    """Return admin-managed shared AI provider keys, masked (admin only).
+
+    These are the fallback keys used by users who don't configure their own.
+    No key is returned in plaintext.
+    """
+    config = await admin_keys_service.get_admin_provider_config()
+    return AdminAIProvidersResponse(providers=_providers_response(config))
+
+
+@router.put("/admin/settings/ai-providers", response_model=AdminAIProvidersResponse)
+async def admin_update_ai_providers(
+    body: AdminAIProvidersRequest,
+    _admin_uid: str = Depends(require_admin),
+):
+    """Replace admin-managed shared AI provider keys (admin only).
+
+    Rules per provider: a masked key (\"********…\") or omitted key keeps the
+    existing value; an empty string clears it; otherwise the key is stored
+    (encrypted). `enabled`, `model_id` and `thinking_mode` are saved as-is.
+    Changes apply to all subsequent extractions immediately.
+
+    Users who have their own key are unaffected — the admin key is only a
+    fallback so users without credentials can still scan.
+    """
+    current = await admin_keys_service.get_admin_provider_config()
+
+    for provider, item in body.providers.items():
+        existing = current.get(provider, {
+            "api_key": "",
+            "enabled": True,
+            "model_id": admin_keys_service.default_model_for(provider),
+            "thinking_mode": False,
+        })
+        new_key = item.api_key
+        if new_key is None or new_key.startswith("********"):
+            api_key = existing.get("api_key", "")
+        else:
+            api_key = new_key
+        current[provider] = {
+            "api_key": api_key,
+            "enabled": item.enabled,
+            "model_id": item.model_id or admin_keys_service.default_model_for(provider),
+            "thinking_mode": item.thinking_mode,
+        }
+
+    await admin_keys_service.set_admin_provider_config(current)
+    saved = await admin_keys_service.get_admin_provider_config()
+    logger.info("Admin AI provider keys updated: %s", ", ".join(sorted(body.providers)))
+    return AdminAIProvidersResponse(providers=_providers_response(saved))
+
+
+@router.post("/admin/settings/ai-providers/test", response_model=AdminAIProviderTestResponse)
+async def admin_test_ai_provider(
+    body: AdminAIProviderTestRequest,
+    _admin_uid: str = Depends(require_admin),
+):
+    """Test the saved admin key for a provider (admin only).
+
+    Resolves the raw stored key (masked values in the request are resolved
+    against the stored key) and makes a single minimal call. The failure is
+    also persisted to that admin's scan errors for later review.
+    """
+    from app.services.gemini import test_api_key
+
+    if body.provider not in admin_keys_service.ALL_PROVIDERS:
+        raise HTTPException(status_code=400, detail=f"Unsupported provider: {body.provider}")
+
+    config = await admin_keys_service.get_admin_provider_config()
+    cfg = config.get(body.provider) or {}
+    api_key = cfg.get("api_key") or ""
+    if not api_key:
+        raise HTTPException(status_code=400, detail=f"No admin key saved for provider '{body.provider}'")
+
+    model_id = body.model_id or cfg.get("model_id") or admin_keys_service.default_model_for(body.provider)
+    success, error_detail = await test_api_key(api_key, model_id, body.provider)
+
+    if success:
+        return AdminAIProviderTestResponse(success=True, message="API Key is valid!")
+    try:
+        from app.services.scan_error_service import log_error
+        from app.services.error_codes import ErrorCode, classify_exception
+
+        code = ErrorCode.UNKNOWN
+        if error_detail:
+            scan_error = classify_exception(Exception(error_detail))
+            code = scan_error.code
+        await log_error(
+            _admin_uid,
+            kind="system",
+            code=code,
+            message=error_detail or "API key validation failed",
+            title=f"Admin API key test failed ({body.provider})",
+            data={"provider": body.provider, "model_id": model_id},
+        )
+    except Exception:
+        logger.exception("Failed to persist admin API key test failure")
+    return AdminAIProviderTestResponse(success=False, message=error_detail or "API Key is invalid")

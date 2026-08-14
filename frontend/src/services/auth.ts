@@ -144,3 +144,79 @@ export async function adminDeleteUser(uid: string): Promise<void> {
     throw new Error(json.detail || 'Failed to delete user');
   }
 }
+
+// ── Admin: trusted hosts (dynamic Host-header whitelist) ───────────────────
+
+export async function adminGetTrustedHosts(): Promise<string[]> {
+  const resp = await fetch(`${API_BASE_URL}/auth/admin/settings/trusted-hosts`, {
+    headers: { Authorization: getAuthHeader() },
+  });
+  const json = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(json.detail || 'Failed to load trusted hosts');
+  return json.hosts || [];
+}
+
+export async function adminSetTrustedHosts(hosts: string[]): Promise<string[]> {
+  const resp = await fetch(`${API_BASE_URL}/auth/admin/settings/trusted-hosts`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: getAuthHeader(),
+    },
+    body: JSON.stringify({ hosts }),
+  });
+  const json = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(json.detail || 'Failed to save trusted hosts');
+  return json.hosts || [];
+}
+
+// ── Admin: shared AI provider keys (fallback for users without their own) ───
+
+export interface AdminAIProvider {
+  api_key?: string | null;
+  enabled: boolean;
+  model_id?: string | null;
+  thinking_mode?: boolean;
+}
+
+export async function adminGetAIProviders(): Promise<Record<string, AdminAIProvider>> {
+  const resp = await fetch(`${API_BASE_URL}/auth/admin/settings/ai-providers`, {
+    headers: { Authorization: getAuthHeader() },
+  });
+  const json = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(json.detail || 'Failed to load AI provider keys');
+  return json.providers || {};
+}
+
+export async function adminSetAIProviders(
+  providers: Record<string, AdminAIProvider>
+): Promise<Record<string, AdminAIProvider>> {
+  const resp = await fetch(`${API_BASE_URL}/auth/admin/settings/ai-providers`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: getAuthHeader(),
+    },
+    body: JSON.stringify({ providers }),
+  });
+  const json = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(json.detail || 'Failed to save AI provider keys');
+  return json.providers || {};
+}
+
+export async function adminTestAIProvider(
+  provider: string,
+  modelId: string
+): Promise<{ success: boolean; message: string }> {
+  const resp = await fetch(`${API_BASE_URL}/auth/admin/settings/ai-providers/test`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: getAuthHeader(),
+    },
+    body: JSON.stringify({ provider, model_id: modelId }),
+  });
+  const json = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(json.detail || 'Failed to test provider');
+  return json;
+}

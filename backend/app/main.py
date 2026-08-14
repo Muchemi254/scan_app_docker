@@ -17,7 +17,6 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from app.core.config import settings
@@ -63,6 +62,21 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to initialize PostgreSQL pool: {e}")
         raise
+
+    # Load admin-managed trusted hosts (persisted) into the request middleware
+    try:
+        from app.core import trusted_hosts
+        await trusted_hosts.load_trusted_hosts()
+    except Exception as e:
+        logger.warning(f"Failed to seed trusted hosts: {e}")
+
+    # Adopt GEMINI_API_KEY as the admin Gemini key on first start (if set).
+    # Afterwards admin keys are managed via the admin UI — no implicit fallbacks.
+    try:
+        from app.services import admin_keys_service
+        await admin_keys_service.seed_from_env()
+    except Exception as e:
+        logger.warning(f"Failed to seed admin AI keys: {e}")
 
     # Initialize authentication
     try:
@@ -137,11 +151,15 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Trusted Host - Security
-    app.add_middleware(
-        TrustedHostMiddleware,
-        allowed_hosts=settings.ALLOWED_HOSTS,
-    )
+    # Trusted Host - Security (admin-managed, persisted — no hardcoded IPs)
+    @app.middleware("http")
+    async def trusted_host_check(request, call_next):
+        from app.core import trusted_hosts
+        host = request.headers.get("host", "")
+        hostname = host.split(":")[0].lower() if host else ""
+        if hostname and not trusted_hosts.allows(hostname):
+            return JSONResponse(status_code=400, content={"detail": "Invalid host header"})
+        return await call_next(request)
 
     # Security headers
     @app.middleware("http")

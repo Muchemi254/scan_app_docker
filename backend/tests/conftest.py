@@ -31,7 +31,7 @@ os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ["SECRET_KEY"] = "pytest-secret-key-not-for-production-0123456789"
 os.environ["ADMIN_EMAIL"] = "admin@pytest.local"
 os.environ["ADMIN_PASSWORD"] = "admin-password-123!"
-os.environ.setdefault("GEMINI_API_KEY", "pytest-dummy-api-key")
+os.environ["GEMINI_API_KEY"] = "pytest-dummy-api-key"
 os.environ.setdefault("USE_POSTGRES", "true")
 os.environ.setdefault("AUTH_MODE", "local")
 os.environ.setdefault("IMAGE_STORAGE_DIR", "/tmp/scanapp_pytest_images")
@@ -49,6 +49,7 @@ _TRUNCATE_TABLES = (
     "audit_logs",
     "line_items",
     "user_ai_settings",
+    "app_settings",
 )
 
 
@@ -121,10 +122,15 @@ def clean_database():
 async def client():
     """Real FastAPI app with lifespan, served through an httpx async client."""
     from app.main import app
+    from app.core import trusted_hosts
+    from app.core.config import settings
     from httpx import AsyncClient, ASGITransport
 
     async with app.router.lifespan_context(app):
+        # Reset the dynamic trusted-host registry so tests are isolated and the
+        # persisted value (truncated below) doesn't leak from a previous test.
+        trusted_hosts.reset()
+        trusted_hosts.set_allowed_hosts(settings.ALLOWED_HOSTS)
         transport = ASGITransport(app=app)
-        # Host must be in settings.ALLOWED_HOSTS (TrustedHostMiddleware).
         async with AsyncClient(transport=transport, base_url="http://localhost") as c:
             yield c

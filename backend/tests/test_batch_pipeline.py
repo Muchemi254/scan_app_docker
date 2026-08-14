@@ -84,6 +84,8 @@ async def test_batch_engine_persists_and_dedups(client, monkeypatch):
         assert len(saved) == 3
         assert all(data is not None for _, data in saved)
         assert all(r["batchTitle"] == "Offline pipeline batch" for r in receipts)
+        assert all(data["status"] == "needs_review" for _, data in saved), \
+            "every AI-extracted receipt must be flagged for review, even with all fields present"
 
         # ── Run 2: same distinct images again → dedup links, no copies ──
         entries = _write_batch_dir(3)

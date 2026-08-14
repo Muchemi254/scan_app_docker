@@ -196,6 +196,4 @@ def has_missing_fields(data: dict) -> bool:
     for item in items:
         if not item.get("name") or not item.get("quantity"):
             return True
-        if not item.get("isZeroRated") and not item.get("tax"):
-            return True
     return False

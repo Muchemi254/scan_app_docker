@@ -35,7 +35,7 @@ class Settings(BaseSettings):
         "http://localhost:5173",
         "http://localhost:80",
     ]
-    ALLOWED_HOSTS: list[str] = ["localhost", "127.0.0.1", "backend", "100.80.223.105", "192.168.0.103"]
+    ALLOWED_HOSTS: list[str] = ["*"]
 
     # Firebase Settings
     # Path to Firebase service account JSON file
@@ -68,7 +68,9 @@ class Settings(BaseSettings):
     BACKUP_STORAGE_DIR: str = os.getenv("BACKUP_STORAGE_DIR", "/app/backups")
 
     # Gemini API
-    GEMINI_API_KEY: str
+    # Optional now — used only to seed the admin-managed Gemini key on first
+    # start. Keys are otherwise provisioned via the admin UI (ai-providers).
+    GEMINI_API_KEY: Optional[str] = None
 
     # Security
     SECRET_KEY: str = "change-me-in-production"

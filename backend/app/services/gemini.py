@@ -55,6 +55,7 @@ async def call_openai_compatible_api(
     thinking_mode: bool = False,
     provider_label: str = "provider",
     extra_body_override: Optional[dict] = None,
+    max_tokens: Optional[int] = None,
 ):
     """Generic chat-completions call shared by OpenAI-compatible providers.
 
@@ -79,6 +80,8 @@ async def call_openai_compatible_api(
         else:
             extra_params["extra_body"] = {"thinking": {"type": "enabled"}}
             extra_params["reasoning_effort"] = "high"
+    if max_tokens:
+        extra_params["max_tokens"] = max_tokens
 
     try:
         response = await client.chat.completions.create(
@@ -110,19 +113,21 @@ async def call_openai_compatible_api(
         logger.error(f"Unexpected {provider_label} API error: {str(e)}")
         raise
 
-async def call_deepseek_api(api_key: str, model_id: str, prompt: str, content: Any = None, thinking_mode: bool = False):
+async def call_deepseek_api(api_key: str, model_id: str, prompt: str, content: Any = None, thinking_mode: bool = False, max_tokens: Optional[int] = None):
     return await call_openai_compatible_api(
         api_key, "https://api.deepseek.com", model_id,
         prompt, content, thinking_mode=thinking_mode, provider_label="DeepSeek",
+        max_tokens=max_tokens,
     )
 
-async def call_openrouter_api(api_key: str, model_id: str, prompt: str, content: Any = None, thinking_mode: bool = False):
+async def call_openrouter_api(api_key: str, model_id: str, prompt: str, content: Any = None, thinking_mode: bool = False, max_tokens: Optional[int] = None):
     return await call_openai_compatible_api(
         api_key, OPENROUTER_BASE_URL, model_id,
         prompt, content, thinking_mode=thinking_mode, provider_label="OpenRouter",
+        max_tokens=max_tokens,
     )
 
-async def call_qwen_api(api_key: str, model_id: str, prompt: str, content: Any = None, thinking_mode: bool = False):
+async def call_qwen_api(api_key: str, model_id: str, prompt: str, content: Any = None, thinking_mode: bool = False, max_tokens: Optional[int] = None):
     """Alibaba Qwen (DashScope) OpenAI-compatible chat call.
 
     DashScope hybrid-thinking models (qwen3-vl-flash, qwen3-vl-plus,
@@ -138,6 +143,7 @@ async def call_qwen_api(api_key: str, model_id: str, prompt: str, content: Any =
         prompt, content, thinking_mode=thinking_mode,
         provider_label="Alibaba Qwen",
         extra_body_override=extra_body,
+        max_tokens=max_tokens,
     )
 
 def sanitize_numeric(value: Any) -> str:
@@ -146,6 +152,33 @@ def sanitize_numeric(value: Any) -> str:
     # Remove everything except digits and dot
     sanitized = "".join(c for c in str(value) if c.isdigit() or c == '.')
     return sanitized if sanitized and sanitized != '.' else "0"
+
+
+def _parse_extracted_items(raw_items) -> list:
+    """Build the sanitized item list an AI response.
+
+    Deliberately does NOT carry over per-item tax or discount: AI-invented
+    tax/discount amounts distort line totals (qty * (price + tax) * (1 -
+    discount/100)) relative to the VAT-inclusive printed total and force the
+    user to clear them item by item. Items keep only name, quantity, price,
+    and isZeroRated; tax is captured at the receipt level only.
+    """
+    items = []
+    for item in (raw_items or []):
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "N/A").strip() or "N/A"
+        try:
+            quantity = float(item.get("quantity", 1))
+        except (TypeError, ValueError):
+            quantity = 1
+        items.append({
+            "name": name,
+            "quantity": quantity,
+            "price": sanitize_numeric(item.get("price")),
+            "isZeroRated": bool(item.get("isZeroRated", False)),
+        })
+    return items
 
 from app.schemas.receipt import ReceiptCreate, ReceiptItem, ReceiptStatus
 from app.services.data_adapter import DataService
@@ -200,31 +233,67 @@ async def _gemini_generate_content(
 
 async def get_gemini_config(user_id: Optional[str]) -> Tuple[str, str, str]:
     """
-    Get configured API key, model ID, and provider for a user.
+    Resolve the active (api_key, model_id, provider) for an extraction.
+
+    Resolution is explicit — there is NO implicit fallback to a default
+    provider/key, because that silently bills a shared account:
+
+      1. the user's own key for their active provider (if configured)
+      2. the admin-provided shared key for that provider (if enabled)
+      3. raises ValueError with a clear, user-actionable message
+
+    Admin keys are managed in the admin UI (admin/settings/ai-providers).
     """
-    # Defaults
-    api_key = settings.GEMINI_API_KEY
-    model_id = "gemini-3.1-flash-lite-preview"
+
+    def _is_valid_model(provider: str, model_id: str) -> bool:
+        from app.services.model_registry import MODELS
+
+        return any(m["id"] == model_id for m in MODELS.get(provider, []))
+
+    from app.services import admin_keys_service
+
     provider = "gemini"
-    
+    user_api_key: Optional[str] = None
+    ai_settings = None
+
     if user_id:
         try:
             ai_settings = await DataService.get_user_settings(user_id, "ai_config")
-            if ai_settings:
-                # IMPORTANT: use the provider currently active in user settings
-                configs = ai_settings.get("configs", {})
-                provider = ai_settings.get("provider", "gemini")
-                
-                if provider in configs and configs[provider].get("api_key"):
-                    api_key = decrypt_api_key(configs[provider]["api_key"])
-                
-                # Check for model ID override if it exists
-                if ai_settings.get("model_id"):
-                    model_id = ai_settings.get("model_id")
-                    
         except Exception as e:
-            logger.error(f"Failed to load user AI settings, using defaults: {e}")
-            
+            logger.error(f"Failed to load user AI settings: {e}")
+
+    if ai_settings:
+        provider = ai_settings.get("provider", "gemini")
+        configs = ai_settings.get("configs", {}) or {}
+        provider_cfg = configs.get(provider, {}) if isinstance(configs, dict) else {}
+        raw_key = provider_cfg.get("api_key")
+        if raw_key:
+            user_api_key = decrypt_api_key(raw_key)
+
+    # Default model must be derived from the *active* provider, not the gemini
+    # default — a deepseek user must never silently run a gemini model id.
+    model_id = admin_keys_service.default_model_for(provider)
+    if ai_settings:
+        # Only honor the user's model when it actually belongs to the active
+        # provider — legacy/stale defaults (e.g. "gemini-3-flash-preview" for a
+        # deepseek user) must never leak across providers.
+        user_model = ai_settings.get("model_id")
+        if user_model and _is_valid_model(provider, user_model):
+            model_id = user_model
+
+    api_key = user_api_key
+    admin = await admin_keys_service.get_provider_override(provider)
+    if not api_key and admin and admin.get("enabled") and admin.get("api_key"):
+        api_key = admin["api_key"]
+        if model_id == admin_keys_service.default_model_for(provider):
+            model_id = admin.get("model_id") or admin_keys_service.default_model_for(provider)
+
+    if not api_key:
+        raise ValueError(
+            f"No API key configured for provider '{provider}'. "
+            "Add your own key in Settings, or ask your administrator to enable a shared key."
+        )
+
     return api_key, model_id, provider
 
 def get_model(api_key: str, model_id: str):
@@ -299,6 +368,9 @@ INSTRUCTIONS:
 - cuInvoice: The KRA-issued control unit number, often a long numeric
   string (e.g. '004084202207080184'), labeled 'CU Invoice', 'CU No',
   'Control Unit', or similar. This is NOT the supplier's own invoice number.
+- Items: include ONLY the item name, quantity, unit price, and isZeroRated.
+  Do NOT extract per-item tax amounts or discount percentages — leave them
+  out entirely. Tax is captured at the receipt level (taxAmount) only.
 
 {response_schema}
 """
@@ -315,28 +387,31 @@ _SINGLE_RESPONSE_SCHEMA = """Return ONLY a JSON object matching this structure:
   "buyerKraPin": "buyer KRA PIN or N/A",
   "cuInvoice": "KRA CU invoice number or N/A",
   "items": [
-    {{"name": "string", "quantity": number, "price": "string", "tax": "string", "isZeroRated": boolean}}
+    {{"name": "string", "quantity": number, "price": "string", "isZeroRated": boolean}}
   ]
 }}"""
 
-_BATCH_RESPONSE_SCHEMA = """Return ONLY a JSON array matching this structure:
-[
-  {{
-    "supplier": "string",
-    "totalAmount": "string",
-    "taxAmount": "string or N/A",
-    "receiptDate": "MM/DD/YYYY",
-    "category": "category name",
-    "invoiceNumber": "string or N/A",
-    "kraPin": "seller KRA PIN or N/A",
-    "buyerKraPin": "buyer KRA PIN or N/A",
-    "cuInvoice": "KRA CU invoice number or N/A",
-    "items": [
-      {{"name": "string", "quantity": number, "price": "string", "tax": "string", "isZeroRated": boolean}}
-    ]
-  }},
-  ...
-]"""
+_BATCH_RESPONSE_SCHEMA = """Return ONLY ONE JSON object matching this structure:
+{{
+  "receipts": [
+    {{
+      "imageIndex": 0,
+      "supplier": "string",
+      "totalAmount": "string",
+      "taxAmount": "string or N/A",
+      "receiptDate": "MM/DD/YYYY",
+      "category": "category name",
+      "invoiceNumber": "string or N/A",
+      "kraPin": "seller KRA PIN or N/A",
+      "buyerKraPin": "buyer KRA PIN or N/A",
+      "cuInvoice": "KRA CU invoice number or N/A",
+      "items": [
+        {{"name": "string", "quantity": number, "price": "string", "isZeroRated": boolean}}
+      ]
+    }},
+    ...
+  ]
+}}"""
 
 
 def _clean_json_response(text: str) -> str:
@@ -351,6 +426,35 @@ def _clean_json_response(text: str) -> str:
             if text.lower().startswith("json"):
                 text = text[4:]
     return text.strip()
+
+
+async def resolve_thinking_mode(user_id: Optional[str], provider: str) -> bool:
+    """
+    Resolve thinking mode for a provider.
+
+    Precedence (mirrors key resolution — user settings win, admin is the
+    fallback):
+      1. the user's explicit thinking_mode for this provider
+      2. the admin's shared thinking_mode (used when the admin key applies)
+      3. off
+    """
+    from app.services import admin_keys_service
+
+    if user_id:
+        try:
+            ai_settings = await DataService.get_user_settings(user_id, "ai_config")
+            if ai_settings:
+                pcfg = ai_settings.get("configs", {}) or {}
+                provider_cfg = pcfg.get(provider, {}) if isinstance(pcfg, dict) else {}
+                if "thinking_mode" in provider_cfg:
+                    return bool(provider_cfg["thinking_mode"])
+        except Exception as e:
+            logger.error(f"Failed to load user AI settings for thinking mode: {e}")
+
+    admin = await admin_keys_service.get_provider_override(provider)
+    if admin:
+        return bool(admin.get("thinking_mode", False))
+    return False
 
 
 async def extract_receipt_data(
@@ -375,14 +479,7 @@ async def extract_receipt_data(
     try:
         # Get user-specific config
         api_key, model_id, provider = await get_gemini_config(user_id)
-
-        # Get thinking mode
-        thinking_mode = False
-        if user_id:
-             ai_settings = await DataService.get_user_settings(user_id, "ai_config")
-             if ai_settings:
-                 provider_config = ai_settings.get("configs", {}).get(provider, {})
-                 thinking_mode = provider_config.get("thinking_mode", False)
+        thinking_mode = await resolve_thinking_mode(user_id, provider)
 
         prompt = RECEIPT_EXTRACTION_PROMPT.format(
             batch_instruction="Extract receipt details from this image and return ONLY valid JSON.",
@@ -426,15 +523,7 @@ async def extract_receipt_data(
         data = json.loads(response_text)
 
         # Validate and sanitize
-        items = []
-        for item in data.get("items", []):
-            items.append({
-                "name": item.get("name", "N/A"),
-                "quantity": float(item.get("quantity", 1)),
-                "price": sanitize_numeric(item.get("price")),
-                "tax": sanitize_numeric(item.get("tax", "0")),
-                "isZeroRated": item.get("isZeroRated", False)
-            })
+        items = _parse_extracted_items(data.get("items"))
 
         # Flag all scans for review
         status = ReceiptStatus.NEEDS_REVIEW
@@ -479,42 +568,52 @@ async def extract_receipt_batch(
         return []
 
     try:
-        # Get thinking mode
-        thinking_mode = False
-        if user_id:
-             ai_settings = await DataService.get_user_settings(user_id, "ai_config")
-             if ai_settings:
-                 provider_config = ai_settings.get("configs", {}).get(provider, {})
-                 thinking_mode = provider_config.get("thinking_mode", False)
+        thinking_mode = await resolve_thinking_mode(user_id, provider)
 
+        # Why a wrapper object and not a top-level array: DashScope/OpenAI-
+        # compatible `response_format={"type": "json_object"}` constrains the
+        # output to a SINGLE JSON object. Qwen3-VL silently collapses a
+        # requested top-level array down to one element ("10 images → 1
+        # receipt"). Nesting the array inside an object is the sanctioned
+        # pattern and yields all receipts reliably.
         prompt = RECEIPT_EXTRACTION_PROMPT.format(
             batch_instruction=(
-                f"Extract receipt details from these {len(images)} images.\n"
-                "Return a JSON ARRAY of objects, one for each image in the EXACT order they were provided."
+                f"Extract receipt details from these {len(images)} images. Each image is "
+                "preceded by its index (Image index 0, Image index 1, ...).\n"
+                f"Return ONE JSON object with a \"receipts\" array containing EXACTLY {len(images)} "
+                "receipt objects, one per image.\n"
+                "CRITICAL: every receipt object MUST include \"imageIndex\" — the 0-based number "
+                "of the image it was extracted from. imageIndex values must be unique and each "
+                "must appear exactly once. You may list receipts in ANY order as long as every "
+                "imageIndex is correct."
             ),
             response_schema=_BATCH_RESPONSE_SCHEMA,
         )
+        # Headroom so a 10-image batch can't get truncated mid-array (truncation
+        # would otherwise show up as a fake short array).
+        max_tokens = min(8192, max(2048, 1024 * len(images)))
+
         if provider == "deepseek":
             content = []
             for i, (b64, mime) in enumerate(images):
                 content.append({"type": "text", "text": f"Image index {i}:"})
                 content.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
             content.append({"type": "text", "text": prompt})
-            response_text = await call_deepseek_api(api_key, model_id, prompt, content, thinking_mode=thinking_mode)
+            response_text = await call_deepseek_api(api_key, model_id, prompt, content, thinking_mode=thinking_mode, max_tokens=max_tokens)
         elif provider == "openrouter":
             content = []
             for i, (b64, mime) in enumerate(images):
                 content.append({"type": "text", "text": f"Image index {i}:"})
                 content.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
             content.append({"type": "text", "text": prompt})
-            response_text = await call_openrouter_api(api_key, model_id, prompt, content, thinking_mode=thinking_mode)
+            response_text = await call_openrouter_api(api_key, model_id, prompt, content, thinking_mode=thinking_mode, max_tokens=max_tokens)
         elif provider == "qwen":
             content = []
             for i, (b64, mime) in enumerate(images):
                 content.append({"type": "text", "text": f"Image index {i}:"})
                 content.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
             content.append({"type": "text", "text": prompt})
-            response_text = await call_qwen_api(api_key, model_id, prompt, content, thinking_mode=thinking_mode)
+            response_text = await call_qwen_api(api_key, model_id, prompt, content, thinking_mode=thinking_mode, max_tokens=max_tokens)
         else:
             # Prepare multimodal content
             content = []
@@ -537,34 +636,89 @@ async def extract_receipt_batch(
                 )
             )
             response_text = response.text
-        
+
         response_text = _clean_json_response(response_text)
-        data_list = json.loads(response_text)
-        
-        if not isinstance(data_list, list):
-            # Fallback if AI returned single object instead of array
-            data_list = [data_list]
+        try:
+            payload = json.loads(response_text)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"AI returned malformed JSON (decode failed): {str(e)}") from e
+
+        # Normalize: expect ONE object wrapping a "receipts" array. Bare arrays
+        # and bare single objects are accepted for backwards compatibility.
+        if isinstance(payload, dict) and "receipts" in payload:
+            data_list = payload["receipts"]
+        elif isinstance(payload, list):
+            data_list = payload
+        elif isinstance(payload, dict):
+            data_list = [payload]
+        else:
+            raise ValueError("AI returned malformed JSON (parse error: unexpected top-level type)")
+
+        # The whole point: a short array means the model dropped images. Treat
+        # it as malformed so the worker fans out to per-image extraction
+        # instead of silently marking N images failed.
+        if not isinstance(data_list, list) or len(data_list) != len(images):
+            received = len(data_list) if isinstance(data_list, list) else "a non-array"
+            raise ValueError(
+                f"AI returned malformed JSON (parse error: expecting {len(images)} "
+                f"receipts but received {received})"
+            )
+
+        # ── Anti-mixing: a model may return the receipts array in a DIFFERENT
+        # order than the images were presented (qwen3-vl-flash has swapped 2 of
+        # 4 entries). The worker persists result i onto image i, so a shuffled
+        # array would silently attach receipts to the wrong images. Each receipt
+        # therefore declares which image it came from via "imageIndex"; we
+        # re-sort by it so the returned list always matches image order.
+        #
+        #   - every entry has a valid, unique, in-range imageIndex → re-sort
+        #   - no entry has imageIndex → positional fallback (older providers /
+        #     gemini that ignore the field keep the old behavior)
+        #   - some but not all (or invalid / duplicate / out-of-range) → the
+        #     model's ordering cannot be trusted → malformed, worker fans out
+        #     to per-image extraction where order is guaranteed by construction
+        indexed = []
+        seen = set()
+        missing = 0
+        for i, data in enumerate(data_list):
+            if not isinstance(data, dict):
+                raise ValueError(
+                    f"AI returned malformed JSON (parse error: entry {i} is not an object)"
+                )
+            raw = data.get("imageIndex")
+            if raw is None:
+                missing += 1
+                continue
+            try:
+                idx = int(raw)
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"AI returned malformed JSON (parse error: entry {i} has a non-numeric imageIndex)"
+                )
+            if idx < 0 or idx >= len(images) or idx in seen:
+                raise ValueError(
+                    f"AI returned malformed JSON (parse error: entry {i} has an invalid or duplicate imageIndex {idx})"
+                )
+            seen.add(idx)
+            indexed.append((idx, data))
+
+        if indexed and missing:
+            raise ValueError(
+                "AI returned malformed JSON (parse error: inconsistent imageIndex — "
+                "some receipts declared an image but others did not)"
+            )
+        if indexed:
+            data_list = [data for _, data in sorted(indexed, key=lambda t: t[0])]
 
         results = []
         for i, data in enumerate(data_list):
-            if i >= len(images): break
-            
+            if not isinstance(data, dict):
+                raise ValueError(
+                    f"AI returned malformed JSON (parse error: entry {i} is not an object)"
+                )
             try:
-                if not isinstance(data, dict):
-                    logger.warning(f"Item {i} in batch is not a dict: {type(data)}")
-                    results.append(None)
-                    continue
-
-                # Sanitize items
-                items = []
-                for item in data.get("items", []):
-                    items.append({
-                        "name": item.get("name", "N/A"),
-                        "quantity": float(item.get("quantity", 1)),
-                        "price": sanitize_numeric(item.get("price")),
-                        "tax": sanitize_numeric(item.get("tax", "0")),
-                        "isZeroRated": item.get("isZeroRated", False)
-                    })
+                # Sanitize items (no per-item tax/discount — see _parse_extracted_items)
+                items = _parse_extracted_items(data.get("items"))
 
                 # Flag all scans for review
                 status = ReceiptStatus.NEEDS_REVIEW
@@ -586,10 +740,6 @@ async def extract_receipt_batch(
                 logger.error(f"Failed to parse item {i} in batch: {e}")
                 results.append(None)
 
-        # Pad with None if AI missed some images
-        while len(results) < len(images):
-            results.append(None)
-
         return results
 
     except Exception as e:
@@ -599,7 +749,14 @@ async def extract_receipt_batch(
 
 async def generate_ai_summary(receipts_data: str, api_key: Optional[str] = None) -> str:
     try:
-        key = api_key or settings.GEMINI_API_KEY
+        if not api_key:
+            from app.services import admin_keys_service
+            admin = await admin_keys_service.get_provider_override("gemini")
+            if admin and admin.get("enabled") and admin.get("api_key"):
+                api_key = admin["api_key"]
+        if not api_key:
+            return "AI summary unavailable."
+        key = api_key
         prompt = f"""You are a financial analyst. Analyze these receipt records and generate a concise spending summary.
 
 Receipt data:

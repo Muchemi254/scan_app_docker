@@ -237,13 +237,15 @@ async def _persist_one_item(
         except Exception as audit_exc:
             logger.warning("Audit log skipped for receipt %s: %s", receipt_id, audit_exc)
 
+        # Every AI-extracted receipt goes to review regardless of how complete
+        # the extraction looks — a scan with all fields filled can still be
+        # subtly wrong (misread totals, wrong supplier, swapped batch order).
         saved_data = dict(data)
-        saved_data["status"] = "needs_review" if has_missing else "processed"
+        saved_data["status"] = "needs_review"
 
         if on_item_update:
-            item_status = "done" if not has_missing else "needs_review"
-            msg = "Saved successfully" if not has_missing else "Missing fields — saved for review"
-            await on_item_update(global_idx, item_status, receipt_id, msg, "done", None, None)
+            msg = "Missing fields — saved for review" if has_missing else "Saved for review"
+            await on_item_update(global_idx, "needs_review", receipt_id, msg, "done", None, None)
         if on_item_result:
             await on_item_result(global_idx, saved_data)
 
