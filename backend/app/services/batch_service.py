@@ -1,46 +1,27 @@
 """
-Batch scanning service.
+Batch scanning service — durable Postgres-backed scan sessions.
 
-Manages batch state in Redis so that:
- - Processing runs entirely on the backend (survives frontend refresh/navigation)
- - Frontend can reconnect to an in-progress batch by batchId
- - State is visible across devices logged in as the same user
+Replaces the old Redis batch state. A scan session (and its per-image rows)
+survive indefinitely, so a user can upload + locally prep thousands of
+images, hold them in `prepared` state, then dispatch any group to AI days or
+weeks later — no re-upload, no re-optimization, and the same image can never
+be sent twice (sha256 + per-item state machine).
 
-Redis schema (key = batch:{userId}:{batchId}):
-  {
-    "batchId": str,
-    "userId": str,
-    "batchTitle": str,
-    "status": "uploading" | "processing" | "done" | "failed",
-    "createdAt": float,
-    "lastActivity": float,
-    "items": [
-      {
-        "index": int,
-        "filename": str,
-        "origFilename": str | null,
-        "status": "pending" | "optimizing" | "processing" | "done" | "needs_review" | "failed" | "duplicate",
-        "stage": "queued" | "optimizing" | "extracting" | "parsing" | "saving" | "done",
-        "chunkIndex": int | null,
-        "receiptId": str | null,
-        "message": str | null,
-        "errorCode": str | null
-      }
-    ],
-    "chunks": [
-      {
-        "index": int,
-        "itemRange": [int, int],   # inclusive-inclusive
-        "size": int,
-        "status": "pending" | "extracting" | "saving" | "done" | "failed",
-        "attempts": int,
-        "errorCode": str | null,
-        "errorMessage": str | null,
-        "startedAt": float | null,
-        "completedAt": float | null
-      }
-    ]
-  }
+Redis is no longer involved in scan state. The `get_redis`/`close_redis`
+helpers are kept ONLY for the other features that still use them
+(image cache, review-batch cache, shutdown hooks).
+
+DB schema:
+  scan_sessions (id, user_id, title, status, image_count, group_count,
+                 chunks jsonb, created_at, updated_at)
+  scan_session_items (id, session_id, item_index, orig_filename,
+                 image_filename, mime, image_sha256, group_index, chunk_index,
+                 status, stage, message, error_code, error_message, receipt_id,
+                 attempts, created_at, updated_at)
+
+Item statuses: pending | optimizing | prepared | extracting | done |
+               needs_review | failed | duplicate
+Session statuses: uploading | prepared | processing | done | failed
 """
 
 import asyncio
@@ -53,12 +34,12 @@ from typing import Dict, List, Optional, Tuple
 import redis.asyncio as aioredis
 
 from app.core.config import settings
+from app.core.database import get_pool
 
 logger = logging.getLogger(__name__)
 
-BATCH_TTL = 60 * 60 * 24  # 24 hours
 
-# ─── Redis connection ────────────────────────────────────────────────────────
+# ─── Redis connection (kept for OTHER features — not scan state) ────────────
 
 # Cache (loop, client) tuples keyed by id(loop). The loop reference is kept so
 # we can detect id() reuse — Python re-assigns object ids after GC, and Celery
@@ -95,12 +76,7 @@ async def get_redis() -> aioredis.Redis:
 
 
 async def close_redis() -> None:
-    """Close the Redis client for the current loop and remove from cache.
-
-    Narrow exception handling so future failures are visible — the previous
-    bare `except: pass` silently swallowed the cleanup failures that allowed
-    stale cache entries to survive into the next Celery task.
-    """
+    """Close the Redis client for the current loop and remove from cache."""
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
@@ -117,69 +93,124 @@ async def close_redis() -> None:
         logger.warning(f"close_redis: failed to close cleanly for loop {loop_id}: {e}")
 
 
-# ─── Batch CRUD ─────────────────────────────────────────────────────────────
+# ─── Helpers ────────────────────────────────────────────────────────────────
 
 
 def _now() -> float:
     return datetime.now(timezone.utc).timestamp()
 
 
-async def create_batch(user_id: str, batch_title: str, filenames: List[str]) -> str:
-    r = await get_redis()
-    batch_id = str(uuid.uuid4())
-    now = _now()
-    data = {
-        "batchId": batch_id,
-        "userId": user_id,
-        "batchTitle": batch_title,
-        "status": "uploading",
-        "createdAt": now,
-        "lastActivity": now,
-        "items": [
-            {
-                "index": i,
-                "filename": fn,
-                "origFilename": fn,
-                "status": "pending",
-                "stage": "queued",
-                "chunkIndex": None,
-                "receiptId": None,
-                "message": None,
-                "errorCode": None,
-            }
-            for i, fn in enumerate(filenames)
-        ],
-        "chunks": [],
+def _epoch(ts) -> float:
+    """DB timestamptz → epoch seconds (matches the old Redis float format)."""
+    if not ts:
+        return 0.0
+    if isinstance(ts, (int, float)):
+        return float(ts)
+    try:
+        return ts.timestamp()
+    except Exception:
+        return 0.0
+
+
+def _row_to_item(r) -> dict:
+    """scan_session_items row → the dict shape the API/frontend expect."""
+    return {
+        "index": r["item_index"],
+        "filename": r["image_filename"] or r["orig_filename"] or "",
+        "origFilename": r["orig_filename"],
+        "mime": r["mime"],
+        "sha256": r["image_sha256"],
+        "status": r["status"],
+        "stage": r["stage"],
+        "chunkIndex": r["chunk_index"],
+        "receiptId": r["receipt_id"],
+        "message": r["message"],
+        "errorCode": r["error_code"],
+        "groupIndex": r["group_index"],
     }
-    # Namespace batch key by user for isolation
-    await r.setex(f"batch:{user_id}:{batch_id}", BATCH_TTL, json.dumps(data))
-    await r.sadd(f"user_batches:{user_id}", batch_id)
-    return batch_id
+
+
+# ─── Batch/session CRUD ─────────────────────────────────────────────────────
+
+
+async def create_batch(user_id: str, batch_title: str, filenames: List[str]) -> str:
+    """Create a durable scan session + one item row per file.
+
+    Items start in `pending`; they become `prepared` after local optimization
+    in the upload/process endpoint. Returns the session (batch) id.
+    """
+    session_id = uuid.uuid4().hex
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                """
+                INSERT INTO scan_sessions (id, user_id, title, status, image_count, group_count, chunks)
+                VALUES ($1, $2, $3, 'uploading', 0, 0, '[]'::jsonb)
+                """,
+                session_id, user_id, batch_title,
+            )
+            for i, fn in enumerate(filenames):
+                await conn.execute(
+                    """
+                    INSERT INTO scan_session_items
+                        (id, session_id, item_index, orig_filename, image_filename, mime, group_index, status, stage)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', 'queued')
+                    """,
+                    uuid.uuid4().hex, session_id, i, fn, None, None, 0,
+                )
+    return session_id
 
 
 async def get_user_batches(user_id: str) -> List[str]:
-    """Get all batch IDs for a user."""
-    r = await get_redis()
-    return await r.smembers(f"user_batches:{user_id}")
+    """All scan session ids for a user (durable — never expires)."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id FROM scan_sessions WHERE user_id = $1 ORDER BY created_at DESC",
+            user_id,
+        )
+        return [str(r["id"]) for r in rows]
 
 
 async def get_batch(user_id: str, batch_id: str) -> Optional[dict]:
-    r = await get_redis()
-    raw = await r.get(f"batch:{user_id}:{batch_id}")
-    if not raw:
-        return None
-    return json.loads(raw)
+    """Load a scan session + items, shaped like the old Redis batch object."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM scan_sessions WHERE id = $1 AND user_id = $2",
+            batch_id, user_id,
+        )
+        if not row:
+            return None
+        items = await conn.fetch(
+            "SELECT * FROM scan_session_items WHERE session_id = $1 ORDER BY item_index",
+            batch_id,
+        )
+    chunks = row["chunks"] or []
+    if isinstance(chunks, str):
+        chunks = json.loads(chunks)
+    return {
+        "batchId": str(row["id"]),
+        "userId": str(row["user_id"]),
+        "batchTitle": row["title"],
+        "status": row["status"],
+        "imageCount": row["image_count"],
+        "groupCount": row["group_count"],
+        "createdAt": _epoch(row["created_at"]),
+        "lastActivity": _epoch(row["updated_at"]),
+        "items": [_row_to_item(r) for r in items],
+        "chunks": chunks,
+    }
 
 
 async def set_batch_status(user_id: str, batch_id: str, status: str) -> None:
-    r = await get_redis()
-    raw = await r.get(f"batch:{user_id}:{batch_id}")
-    if not raw:
-        return
-    data = json.loads(raw)
-    data["status"] = status
-    data["lastActivity"] = _now()
-    await r.setex(f"batch:{user_id}:{batch_id}", BATCH_TTL, json.dumps(data))
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE scan_sessions SET status = $1, updated_at = now() WHERE id = $2 AND user_id = $3",
+            status, batch_id, user_id,
+        )
 
 
 async def update_item(
@@ -194,36 +225,37 @@ async def update_item(
     error_code: Optional[str] = None,
     orig_filename: Optional[str] = None,
 ) -> None:
-    """Update fields on a single batch item.
-
-    `status` is required so callers always make a clear state transition;
-    everything else is optional and only overwrites when explicitly passed.
-    """
-    r = await get_redis()
-    raw = await r.get(f"batch:{user_id}:{batch_id}")
-    if not raw:
-        return
-    data = json.loads(raw)
-    if index < 0 or index >= len(data["items"]):
-        return
-    item = data["items"][index]
-    item["status"] = status
-    if receipt_id is not None:
-        item["receiptId"] = receipt_id
-    if message is not None:
-        item["message"] = message
-    if stage is not None:
-        item["stage"] = stage
-    if chunk_index is not None:
-        item["chunkIndex"] = chunk_index
-    if error_code is not None:
-        item["errorCode"] = error_code
-    if orig_filename is not None:
-        item["origFilename"] = orig_filename
+    """Update a single item's durable state."""
+    pool = await get_pool()
     if status in ("done", "needs_review", "duplicate"):
-        item["errorCode"] = None
-    data["lastActivity"] = _now()
-    await r.setex(f"batch:{user_id}:{batch_id}", BATCH_TTL, json.dumps(data))
+        error_code = None
+    error_message_final = message if status in ("failed",) else None
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                "SELECT 1 FROM scan_sessions WHERE id = $1 AND user_id = $2",
+                batch_id, user_id,
+            )
+            if not row:
+                return
+            await conn.execute(
+                """
+                UPDATE scan_session_items SET
+                    status = $3,
+                    receipt_id = COALESCE($4, receipt_id),
+                    message = COALESCE($5, message),
+                    stage = COALESCE($6, stage),
+                    chunk_index = COALESCE($7, chunk_index),
+                    error_code = $8,
+                    error_message = $9,
+                    orig_filename = COALESCE($10, orig_filename),
+                    updated_at = now()
+                WHERE session_id = $1 AND item_index = $2
+                """,
+                batch_id, index,
+                status, receipt_id, message, stage, chunk_index,
+                error_code, error_message_final, orig_filename,
+            )
 
 
 async def init_chunks(
@@ -231,13 +263,9 @@ async def init_chunks(
     batch_id: str,
     chunks: List[Dict],
 ) -> None:
-    """Set the chunks array for a batch. Each chunk dict needs index, itemRange, size."""
-    r = await get_redis()
-    raw = await r.get(f"batch:{user_id}:{batch_id}")
-    if not raw:
-        return
-    data = json.loads(raw)
-    data["chunks"] = [
+    """Set the runtime chunk list (Gemini batching) + tag items with chunk_index."""
+    pool = await get_pool()
+    chunk_meta = [
         {
             "index": c["index"],
             "itemRange": c["itemRange"],
@@ -251,16 +279,24 @@ async def init_chunks(
         }
         for c in chunks
     ]
-    data["lastActivity"] = _now()
-    await r.setex(f"batch:{user_id}:{batch_id}", BATCH_TTL, json.dumps(data))
-
-    # Tag items with their chunk index for grouping in the UI
-    for c in chunks:
-        lo, hi = c["itemRange"]
-        for i in range(lo, hi + 1):
-            if 0 <= i < len(data["items"]):
-                data["items"][i]["chunkIndex"] = c["index"]
-    await r.setex(f"batch:{user_id}:{batch_id}", BATCH_TTL, json.dumps(data))
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                """
+                UPDATE scan_sessions SET chunks = $1::jsonb, updated_at = now()
+                WHERE id = $2 AND user_id = $3
+                """,
+                json.dumps(chunk_meta), batch_id, user_id,
+            )
+            for c in chunks:
+                lo, hi = c["itemRange"]
+                await conn.execute(
+                    """
+                    UPDATE scan_session_items SET chunk_index = $1, updated_at = now()
+                    WHERE session_id = $2 AND item_index BETWEEN $3 AND $4
+                    """,
+                    c["index"], batch_id, lo, hi,
+                )
 
 
 async def update_chunk(
@@ -275,48 +311,159 @@ async def update_chunk(
     started: bool = False,
     completed: bool = False,
 ) -> None:
-    r = await get_redis()
-    raw = await r.get(f"batch:{user_id}:{batch_id}")
-    if not raw:
-        return
-    data = json.loads(raw)
-    chunks = data.get("chunks") or []
-    chunk = next((c for c in chunks if c["index"] == chunk_index), None)
-    if chunk is None:
-        return
-    if status is not None:
-        chunk["status"] = status
-    if increment_attempts:
-        chunk["attempts"] = (chunk.get("attempts") or 0) + 1
-    if error_code is not None:
-        chunk["errorCode"] = error_code
-    if error_message is not None:
-        chunk["errorMessage"] = error_message
-    if started and not chunk.get("startedAt"):
-        chunk["startedAt"] = _now()
-    if completed:
-        chunk["completedAt"] = _now()
-    if status in ("done",):
-        chunk["errorCode"] = None
-        chunk["errorMessage"] = None
-    data["lastActivity"] = _now()
-    await r.setex(f"batch:{user_id}:{batch_id}", BATCH_TTL, json.dumps(data))
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT chunks FROM scan_sessions WHERE id = $1 AND user_id = $2",
+            batch_id, user_id,
+        )
+        if not row:
+            return
+        chunks = row["chunks"] or []
+        if isinstance(chunks, str):
+            chunks = json.loads(chunks)
+        chunk = next((c for c in chunks if c["index"] == chunk_index), None)
+        if chunk is None:
+            return
+        if status is not None:
+            chunk["status"] = status
+        if increment_attempts:
+            chunk["attempts"] = (chunk.get("attempts") or 0) + 1
+        if error_code is not None:
+            chunk["errorCode"] = error_code
+        if error_message is not None:
+            chunk["errorMessage"] = error_message
+        if started and not chunk.get("startedAt"):
+            chunk["startedAt"] = _now()
+        if completed:
+            chunk["completedAt"] = _now()
+        if status in ("done",):
+            chunk["errorCode"] = None
+            chunk["errorMessage"] = None
+        await conn.execute(
+            "UPDATE scan_sessions SET chunks = $1::jsonb, updated_at = now() WHERE id = $2",
+            json.dumps(chunks), batch_id,
+        )
 
 
 async def delete_batch(user_id: str, batch_id: str) -> None:
-    r = await get_redis()
-    await r.srem(f"user_batches:{user_id}", batch_id)
-    await r.delete(f"batch:{user_id}:{batch_id}")
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM scan_sessions WHERE id = $1 AND user_id = $2",
+            batch_id, user_id,
+        )
 
 
 async def remove_batches_from_index(user_id: str, batch_ids) -> None:
-    """Prune batch ids from the user's index without touching the batch data.
+    """No-op — sessions never expire in Postgres. Kept for API compatibility."""
+    return
 
-    Used when a batch's Redis key has expired but its id lingers in the
-    user_batches set — those dangling ids would otherwise poison the list
-    endpoint.
+
+# ─── Prepping helpers (upload → prepared) ────────────────────────────────────
+
+
+async def set_prepared(
+    user_id: str,
+    batch_id: str,
+    index: int,
+    *,
+    image_filename: str,
+    mime: str,
+    sha256: str,
+    orig_filename: Optional[str],
+    group_index: int,
+) -> None:
+    """Record that a locally-processed image is ready, waiting for dispatch."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT 1 FROM scan_sessions WHERE id = $1 AND user_id = $2",
+            batch_id, user_id,
+        )
+        if not row:
+            return
+        await conn.execute(
+            """
+            UPDATE scan_session_items SET
+                status = 'prepared', stage = 'done',
+                message = 'Prepared — ready for AI',
+                image_filename = $3, mime = $4, image_sha256 = $5,
+                orig_filename = COALESCE($6, orig_filename),
+                group_index = $7,
+                error_code = NULL, error_message = NULL,
+                updated_at = now()
+            WHERE session_id = $1 AND item_index = $2
+            """,
+            batch_id, index, image_filename, mime, sha256,
+            orig_filename, group_index,
+        )
+
+
+async def finalize_prepared(
+    user_id: str, batch_id: str, prepared_count: int, group_count: int
+) -> None:
+    """Flip a session to `prepared` (holding) once local prep is done."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE scan_sessions SET status = 'prepared', image_count = $3,
+                group_count = $4, updated_at = now()
+            WHERE id = $1 AND user_id = $2
+            """,
+            batch_id, user_id, prepared_count, group_count,
+        )
+
+
+# ─── Dispatch helpers (hold → send) ─────────────────────────────────────────
+
+def _matches_filter(item: dict, groups, items_filter, all_) -> bool:
+    if all_:
+        return True
+    in_groups = groups is not None and item.get("groupIndex") in groups
+    in_items = items_filter is not None and item.get("index") in items_filter
+    return in_groups or in_items
+
+
+async def get_dispatch_items(
+    user_id: str,
+    batch_id: str,
+    *,
+    groups: Optional[List[int]] = None,
+    items: Optional[List[int]] = None,
+    all_: bool = False,
+) -> List[dict]:
+    """Return prepared items in a session matching the dispatch filter.
+
+    Only items with status='prepared' are eligible — already-sent or
+    completed images are never re-dispatched (idempotency by construction).
     """
-    if not batch_ids:
+    batch = await get_batch(user_id, batch_id)
+    if not batch:
+        return []
+    eligible = [i for i in batch["items"] if i["status"] == "prepared"]
+    if all_:
+        return eligible
+    if groups is None and items is None:
+        return []
+    return [i for i in eligible if _matches_filter(i, groups, items, False)]
+
+
+async def mark_queued(user_id: str, batch_id: str, indexes: List[int]) -> None:
+    """Flip selected prepared items back to `pending` for dispatch."""
+    if not indexes:
         return
-    r = await get_redis()
-    await r.srem(f"user_batches:{user_id}", *batch_ids)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            for idx in indexes:
+                await conn.execute(
+                    """
+                    UPDATE scan_session_items
+                    SET status = 'pending', stage = 'queued', message = 'Ready for AI',
+                        error_code = NULL, error_message = NULL, updated_at = now()
+                    WHERE session_id = $1 AND item_index = $2
+                    """,
+                    batch_id, idx,
+                )

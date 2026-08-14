@@ -233,7 +233,7 @@ def create_app() -> FastAPI:
     # Image utilities (HEIC conversion proxy, etc.)
     app.include_router(images.router)
 
-    # Batch scanning (Redis-backed, survives frontend refresh)
+    # Batch scanning (durable Postgres scan sessions; prep → hold → dispatch)
     app.include_router(
         batches.router,
         prefix=settings.API_V1_STR,

@@ -9,6 +9,7 @@ import LandingPage from './pages/LandingPage';
 
 // Lazy load pages to avoid circular dependency initialization issues
 const ScannerPage = lazy(() => import('./pages/ScannerPage'));
+const ScanQueuePage = lazy(() => import('./pages/ScanQueuePage'));
 const DashboardPage = lazy(() => import('./pages/DashboardPage'));
 const ReceiptDetailsPage = lazy(() => import('./pages/ReceiptDetailsPage'));
 const ReviewPage = lazy(() => import('./pages/ReviewPage'));
@@ -105,6 +106,16 @@ const AppContent = () => {
                   element={
                     <PrivateRoute userId={userId} authLoading={authLoading}>
                       <ScannerPage userId={userId} />
+                    </PrivateRoute>
+                  }
+                />
+
+                {/* Scans — held/prepared work + dispatch + progress */}
+                <Route
+                  path="/scans"
+                  element={
+                    <PrivateRoute userId={userId} authLoading={authLoading}>
+                      <ScanQueuePage userId={userId} />
                     </PrivateRoute>
                   }
                 />

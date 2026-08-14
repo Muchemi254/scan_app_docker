@@ -50,6 +50,7 @@ _TRUNCATE_TABLES = (
     "line_items",
     "user_ai_settings",
     "app_settings",
+    "scan_sessions",
 )
 
 

@@ -1,16 +1,19 @@
 """
 Batch scanning API.
 
+Scan sessions are durable (Postgres). Local prep ends in `prepared` holding
+state; AI is dispatched explicitly per group via the dispatch endpoint.
+
 Endpoints:
   POST   /api/v1/users/{userId}/batches                          Create batch, get batchId
-  POST   /api/v1/users/{userId}/batches/{batchId}/process        Upload files, start processing
+  POST   /api/v1/users/{userId}/batches/{batchId}/process        Upload + locally prep, then HOLD
+  POST   /api/v1/users/{userId}/batches/{batchId}/dispatch       Send a prepared group / items / all to AI
   GET    /api/v1/users/{userId}/batches/{batchId}                Poll status
   POST   /api/v1/users/{userId}/batches/{batchId}/chunks/{n}/retry  Retry a failed chunk
   DELETE /api/v1/users/{userId}/batches/{batchId}                Dismiss / cleanup
 """
 
 import hashlib
-import json
 import logging
 import os
 from datetime import datetime, timezone
@@ -30,6 +33,9 @@ from app.tasks.worker import process_batch_task, retry_chunk_task, retry_item_ta
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/users", tags=["batches"])
+
+# Images auto-grouped past this many prepared items (≤ this = one group).
+GROUP_SIZE = 50
 
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
@@ -57,25 +63,16 @@ async def _load_batch(user_id: str, batch_id: str) -> Optional[dict]:
         # Mark pending/processing items as failed
         msg = "Task timed out or was interrupted — please re-scan"
         for item in batch["items"]:
-            if item["status"] in ("pending", "processing", "optimizing"):
-                item["status"] = "failed"
-                item["message"] = msg
-                item["errorCode"] = "AI_TIMEOUT"
-                item["stage"] = "done"
-        batch["status"] = "failed"
-        batch["lastActivity"] = now_ts
+            if item["status"] in ("pending", "processing", "optimizing", "prepared"):
+                await batch_service.update_item(
+                    user_id, batch_id, item["index"], "failed",
+                    message=msg, stage="done", error_code="AI_TIMEOUT",
+                )
+        await batch_service.set_batch_status(user_id, batch_id, "failed")
 
-        # Persist the updated state to Redis
-        r = await batch_service.get_redis()
-        await r.setex(
-            f"batch:{user_id}:{batch_id}",
-            batch_service.BATCH_TTL,
-            json.dumps(batch),
-        )
-
-        # Durable notification — Redis state is ephemeral (TTL), so without
-        # this the stuck batch would vanish and the user couldn't see what
-        # happened. Best-effort.
+        # Durable notification — the session is durable, but a notification
+        # makes the stuck batch visible without opening the Scans page.
+        # Best-effort.
         try:
             from app.services.scan_error_service import log_error
             await log_error(
@@ -88,6 +85,8 @@ async def _load_batch(user_id: str, batch_id: str) -> Optional[dict]:
             )
         except Exception:
             logger.warning("Failed to log stuck-batch error", exc_info=True)
+
+        batch = await batch_service.get_batch(user_id, batch_id)
 
     return batch
 
@@ -131,11 +130,13 @@ async def start_processing(
     current_user_id: str = Depends(get_current_user_id),
 ):
     """
-    Upload images and start background processing.
+    Upload images and locally prep them into `prepared` holding state.
 
-    Computes SHA256 of each post-optimization image and short-circuits any
-    that already exist in this user's receipts (cross-batch dedup). Returns
-    immediately; client polls GET /batches/{batchId} for progress.
+    Computes SHA256 of each post-optimization image, short-circuits any that
+    already exist in this user's receipts (cross-batch dedup), stores the
+    optimized images on disk, and marks every surviving item `prepared`.
+    Nothing is sent to AI — the user decides what to dispatch (per group,
+    per item, or all) via POST .../dispatch, now or weeks later.
     """
     if userId != current_user_id:
         raise HTTPException(status_code=403, detail="Access denied")
@@ -151,7 +152,6 @@ async def start_processing(
     allowed_types = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
     batch_dir = os.path.join(settings.IMAGE_STORAGE_DIR, f"_scan_{batchId}")
     os.makedirs(batch_dir, exist_ok=True)
-    entries: List[dict] = []
 
     # Pass 1: optimize + hash every file, but defer the dedup-DB-lookup
     # until we have all hashes so we can do one query.
@@ -208,7 +208,11 @@ async def start_processing(
     hashes = [s["sha256"] for s in staged]
     existing = await DataService.find_receipts_by_image_hashes(userId, hashes)
 
-    # Pass 3: mark dupes, enqueue the rest
+    # Pass 3: mark dupes, hold the rest as `prepared`. No AI is dispatched
+    # here — the user decides what to send via POST .../dispatch (per group,
+    # per item, or all). Everything is durable, so a held session can be
+    # resumed days or weeks later without re-uploading.
+    prepared_count = 0
     for s in staged:
         if s["sha256"] in existing:
             existing_id = existing[s["sha256"]]
@@ -224,60 +228,123 @@ async def start_processing(
                 message="Already scanned — linked to existing receipt",
             )
         else:
-            await batch_service.update_item(
-                userId, batchId, s["idx"], "pending",
-                stage="queued", message="Ready for AI",
+            if prepared_count >= GROUP_SIZE:
+                group_index = prepared_count // GROUP_SIZE
+            else:
+                group_index = 0
+            await batch_service.set_prepared(
+                userId, batchId, s["idx"],
+                image_filename=s["fname"], mime=s["mime"],
+                sha256=s["sha256"], orig_filename=s["orig_filename"],
+                group_index=group_index,
             )
-            entries.append({
-                "index": s["idx"],
-                "filename": s["fname"],
-                "mime": s["mime"],
-                "sha256": s["sha256"],
-                "orig_filename": s["orig_filename"],
-            })
+            prepared_count += 1
 
-    if entries:
-        process_batch_task.delay(userId, batchId, batch_dir, entries, batch["batchTitle"])
-    else:
-        # Everything was a duplicate or failed; nothing to dispatch
-        final = "done" if not all(s["sha256"] not in existing for s in staged) else "failed"
-        await batch_service.set_batch_status(userId, batchId, final)
+    group_count = 0 if prepared_count == 0 else (
+        1 if prepared_count <= GROUP_SIZE
+        else (prepared_count + GROUP_SIZE - 1) // GROUP_SIZE
+    )
+    await batch_service.finalize_prepared(userId, batchId, prepared_count, group_count)
 
-        # Nothing was dispatched, so the worker-based failure logging never
-        # runs — persist any item that failed during upload (e.g. an
-        # IMAGE_INVALID optimization error) so it can't fail silently.
-        if final == "failed":
-            try:
-                from app.services.scan_error_service import log_error
-                fresh = await batch_service.get_batch(userId, batchId)
-                failed_items = []
-                for it in ((fresh or {}).get("items") or []):
-                    if it["status"] == "failed":
-                        failed_items.append({
-                            "index": it.get("index"),
-                            "filename": it.get("origFilename"),
-                            "code": it.get("errorCode"),
-                            "message": it.get("message"),
-                        })
-                if failed_items:
-                    await log_error(
-                        userId,
-                        kind="item",
-                        code="UNKNOWN",
-                        message=f"{len(failed_items)} file(s) failed before AI processing",
-                        title=batch["batchTitle"] or "Receipt batch",
-                        batch_id=batchId,
-                        data={"items": failed_items},
-                    )
-            except Exception as exc:
-                logger.warning("Failed to log upload-phase failures: %s", exc)
+    # Nothing was dispatched, so the worker-based failure logging never runs —
+    # persist any item that failed during upload (e.g. an IMAGE_INVALID
+    # optimization error) so it can't fail silently.
+    try:
+        fresh = await batch_service.get_batch(userId, batchId)
+        failed_items = [
+            it for it in ((fresh or {}).get("items") or []) if it["status"] == "failed"
+        ]
+        if failed_items:
+            from app.services.scan_error_service import log_error
+            await log_error(
+                userId,
+                kind="item",
+                code="UNKNOWN",
+                message=f"{len(failed_items)} file(s) failed before AI processing",
+                title=batch["batchTitle"] or "Receipt batch",
+                batch_id=batchId,
+                data={"items": failed_items},
+            )
+    except Exception as exc:
+        logger.warning("Failed to log upload-phase failures: %s", exc)
 
     return {
         "batchId": batchId,
-        "status": "processing" if entries else "done",
-        "total": len(entries),
-        "duplicates": len(staged) - len(entries),
+        "status": "prepared" if prepared_count else "done",
+        "prepared": prepared_count,
+        "groups": group_count,
+        "duplicates": len(staged) - prepared_count,
     }
+
+
+class DispatchBody(BaseModel):
+    groups: Optional[List[int]] = None
+    items: Optional[List[int]] = None
+    all: Optional[bool] = False
+
+
+@router.post("/{userId}/batches/{batchId}/dispatch")
+async def dispatch_scan(
+    userId: str,
+    batchId: str,
+    body: DispatchBody,
+    current_user_id: str = Depends(get_current_user_id),
+):
+    """
+    Send prepared images to AI — per group, per item, or all.
+
+    Only items still in `prepared` state are eligible, so the same image is
+    never sent twice. Dispatched images are read from the on-disk scratch
+    dir referenced by the durable item rows (no re-upload). Returns
+    immediately; client polls GET /batches/{batchId} for progress.
+    """
+    if userId != current_user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    batch = await batch_service.get_batch(userId, batchId)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    _require_owner(batch, userId)
+
+    if batch["status"] in ("processing", "done"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Batch is already {batch['status']} — only prepared items can be dispatched",
+        )
+
+    selected = await batch_service.get_dispatch_items(
+        userId, batchId,
+        groups=body.groups, items=body.items, all_=bool(body.all),
+    )
+    if not selected:
+        raise HTTPException(
+            status_code=409,
+            detail="No prepared items match this dispatch selection",
+        )
+
+    batch_dir = os.path.join(settings.IMAGE_STORAGE_DIR, f"_scan_{batchId}")
+    if not os.path.isdir(batch_dir):
+        raise HTTPException(
+            status_code=410,
+            detail="Prepared images are no longer on disk — please re-upload",
+        )
+
+    indexes = [i["index"] for i in selected]
+    await batch_service.mark_queued(userId, batchId, indexes)
+    await batch_service.set_batch_status(userId, batchId, "processing")
+
+    entries = [
+        {
+            "index": i["index"],
+            "filename": i["filename"],
+            "mime": i.get("mime") or "image/jpeg",
+            "sha256": i.get("sha256"),
+            "orig_filename": i.get("origFilename"),
+        }
+        for i in selected
+    ]
+    process_batch_task.delay(userId, batchId, batch_dir, entries, batch["batchTitle"])
+    return {"batchId": batchId, "dispatched": len(entries), "status": "processing"}
 
 
 @router.get("/{userId}/batches")
@@ -286,11 +353,11 @@ async def list_active_batches(
     current_user_id: str = Depends(get_current_user_id),
 ):
     """
-    List all active batches for a user.
-    Allows other devices to 'discover' in-progress batches.
+    List all scan sessions for a user (prepared, processing, done, failed).
 
-    Stale ids whose Redis key has expired (24h TTL) are skipped and pruned
-    from the user's index so they can't break the whole list.
+    Sessions are durable in Postgres — a held `prepared` session from weeks
+    ago still appears here, ready to be dispatched. Allows other devices to
+    'discover' the same sessions.
     """
     if userId != current_user_id:
         raise HTTPException(status_code=403, detail="Access denied")
@@ -302,11 +369,6 @@ async def list_active_batches(
         batch = await _load_batch(userId, bid)
         if batch:
             batches.append(batch)
-
-    # Drop ids whose batch data has expired from the index
-    missing = batch_ids - {b["batchId"] for b in batches}
-    if missing:
-        await batch_service.remove_batches_from_index(userId, missing)
 
     # Sort by createdAt descending
     batches.sort(key=lambda x: x.get("createdAt", 0), reverse=True)

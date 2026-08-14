@@ -429,6 +429,15 @@ export const batchApi = {
   async retryItem(batchId: string, itemIndex: number): Promise<any> {
     return apiRequest('POST', `/batches/${batchId}/items/${itemIndex}/retry`);
   },
+
+  /** Send prepared (held) images to AI — per group, per item, or all.
+   *  Only still-prepared items are sent; the same image is never sent twice. */
+  async dispatch(
+    batchId: string,
+    opts: { groups?: number[]; items?: number[]; all?: boolean } = {}
+  ): Promise<{ batchId: string; dispatched: number; status: string }> {
+    return apiRequest('POST', `/batches/${batchId}/dispatch`, opts);
+  },
 };
 
 // ============================================================================

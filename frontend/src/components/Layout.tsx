@@ -121,6 +121,11 @@ const Layout = () => {
                   <Camera className="h-4 w-4" /><span>Scanner</span>
                 </Link>
 
+                <Link to="/scans"
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors ${isExact('/scans') ? 'bg-blue-100 text-blue-700 font-medium' : 'text-gray-600 hover:bg-gray-100'}`}>
+                  <ListChecks className="h-4 w-4" /><span>Scans</span>
+                </Link>
+
                 {/* Receipts Dropdown */}
                 <div ref={receiptsRef} className="relative">
                   <button onClick={() => setReceiptsOpen(!receiptsOpen)}
@@ -211,6 +216,10 @@ const Layout = () => {
             <Link to="/scanner" onClick={() => setMobileMenuOpen(false)}
               className={`flex items-center gap-3 px-4 py-2.5 rounded-lg ${isExact('/scanner') ? 'bg-blue-100 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-100'}`}>
               <Camera className="h-5 w-5" /><span>Scanner</span>
+            </Link>
+            <Link to="/scans" onClick={() => setMobileMenuOpen(false)}
+              className={`flex items-center gap-3 px-4 py-2.5 rounded-lg ${isExact('/scans') ? 'bg-blue-100 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-100'}`}>
+              <ListChecks className="h-5 w-5" /><span>Scans</span>
             </Link>
             <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-4 pt-2">Receipts</div>
             {receiptsItems.map(item => {
