@@ -44,7 +44,7 @@ All endpoints except `/health` require `Authorization: Bearer <token>`. Backend 
 - **Routes → Services → External APIs** pattern (no direct DB/external calls from routes)
 - **Vision extraction is Gemini-only** — DeepSeek's chat API is text-only, cannot process images. The `extract_receipt_data` and `extract_receipt_batch` functions in `backend/app/services/gemini.py` always require Gemini.
 - **Local auth is server-only** — `app/services/auth_service.py` (bcrypt + HS256 JWTs) + `app/api/auth.py` (`/api/v1/auth/login`, `/auth/me`, admin `/auth/admin/users`). Offline auth; AI providers still need internet.
-- **Batch state lives in Redis** (TTL-bound, lost on restart → batches auto-fail)
+- **Scan session state lives in Postgres** — durable `scan_sessions`/`scan_session_items` (prep → hold → manual dispatch). Redis is only the Celery broker + small caches.
 - **Celery worker** for async batch extraction (`tasks.worker`)
 - **vite.config.ts** proxies `/api` → `localhost:5000` for local dev (Docker uses Nginx instead)
 
@@ -87,7 +87,7 @@ Manual testing via Swagger UI (`/docs`) and curl. Frontend testing via browser D
 
 - `npm run build` is the typecheck command (runs `tsc && vite build`)
 - Backend tests are pytest (in-container), not jest — see Testing above
-- Redis data is ephemeral (TTL set in `batch_service.py`) — server restart kills in-progress batches
+- Scan sessions are durable in Postgres — a `prepared` session survives restarts and is dispatched manually; Redis is only the Celery broker and non-scan caches (ephemeral)
 - Frontend `VITE_*` vars are build-time only; changing `.env` requires rebuild
 - HEIC images are converted server-side by `pillow-heif` in `image_service.py`
 - Single `/extract` is synchronous; `/batch-extract` is async via Celery + task polling
