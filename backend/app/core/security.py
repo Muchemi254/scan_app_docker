@@ -11,20 +11,38 @@ Handles:
 import logging
 from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-import firebase_admin
-from firebase_admin import auth as firebase_auth
 from typing import Optional
+
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 security = HTTPBearer()
 
 
-async def verify_firebase_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
-    """
-    Verify Firebase ID token and return user ID.
-    """
-    token = credentials.credentials
+async def _verify_local_token(token: str) -> str:
+    """Verify a locally-signed JWT (AUTH_MODE=local). No network involved."""
+    from app.services.auth_service import decode_access_token, get_user_by_uid
+    try:
+        uid = decode_access_token(token)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(e),
+        )
+    # Revocation: a deleted user's token must stop working immediately.
+    user = await get_user_by_uid(uid)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User no longer exists",
+        )
+    return uid
+
+
+def _verify_firebase_token(token: str) -> str:
+    """Verify a Firebase ID token (AUTH_MODE=firebase). Requires internet."""
+    from firebase_admin import auth as firebase_auth
 
     try:
         decoded_token = firebase_auth.verify_id_token(token)
@@ -53,6 +71,20 @@ async def verify_firebase_token(credentials: HTTPAuthorizationCredentials = Depe
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Authentication failed: {str(e)}",
         )
+
+
+async def verify_firebase_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
+    """
+    Verify the bearer token and return the user ID.
+
+    In AUTH_MODE=local this decodes a locally-signed JWT (offline).
+    In AUTH_MODE=firebase this verifies a Firebase ID token.
+    """
+    token = credentials.credentials
+
+    if settings.AUTH_MODE == "local":
+        return await _verify_local_token(token)
+    return _verify_firebase_token(token)
 
 
 async def get_current_user_id(user_id: str = Depends(verify_firebase_token)) -> str:

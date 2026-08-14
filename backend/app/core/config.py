@@ -75,6 +75,15 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
+    # Auth mode: "local" (Postgres users + local JWT, fully offline) or
+    # "firebase" (Firebase Auth ID tokens, requires internet).
+    AUTH_MODE: str = os.getenv("AUTH_MODE", "local")
+    # Local JWT lifetime
+    JWT_EXPIRE_DAYS: int = 30
+    # Bootstrap admin (local mode only) — created on first startup.
+    ADMIN_EMAIL: Optional[str] = os.getenv("ADMIN_EMAIL")
+    ADMIN_PASSWORD: Optional[str] = os.getenv("ADMIN_PASSWORD")
+
     # Upload limits
     MAX_UPLOAD_SIZE: int = 10 * 1024 * 1024  # 10 MB per file
 

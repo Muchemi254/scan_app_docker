@@ -68,6 +68,12 @@ services:
       # Firebase Configuration - Uses service account JSON file mounted at /app/firebaseservice.json
       FIREBASE_CREDENTIALS_PATH: /app/firebaseservice.json
 
+      # Local auth (offline) — no Firebase required. AUTH_MODE=firebase keeps the old path.
+      AUTH_MODE: local
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@local}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin12345}
+      JWT_EXPIRE_DAYS: 30
+
       # Gemini API
       GEMINI_API_KEY: ${GEMINI_API_KEY}
 
@@ -162,13 +168,6 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        VITE_FIREBASE_API_KEY: ${VITE_FIREBASE_API_KEY}
-        VITE_FIREBASE_AUTH_DOMAIN: ${VITE_FIREBASE_AUTH_DOMAIN}
-        VITE_FIREBASE_PROJECT_ID: ${VITE_FIREBASE_PROJECT_ID}
-        VITE_FIREBASE_STORAGE_BUCKET: ${VITE_FIREBASE_STORAGE_BUCKET}
-        VITE_FIREBASE_MESSAGING_SENDER_ID: ${VITE_FIREBASE_MESSAGING_SENDER_ID}
-        VITE_FIREBASE_APP_ID: ${VITE_FIREBASE_APP_ID}
-        VITE_FIREBASE_MEASUREMENT_ID: ${VITE_FIREBASE_MEASUREMENT_ID}
         VITE_API_URL: ${VITE_API_URL}
     container_name: scan-app-frontend
     network_mode: host

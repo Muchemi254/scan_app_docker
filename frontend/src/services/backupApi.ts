@@ -1,4 +1,3 @@
-import { auth } from './firebase';
 import { getAuthHeader, getUserId } from './authUtils';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api/v1';

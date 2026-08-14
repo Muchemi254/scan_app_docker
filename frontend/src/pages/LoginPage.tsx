@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Eye, EyeOff } from 'lucide-react';
-import { loginWithEmail } from '../services/firebase';
+import { useAuthStore } from '../stores/authStore';
 
 const LoginPage = () => {
   const [email, setEmail] = useState('');
@@ -10,14 +10,16 @@ const LoginPage = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
   const navigate = useNavigate();
+  const signIn = useAuthStore(s => s.signIn);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError('');
     try {
-      await loginWithEmail(email, password);
+      await signIn(email, password);
       navigate('/');
     } catch (err: any) {
-      setError(err.message || 'Login failed.');
+      setError(err?.message || 'Login failed.');
     }
   };
 

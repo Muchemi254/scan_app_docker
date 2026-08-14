@@ -21,7 +21,7 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from app.core.config import settings
-from app.api import health, receipts, tasks, images, batches, exports, cleaning, dashboard, review_batches, backup_api, scan_errors, settings as settings_api
+from app.api import health, receipts, tasks, images, batches, exports, cleaning, dashboard, review_batches, backup_api, scan_errors, settings as settings_api, auth as auth_api
 
 # Configure logging
 logging.basicConfig(
@@ -51,6 +51,7 @@ async def lifespan(app: FastAPI):
         logger.critical("SECRET_KEY is still the default value. Set SECRET_KEY env var.")
         raise RuntimeError("SECRET_KEY must be changed from default for security")
 
+    logger.info(f"Auth Mode: {settings.AUTH_MODE}")
     logger.info(f"Firebase Credentials: {settings.FIREBASE_CREDENTIALS_PATH}")
     logger.info(f"CORS Origins: {settings.BACKEND_CORS_ORIGINS}")
 
@@ -63,13 +64,19 @@ async def lifespan(app: FastAPI):
         logger.error(f"Failed to initialize PostgreSQL pool: {e}")
         raise
 
-    # Initialize Firebase Auth (token validation only)
+    # Initialize authentication
     try:
-        from app.services.firebase_service import init_firebase
-        init_firebase()
-        logger.info("Firebase auth initialized successfully")
+        if settings.AUTH_MODE == "local":
+            # Local auth — no Firebase, no internet required.
+            from app.services.auth_service import bootstrap_admin
+            await bootstrap_admin()
+            logger.info("Local auth enabled — Firebase init skipped")
+        else:
+            from app.services.firebase_service import init_firebase
+            init_firebase()
+            logger.info("Firebase auth initialized successfully")
     except Exception as e:
-        logger.error(f"Failed to initialize Firebase auth: {e}")
+        logger.error(f"Failed to initialize authentication: {e}")
         raise
 
     # Connect Redis
@@ -175,6 +182,13 @@ def create_app() -> FastAPI:
 
     # Health checks
     app.include_router(health.router)
+
+    # Local authentication (login / me / admin user management)
+    if settings.AUTH_MODE == "local":
+        app.include_router(
+            auth_api.router,
+            prefix=settings.API_V1_STR,
+        )
 
     # Receipt API (main functionality)
     app.include_router(

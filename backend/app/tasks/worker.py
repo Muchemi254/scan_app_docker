@@ -553,13 +553,22 @@ async def _extract_receipt_batch_sync(user_id: str, task_id: str, batch_dir: str
                                        image_entries: list, provider: str = "gemini"):
     _purge_stale_cached_loops()
     try:
+        saved_items: list = []
+        failed_chunks: list = []
+
         async def report(pct, msg):
             await TaskService.update_progress(user_id, task_id, TaskProgressUpdate(
                 status=TaskStatus.PROCESSING, percentage=pct, message=msg
             ))
 
         async def store(i, data):
+            if data is not None:
+                saved_items.append(i)
             await TaskService.add_task_result(user_id, task_id, f"item_{i}", data)
+
+        async def chunk_update(ci, status, error_code, error_message, started, completed, increment_attempts):
+            if status == "failed":
+                failed_chunks.append(ci)
 
         # Inject `index` into legacy entries that didn't include one
         for i, e in enumerate(image_entries):
@@ -569,11 +578,30 @@ async def _extract_receipt_batch_sync(user_id: str, task_id: str, batch_dir: str
             user_id, batch_dir, image_entries,
             on_progress=report,
             on_item_result=store,
+            on_chunk_update=chunk_update,
         )
 
+        total = len(image_entries)
+        if saved_items and len(saved_items) < total:
+            status, pct, msg = (
+                TaskStatus.COMPLETED, 100,
+                f"Batch complete — {len(saved_items)}/{total} receipts saved",
+            )
+        elif not saved_items and failed_chunks:
+            # Whole batch failed (e.g. AI quota/auth) — don't report success.
+            status, pct, msg = (
+                TaskStatus.FAILED, 0,
+                "Batch extraction failed — no receipts saved",
+            )
+        else:
+            status, pct, msg = (
+                TaskStatus.COMPLETED, 100,
+                "Batch extraction complete — receipts saved",
+            )
+
         await TaskService.update_progress(user_id, task_id, TaskProgressUpdate(
-            status=TaskStatus.COMPLETED, percentage=100,
-            message="Batch extraction complete — receipts saved"
+            status=status, percentage=pct, message=msg,
+            error=msg if status == TaskStatus.FAILED else None,
         ))
 
     except Exception as e:

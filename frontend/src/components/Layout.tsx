@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
-import { logout } from '../services/firebase';
-import { auth } from '../services/firebase';
+import { useAuthStore } from '../stores/authStore';
 import {
   Home, Camera, FileText, ClipboardCheck, Download,
   LogOut, Menu, X, ChevronDown, User, Settings,
@@ -16,13 +15,15 @@ const Layout = () => {
   const [profileOpen, setProfileOpen] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
+  const user = useAuthStore(s => s.user);
+  const signOut = useAuthStore(s => s.signOut);
 
   const receiptsRef = useRef<HTMLDivElement>(null);
   const profileRef = useRef<HTMLDivElement>(null);
 
   // Unread scan/error notifications badge
   const [unread, setUnread] = useState(0);
-  const currentUid = auth?.currentUser?.uid;
+  const currentUid = user?.uid;
   const refreshUnread = useCallback(async () => {
     if (!currentUid) return;
     try {
@@ -55,14 +56,14 @@ const Layout = () => {
   }, []);
 
   const handleLogout = async () => {
-    try { await logout(); navigate('/login'); }
+    try { signOut(); navigate('/login'); }
     catch (error) { console.error('Logout failed:', error); }
   };
 
   const isActive = (path: string) => location.pathname.startsWith(path);
   const isExact = (path: string) => location.pathname === path;
 
-  const userEmail = auth?.currentUser?.email || 'User';
+  const userEmail = user?.email || 'User';
   const userName = userEmail.split('@')[0];
 
   const receiptsItems = [
@@ -139,6 +140,15 @@ const Layout = () => {
                   }`}>
                   <Settings className="h-4 w-4" /><span>Settings</span>
                 </Link>
+
+                {user?.is_admin && (
+                  <Link to="/admin"
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                      isActive('/admin') ? 'bg-blue-100 text-blue-700 font-medium' : 'text-gray-600 hover:bg-gray-100'
+                    }`}>
+                    <Shield className="h-4 w-4" /><span>Admin</span>
+                  </Link>
+                )}
               </div>
             </div>
 
@@ -217,6 +227,12 @@ const Layout = () => {
               className={`flex items-center gap-3 px-4 py-2.5 rounded-lg ${isExact('/settings') ? 'bg-blue-100 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-100'}`}>
               <Settings className="h-5 w-5" /><span>Settings</span>
             </Link>
+            {user?.is_admin && (
+              <Link to="/admin" onClick={() => setMobileMenuOpen(false)}
+                className={`flex items-center gap-3 px-4 py-2.5 rounded-lg ${isExact('/admin') ? 'bg-blue-100 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-100'}`}>
+                <Shield className="h-5 w-5" /><span>Admin</span>
+              </Link>
+            )}
             <button onClick={() => { setMobileMenuOpen(false); handleLogout(); }}
               className="flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-red-600 hover:bg-red-50">
               <LogOut className="h-5 w-5" /><span>Logout</span>

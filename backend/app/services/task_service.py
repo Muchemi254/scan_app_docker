@@ -141,15 +141,13 @@ class TaskService:
                     UPDATE tasks SET
                         status = $3, current_step = $4, total_steps = $5,
                         percentage = $6, message = $7, error = $8,
-                        completed_items = $9, updated_at = $10
-                        || CASE WHEN $11::timestamptz IS NOT NULL THEN ', completed_at = $11' ELSE '' END
+                        completed_items = $9, updated_at = $10, completed_at = $11
                     WHERE id = $1 AND user_id = $2
                     """,
                     task_id, user_id,
                     update.status.value, update.current_step, update.total_steps,
                     update.percentage, update.message, update.error,
-                    update.completed_items, now,
-                    f", completed_at = '{completed_at.isoformat()}'::timestamptz" if completed_at else "",
+                    update.completed_items, now, completed_at,
                 )
                 return True
 
@@ -165,7 +163,7 @@ class TaskService:
             await conn.execute(
                 """
                 UPDATE tasks
-                SET results = results || $3::jsonb,
+                SET results = (results::jsonb || $3::jsonb)::json,
                     updated_at = $4
                 WHERE id = $1 AND user_id = $2
                 """,

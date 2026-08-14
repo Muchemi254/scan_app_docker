@@ -10,7 +10,7 @@
  *   const list = await receiptApi.list();
  */
 
-import { auth } from './firebase';
+import { getAuthHeader as getToken, getUserId } from './auth';
 
 // Use a relative path so the app works on any device/IP on the network.
 // Nginx proxies /api/* → backend container. Absolute URL only applies
@@ -19,43 +19,11 @@ import { auth } from './firebase';
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api/v1';
 
 /**
- * Get authorization header with Firebase token.
- * Waits up to 5 s for Firebase to restore a persisted session before giving up.
- * This prevents a race condition on first load where auth.currentUser is briefly
- * null while Firebase hydrates from IndexedDB.
+ * Get authorization header with the local access token.
+ * Sync — the token is read straight from localStorage.
  */
-async function getAuthHeader(): Promise<string> {
-  // Fast path — token already available
-  if (auth?.currentUser) {
-    const token = await auth.currentUser.getIdToken();
-    if (token) return `Bearer ${token}`;
-  }
-
-  // Slow path — wait for Firebase to restore the session (up to 5 s)
-  const token = await new Promise<string | null>(resolve => {
-    if (!auth) { resolve(null); return; }
-    const unsubscribe = auth.onAuthStateChanged(user => {
-      unsubscribe();
-      if (user) {
-        user.getIdToken().then(t => resolve(t)).catch(() => resolve(null));
-      } else {
-        resolve(null);
-      }
-    });
-    setTimeout(() => resolve(null), 5000);
-  });
-
-  if (!token) throw new Error('Authentication failed');
-  return `Bearer ${token}`;
-}
-
-/**
- * Get current user ID (sync — only call after auth is confirmed).
- */
-function getUserId(): string {
-  const userId = auth?.currentUser?.uid;
-  if (!userId) throw new Error('User not authenticated');
-  return userId;
+function getAuthHeader(): string {
+  return getToken();
 }
 
 /**

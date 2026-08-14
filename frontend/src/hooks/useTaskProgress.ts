@@ -3,17 +3,12 @@
  */
 import { useEffect, useCallback, useRef } from 'react';
 import { useTaskStore } from '../stores/taskStore';
-import { auth } from '../services/firebase';
+import { getToken, getUserId } from '../services/auth';
 
 interface UseTaskProgressOptions {
   onProgressUpdate?: (progress: number, index: number, total: number) => void;
   onTaskComplete?: () => void;
   onTaskError?: (error: Error) => void;
-}
-
-async function getToken(): Promise<string> {
-  if (auth?.currentUser) return await auth.currentUser.getIdToken();
-  return '';
 }
 
 export const useTaskProgress = (options: UseTaskProgressOptions = {}) => {
@@ -73,10 +68,10 @@ export const useTaskProgress = (options: UseTaskProgressOptions = {}) => {
 
     const pollTask = async () => {
       try {
-        const token = await getToken();
+        const token = getToken();
         if (!token) return;
         const API_BASE = import.meta.env.VITE_API_URL || '/api/v1';
-        const userId = auth?.currentUser?.uid;
+        const userId = getUserId();
         if (!userId) return;
 
         const resp = await fetch(`${API_BASE}/users/${userId}/tasks/${backendTaskId}`, {

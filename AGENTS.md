@@ -2,8 +2,8 @@
 
 ## Stack
 
-React 19 (Vite + TypeScript + Tailwind) → Nginx → FastAPI (Python) → Firebase (Auth, Firestore, Storage) + Gemini API
-Redis + Celery for async batch processing.
+React 19 (Vite + TypeScript + Tailwind) → Nginx → FastAPI (Python) → Postgres auth (bcrypt + JWT) + Gemini API
+Redis + Celery for async batch processing. Firebase is deprecated (kept only behind `AUTH_MODE=firebase`).
 
 ## Docker Commands
 
@@ -29,18 +29,21 @@ Frontend served through Nginx (port 8081), backend on 8003 (mapped from containe
 
 ## Firebase Credentials
 
-Backend uses a **service account JSON file** mounted at `/app/firebaseservice.json` (from `./firebaseservice.json` in repo root). Set via `FIREBASE_CREDENTIALS_PATH`. **Do not** use individual `FIREBASE_PRIVATE_KEY` / `FIREBASE_CLIENT_EMAIL` env vars — those are from an older config.
+Only needed for `AUTH_MODE=firebase` (legacy). Backend mounts the **service account JSON file** at `/app/firebaseservice.json` (from `./firebaseservice.json` in repo root), set via `FIREBASE_CREDENTIALS_PATH`. **Do not** use individual `FIREBASE_PRIVATE_KEY` / `FIREBASE_CLIENT_EMAIL` env vars — those are from an older config.
 
-Frontend uses `VITE_FIREBASE_*` build args (baked at build time, not runtime).
+In the default `AUTH_MODE=local`, Firebase init is skipped entirely and no credentials are read.
 
 ## Auth
 
-All endpoints except `/health` require `Authorization: Bearer <firebase_token>`. Backend validates via `get_current_user_id` dependency. Multi-tenant: `userId` in URL path must match token's `uid`.
+`AUTH_MODE=local` (default in `docker-compose.yml`) uses locally-signed JWTs and password hashes in the Postgres `users` table — fully offline, no Firebase. Admin accounts are created by the admin API/UI or CLI, not open signup. `AUTH_MODE=firebase` keeps the legacy Firebase ID-token path.
+
+All endpoints except `/health` require `Authorization: Bearer <token>`. Backend validates via `get_current_user_id` dependency. Multi-tenant: `userId` in URL path must match token's `uid`. Tokens for deleted users are rejected on every request.
 
 ## Key Architecture
 
 - **Routes → Services → External APIs** pattern (no direct DB/external calls from routes)
 - **Vision extraction is Gemini-only** — DeepSeek's chat API is text-only, cannot process images. The `extract_receipt_data` and `extract_receipt_batch` functions in `backend/app/services/gemini.py` always require Gemini.
+- **Local auth is server-only** — `app/services/auth_service.py` (bcrypt + HS256 JWTs) + `app/api/auth.py` (`/api/v1/auth/login`, `/auth/me`, admin `/auth/admin/users`). Offline auth; AI providers still need internet.
 - **Batch state lives in Redis** (TTL-bound, lost on restart → batches auto-fail)
 - **Celery worker** for async batch extraction (`tasks.worker`)
 - **vite.config.ts** proxies `/api` → `localhost:5000` for local dev (Docker uses Nginx instead)
@@ -68,13 +71,24 @@ npm run lint      # eslint
 
 ## Testing
 
-No test framework. Manual testing via Swagger UI (`/docs`) and curl. Frontend testing via browser DevTools.
+### Backend (in-container pytest)
+
+Uses the dedicated `scanapp_test` database (auto-created + migrated). Tests are baked into the image; run them on the running backend container:
+
+```bash
+docker exec -u 0:0 -w /app scan-app-backend env TEST_DATABASE_URL=postgresql://scanapp:scanapp_dev@postgres:5432/scanapp_test python -m pytest tests -v
+```
+
+The suite requires `AUTH_MODE=local` and a writable test DB; `conftest.py` forces deterministic env (admin@pytest.local) so it works regardless of compose vars. No Redis/Celery needed — the batch engine is driven directly with a mocked AI provider.
+
+Manual testing via Swagger UI (`/docs`) and curl. Frontend testing via browser DevTools.
 
 ## Gotchas
 
 - `npm run build` is the typecheck command (runs `tsc && vite build`)
-- No `pytest` or jest — all testing is manual via Swagger UI
+- Backend tests are pytest (in-container), not jest — see Testing above
 - Redis data is ephemeral (TTL set in `batch_service.py`) — server restart kills in-progress batches
 - Frontend `VITE_*` vars are build-time only; changing `.env` requires rebuild
 - HEIC images are converted server-side by `pillow-heif` in `image_service.py`
 - Single `/extract` is synchronous; `/batch-extract` is async via Celery + task polling
+- Bootstrap admin creds: `ADMIN_EMAIL`/`ADMIN_PASSWORD` env (compose defaults `admin@local`/`admin12345`); when unset, a random admin is generated and logged once at boot

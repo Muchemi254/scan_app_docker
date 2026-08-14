@@ -78,7 +78,7 @@ async def batch_extract_receipts(
 
     # 1. Create task
     task_id = await TaskService.create_task(
-        userId, TaskType.EXTRACTION, "Batch Extraction", len(files)
+        userId, TaskType.SCAN_BATCH, "Batch Extraction", len(files)
     )
 
     # 1.5 Get current provider settings
