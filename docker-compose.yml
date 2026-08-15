@@ -153,7 +153,11 @@ services:
       - data-network
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "celery", "-A", "app.core.celery_app", "inspect", "ping", "-d", "celery@$HOSTNAME"]
+      # CMD-SHELL so a shell inside the container expands HOSTNAME (Docker
+      # injects it = the container's own auto-assigned hostname, which is the
+      # name the celery node registers under). $$ stops Compose interpolating
+      # it from the host shell at config time.
+      test: ["CMD-SHELL", "celery -A app.core.celery_app inspect ping -d celery@$$HOSTNAME"]
       interval: 30s
       timeout: 10s
       retries: 3
