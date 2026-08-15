@@ -30,6 +30,7 @@ MODELS = {
         {"id": "qwen3-vl-235b-a22b-thinking", "name": "Qwen3 VL 235B Thinking", "description": "Large MoE vision model that always reasons before answering", "supports_thinking": True},
         {"id": "qwen3.6-flash", "name": "Qwen3.6 Flash", "description": "Fast multimodal flash model — successor to Qwen3-VL-Flash", "supports_thinking": True},
         {"id": "qwen3.7-plus", "name": "Qwen3.7 Plus", "description": "Flagship value multimodal model with vision", "supports_thinking": True},
+        {"id": "qwen-vl-ocr", "name": "Qwen VL OCR", "description": "Specialized Alibaba OCR model for receipt/document text extraction", "supports_thinking": False, "caveat": "Raw OCR model: reads text but does NOT reliably structure receipts. Supplier is often blank or misread, item lines are missed, and output can be very long or truncated. Expect to fix fields in review — prefer Qwen3 VL Plus/Flash or Gemini for accurate structured data."},
     ]
 }
 

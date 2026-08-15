@@ -185,6 +185,7 @@ async def get_available_models():
                 name=model["name"],
                 provider=AIProvider(provider),
                 description=model.get("description"),
-                supports_thinking=model.get("supports_thinking", False)
+                supports_thinking=model.get("supports_thinking", False),
+                caveat=model.get("caveat"),
             ))
     return result

@@ -300,3 +300,29 @@ async def test_user_thinking_mode_wins_over_admin(client):
     from app.services.gemini import resolve_thinking_mode
 
     assert await resolve_thinking_mode(uid, "deepseek") is False
+
+
+async def test_qwen_default_model_is_not_ocr(client):
+    """qwen-vl-ocr must be optional, never the silent default. The default for
+    the qwen provider is derived from the FIRST registry entry, so adding the
+    OCR model at the top silently re-routed model-less users to OCR — a
+    regression that sent scans through OCR when qwen3-vl-flash was expected."""
+    from app.services.admin_keys_service import default_model_for
+
+    assert default_model_for("qwen") == "qwen3-vl-flash"
+    assert default_model_for("gemini") == "gemini-3.1-flash-lite-preview"
+
+
+async def test_qwen_vl_ocr_exposes_caveat(client):
+    """Users must be told which models may return poor structured output."""
+    resp = await client.get("/api/v1/settings/models")
+    assert resp.status_code == 200
+    ocr = next((m for m in resp.json() if m["id"] == "qwen-vl-ocr"), None)
+    assert ocr is not None, "qwen-vl-ocr should be listed for the qwen provider"
+    assert ocr["supports_thinking"] is False
+    assert ocr["caveat"], "qwen-vl-ocr must carry a quality caveat for the UI"
+    assert "OCR" in ocr["caveat"]
+    # Other models must NOT carry the OCR caveat.
+    for m in resp.json():
+        if m["id"] != "qwen-vl-ocr":
+            assert not m.get("caveat"), f"{m['id']} should have no caveat"

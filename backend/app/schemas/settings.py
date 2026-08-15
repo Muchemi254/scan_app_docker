@@ -21,6 +21,7 @@ class AIModel(BaseModel):
     provider: AIProvider
     description: Optional[str] = None
     supports_thinking: bool = False
+    caveat: Optional[str] = None
 
 class AISettings(BaseModel):
     provider: AIProvider = AIProvider.GEMINI

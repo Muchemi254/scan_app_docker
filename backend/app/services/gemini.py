@@ -56,6 +56,7 @@ async def call_openai_compatible_api(
     provider_label: str = "provider",
     extra_body_override: Optional[dict] = None,
     max_tokens: Optional[int] = None,
+    require_json: bool = True,
 ):
     """Generic chat-completions call shared by OpenAI-compatible providers.
 
@@ -83,13 +84,17 @@ async def call_openai_compatible_api(
     if max_tokens:
         extra_params["max_tokens"] = max_tokens
 
+    request_kwargs = {
+        "model": model_id,
+        "messages": messages,
+        **extra_params,
+    }
+    # Some models (e.g. dedicated OCR models) don't support response_format.
+    if require_json:
+        request_kwargs["response_format"] = {"type": "json_object"}
+
     try:
-        response = await client.chat.completions.create(
-            model=model_id,
-            messages=messages,
-            response_format={"type": "json_object"},
-            **extra_params
-        )
+        response = await client.chat.completions.create(**request_kwargs)
         return response.choices[0].message.content
     except APIStatusError as e:
         status_code = getattr(e, 'status_code', 500)
@@ -133,16 +138,27 @@ async def call_qwen_api(api_key: str, model_id: str, prompt: str, content: Any =
     DashScope hybrid-thinking models (qwen3-vl-flash, qwen3-vl-plus,
     qwen3.6-flash, qwen3.7-plus) accept an explicit `enable_thinking` toggle;
     send False unless the user opted in so JSON output stays deterministic.
-    `-instruct` models don't support the parameter at all, so omit it.
+    `-instruct` models and the dedicated OCR model (`qwen-vl-ocr`) don't
+    support the parameter at all, so omit it for those. The OCR model also
+    doesn't accept `response_format`, so require_json is disabled for it.
     """
+    is_ocr = bool(model_id and model_id.startswith("qwen-vl-ocr"))
     extra_body = None
-    if not (model_id and model_id.endswith("-instruct")):
+    if not (is_ocr or (model_id and model_id.endswith("-instruct"))):
         extra_body = {"enable_thinking": bool(thinking_mode)}
+    if is_ocr:
+        # The generic call sends DeepSeek-style {"thinking": ...} params whenever
+        # extra_body_override is None AND thinking_mode is on. DashScope qwen
+        # rejects those — and qwen-vl-ocr has no thinking mode at all. A non-None
+        # (empty) override takes the first branch, so nothing thinking-related is
+        # ever sent for the OCR model, even if a stale settings row says otherwise.
+        extra_body = {}
     return await call_openai_compatible_api(
         api_key, DASHSCOPE_BASE_URL, model_id,
         prompt, content, thinking_mode=thinking_mode,
         provider_label="Alibaba Qwen",
         extra_body_override=extra_body,
+        require_json=not is_ocr,
         max_tokens=max_tokens,
     )
 
@@ -529,7 +545,7 @@ async def extract_receipt_data(
         status = ReceiptStatus.NEEDS_REVIEW
 
         receipt = ReceiptCreate(
-            supplier=data.get("supplier", "Unknown"),
+            supplier=(data.get("supplier") or "Unknown").strip() or "Unknown",
             totalAmount=sanitize_numeric(data.get("totalAmount")),
             taxAmount=sanitize_numeric(data.get("taxAmount")),
             receiptDate=data.get("receiptDate", ""),
@@ -591,7 +607,12 @@ async def extract_receipt_batch(
         )
         # Headroom so a 10-image batch can't get truncated mid-array (truncation
         # would otherwise show up as a fake short array).
-        max_tokens = min(8192, max(2048, 1024 * len(images)))
+        # OCR models (qwen-vl-ocr) are deliberately verbose: at the 2048-token
+        # floor a single long receipt gets cut off mid-array, leaving an unclosed
+        # code fence that _clean_json_response can't strip and json.loads rejects
+        # as "Expecting value: char 0" (misreported as AI_EMPTY_RESPONSE/AI_INVALID_JSON).
+        base_budget = 8192 if (model_id and model_id.startswith("qwen-vl-ocr")) else 2048
+        max_tokens = min(8192, max(base_budget, 1024 * len(images)))
 
         if provider == "deepseek":
             content = []
@@ -724,7 +745,7 @@ async def extract_receipt_batch(
                 status = ReceiptStatus.NEEDS_REVIEW
 
                 results.append(ReceiptCreate(
-                    supplier=data.get("supplier", "Unknown"),
+                    supplier=(data.get("supplier") or "Unknown").strip() or "Unknown",
                     totalAmount=sanitize_numeric(data.get("totalAmount")),
                     taxAmount=sanitize_numeric(data.get("taxAmount")),
                     receiptDate=data.get("receiptDate", ""),
