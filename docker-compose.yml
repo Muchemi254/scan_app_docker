@@ -1,12 +1,12 @@
 services:
   # ========================================================================
-  # Redis — batch state store
+  # Redis — batch state store (Celery broker + small caches)
   # ========================================================================
   redis:
     image: redis:7-alpine
     container_name: scan-app-redis
     restart: unless-stopped
-    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru --requirepass \${REDIS_PASSWORD:-redis_dev}
+    command: redis-server --maxmemory ${REDIS_MAXMEMORY:-128mb} --maxmemory-policy ${REDIS_MAXMEMORY_POLICY:-allkeys-lru} --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
     networks:
       - data-network
 
@@ -17,16 +17,18 @@ services:
     image: postgres:16-alpine
     container_name: scan-app-postgres
     ports:
-      - "5432:5432"
+      # Localhost only — never publish the DB to the LAN. Backend/worker reach
+      # it over data-network; host tools can use 127.0.0.1:5432.
+      - "127.0.0.1:5432:5432"
     restart: unless-stopped
     environment:
-      POSTGRES_DB: scanapp
-      POSTGRES_USER: scanapp
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-scanapp_dev}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set in .env}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set in .env}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U scanapp"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -45,8 +47,6 @@ services:
     ports:
       - "8003:8000"
     volumes:
-      # Mount Firebase service account JSON file
-      - ./firebaseservice.json:/app/firebaseservice.json:ro
       # Persist SQLite review batch database across container rebuilds
       - review_batch_data:/app/data
       # Local image storage
@@ -55,47 +55,46 @@ services:
       - backup_data:/app/backups
     environment:
       # SQLite database path for review batches (transitional — migrating to PG)
-      REVIEW_BATCH_DB_PATH: /app/data/review_batches.db
+      REVIEW_BATCH_DB_PATH: ${REVIEW_BATCH_DB_PATH}
       # PostgreSQL
-      DATABASE_URL: postgresql://scanapp:${DB_PASSWORD:-scanapp_dev}@postgres:5432/scanapp
-      DATABASE_POOL_MIN: 2
-      DATABASE_POOL_MAX: 20
-      USE_POSTGRES: "true"
-      # Image storage
-      IMAGE_STORAGE_DIR: /app/data/images
-      # Backup storage
-      BACKUP_STORAGE_DIR: /app/backups
-      # Firebase Configuration - Uses service account JSON file mounted at /app/firebaseservice.json
-      FIREBASE_CREDENTIALS_PATH: /app/firebaseservice.json
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DATABASE_POOL_MIN: ${DATABASE_POOL_MIN}
+      DATABASE_POOL_MAX: ${DATABASE_POOL_MAX}
+      USE_POSTGRES: ${USE_POSTGRES}
+      # Storage
+      IMAGE_STORAGE_DIR: ${IMAGE_STORAGE_DIR}
+      BACKUP_STORAGE_DIR: ${BACKUP_STORAGE_DIR}
+      FIREBASE_CREDENTIALS_PATH: ${FIREBASE_CREDENTIALS_PATH}
 
       # Local auth (offline) — no Firebase required. AUTH_MODE=firebase keeps the old path.
-      AUTH_MODE: local
-      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@local}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin12345}
-      JWT_EXPIRE_DAYS: 30
+      AUTH_MODE: ${AUTH_MODE}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?ADMIN_EMAIL must be set in .env}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD must be set in .env}
+      JWT_EXPIRE_DAYS: ${JWT_EXPIRE_DAYS}
 
       # Gemini API
       GEMINI_API_KEY: ${GEMINI_API_KEY}
 
+      # Redis
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+
       # Security
-      SECRET_KEY: ${SECRET_KEY}
-      ALGORITHM: HS256
-      ACCESS_TOKEN_EXPIRE_MINUTES: 30
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in .env}
+      ALGORITHM: ${ALGORITHM}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES}
 
       # API
-      API_TITLE: "Scan App API"
-      API_VERSION: "1.0.0"
-      HOST: "0.0.0.0"
-      PORT: 8000
-
-      # Redis
-      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_dev}@redis:6379/0
-
-      # Features
-      ENABLE_DOCS: "false"
-
-      # Logging
-      LOG_LEVEL: INFO
+      API_TITLE: ${API_TITLE}
+      API_VERSION: ${API_VERSION}
+      API_V1_STR: ${API_V1_STR}
+      HOST: ${HOST}
+      PORT: ${PORT}
+      RELOAD: ${RELOAD}
+      MAX_UPLOAD_SIZE: ${MAX_UPLOAD_SIZE}
+      ENABLE_DOCS: ${ENABLE_DOCS}
+      LOG_LEVEL: ${LOG_LEVEL}
+      BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS}
 
     depends_on:
       - redis
@@ -133,18 +132,17 @@ services:
       dockerfile: Dockerfile
     container_name: scan-app-worker
     user: "0:0"  # root — entrypoint fixes volume permissions then drops to appuser
-    command: celery -A app.core.celery_app worker --loglevel=info --concurrency=4
+    command: celery -A app.core.celery_app worker --loglevel=${LOG_LEVEL:-INFO} --concurrency=${MAX_AI_CONCURRENCY:-4}
     volumes:
-      - ./firebaseservice.json:/app/firebaseservice.json:ro
       - image_data:/app/data/images
     environment:
-      FIREBASE_CREDENTIALS_PATH: /app/firebaseservice.json
+      FIREBASE_CREDENTIALS_PATH: ${FIREBASE_CREDENTIALS_PATH}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
-      REDIS_URL: redis://:${REDIS_PASSWORD:-redis_dev}@redis:6379/0
-      USE_POSTGRES: "true"
-      DATABASE_URL: postgresql://scanapp:${DB_PASSWORD:-scanapp_dev}@postgres:5432/scanapp
-      IMAGE_STORAGE_DIR: /app/data/images
-      MAX_AI_CONCURRENCY: ${MAX_AI_CONCURRENCY:-4}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      USE_POSTGRES: ${USE_POSTGRES}
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      IMAGE_STORAGE_DIR: ${IMAGE_STORAGE_DIR}
+      MAX_AI_CONCURRENCY: ${MAX_AI_CONCURRENCY}
       SECRET_KEY: ${SECRET_KEY}
     depends_on:
       - redis
@@ -162,7 +160,7 @@ services:
       start_period: 40s
 
   # ========================================================================
-   # React Frontend + Nginx
+  # React Frontend + Nginx
   frontend:
     build:
       context: ./frontend
@@ -170,10 +168,15 @@ services:
       args:
         VITE_API_URL: ${VITE_API_URL}
     container_name: scan-app-frontend
-    network_mode: host
+    ports:
+      - "8081:8081"
     depends_on:
       backend:
         condition: service_healthy
+    # Bridge network — isolated from the host net namespace. Nginx proxies
+    # /api to the backend container over app-network (not 127.0.0.1).
+    networks:
+      - app-network
     # No runtime env vars needed — Vite bakes them in at build time.
     # VITE_API_URL defaults to /api/v1 (relative, works from any IP).
 
@@ -221,21 +224,25 @@ volumes:
 # NOTES
 # ============================================================================
 #
+# All configuration lives in repo-root .env (template: .env.example).
+# Missing SECRET_KEY / DB_PASSWORD / REDIS_PASSWORD / ADMIN_* abort with a
+# clear message rather than booting insecure.
+#
 # Start services:
-#   docker-compose up -d
+#   docker compose up -d
 #
 # View logs:
-#   docker-compose logs -f backend
-#   docker-compose logs -f frontend
+#   docker compose logs -f backend
+#   docker compose logs -f frontend
 #
 # Stop services:
-#   docker-compose down
+#   docker compose down
 #
 # Rebuild images:
-#   docker-compose build --no-cache
+#   docker compose build --no-cache
 #
 # Access:
-#   Frontend: http://localhost
+#   Frontend: http://localhost:8081
 #   Backend API: http://localhost:8003
 #   API Docs: http://localhost:8003/docs
 #

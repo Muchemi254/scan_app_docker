@@ -154,10 +154,10 @@ async def create_batch(user_id: str, batch_title: str, filenames: List[str]) -> 
                 await conn.execute(
                     """
                     INSERT INTO scan_session_items
-                        (id, session_id, item_index, orig_filename, image_filename, mime, group_index, status, stage)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', 'queued')
+                        (id, session_id, user_id, item_index, orig_filename, image_filename, mime, group_index, status, stage)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', 'queued')
                     """,
-                    uuid.uuid4().hex, session_id, i, fn, None, None, 0,
+                    uuid.uuid4().hex, session_id, user_id, i, fn, None, None, 0,
                 )
     return session_id
 

@@ -1,100 +1,113 @@
 """
 Application configuration and settings.
-Supports environment-based configuration for easy deployment.
+
+Everything operationally tunable is read from the environment — in Docker the
+repo-root `.env` file is the single source of truth (docker-compose passes the
+values through). Inline defaults here are only safe fallbacks so the code runs
+in a bare local-dev environment without a .env file.
 """
 
 from pydantic_settings import BaseSettings
-from typing import Optional
+from typing import List, Optional
 import os
 
 
+def _env_bool(name: str, default: str = "false") -> bool:
+    return os.getenv(name, default).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _split_list(raw: str) -> List[str]:
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
 class Settings(BaseSettings):
-    """
-    App settings loaded from environment variables.
-
-    Structure:
-    - API settings (version, host, cors)
-    - Firebase settings (uses service account JSON file)
-    - Gemini API settings
-    - Security settings
-    """
-
-    # API Settings
-    API_V1_STR: str = "/api/v1"
-    API_TITLE: str = "Scan App API"
-    API_VERSION: str = "1.0.0"
+    # API
+    API_V1_STR: str = os.getenv("API_V1_STR", "/api/v1")
+    API_TITLE: str = os.getenv("API_TITLE", "Scan App API")
+    API_VERSION: str = os.getenv("API_VERSION", "1.0.0")
 
     # Server
-    HOST: str = "0.0.0.0"
-    PORT: int = 8000
-    RELOAD: bool = False
+    HOST: str = os.getenv("HOST", "0.0.0.0")
+    PORT: int = _env_int("PORT", 8000)
+    RELOAD: bool = _env_bool("RELOAD", "false")
 
-    # CORS
-    BACKEND_CORS_ORIGINS: list[str] = [
-        "http://localhost:8081",
-        "http://localhost:5173",
-        "http://localhost:80",
-    ]
-    ALLOWED_HOSTS: list[str] = ["*"]
+    # CORS / allowed hosts — parsed from comma-separated env strings
+    # (kept as str fields so pydantic-settings doesn't JSON-decode them).
+    BACKEND_CORS_ORIGINS: str = os.getenv(
+        "BACKEND_CORS_ORIGINS",
+        "http://localhost:8081,http://localhost:5173,http://localhost:80",
+    )
+    ALLOWED_HOSTS: str = os.getenv("ALLOWED_HOSTS", "*")
 
-    # Firebase Settings
-    # Path to Firebase service account JSON file
-    # Can be set via FIREBASE_CREDENTIALS_PATH env var
-    # Defaults to /app/firebaseservice.json (Docker) or ./firebaseservice.json (local dev)
+    @property
+    def cors_origins_list(self) -> List[str]:
+        return _split_list(self.BACKEND_CORS_ORIGINS)
+
+    @property
+    def allowed_hosts_list(self) -> List[str]:
+        return _split_list(self.ALLOWED_HOSTS)
+
+    # Firebase (legacy — only used when AUTH_MODE=firebase)
     FIREBASE_CREDENTIALS_PATH: str = os.getenv(
         "FIREBASE_CREDENTIALS_PATH",
-        "/app/firebaseservice.json"  # Default Docker path
+        "/app/firebaseservice.json",  # Default for the Docker image
     )
 
     # Redis
-    REDIS_URL: str = "redis://localhost:6379/0"
-    REDIS_PASSWORD: str = os.getenv("REDIS_PASSWORD", "")
+    REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
     # PostgreSQL
     DATABASE_URL: str = os.getenv(
         "DATABASE_URL",
         "postgresql://scanapp:scanapp_dev@localhost:5432/scanapp",
     )
-    DATABASE_POOL_MIN: int = 2
-    DATABASE_POOL_MAX: int = 20
+    DATABASE_POOL_MIN: int = _env_int("DATABASE_POOL_MIN", 2)
+    DATABASE_POOL_MAX: int = _env_int("DATABASE_POOL_MAX", 20)
 
-    # Image storage
+    # Storage
     IMAGE_STORAGE_DIR: str = os.getenv(
         "IMAGE_STORAGE_DIR",
-        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "images"),
+        os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            "data",
+            "images",
+        ),
     )
-
-    # Backup storage
     BACKUP_STORAGE_DIR: str = os.getenv("BACKUP_STORAGE_DIR", "/app/backups")
+    MAX_UPLOAD_SIZE: int = _env_int("MAX_UPLOAD_SIZE", 10 * 1024 * 1024)  # 10 MB
 
-    # Gemini API
-    # Optional now — used only to seed the admin-managed Gemini key on first
-    # start. Keys are otherwise provisioned via the admin UI (ai-providers).
-    GEMINI_API_KEY: Optional[str] = None
+    # AI
+    GEMINI_API_KEY: Optional[str] = os.getenv("GEMINI_API_KEY")
 
     # Security
-    SECRET_KEY: str = "change-me-in-production"
-    ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    SECRET_KEY: str = os.getenv("SECRET_KEY", "change-me-in-production")
+    ALGORITHM: str = os.getenv("ALGORITHM", "HS256")
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = _env_int("ACCESS_TOKEN_EXPIRE_MINUTES", 30)
 
     # Auth mode: "local" (Postgres users + local JWT, fully offline) or
-    # "firebase" (Firebase Auth ID tokens, requires internet).
+    # "firebase" (Firebase Auth ID tokens, requires internet — legacy).
     AUTH_MODE: str = os.getenv("AUTH_MODE", "local")
-    # Local JWT lifetime
-    JWT_EXPIRE_DAYS: int = 30
+    JWT_EXPIRE_DAYS: int = _env_int("JWT_EXPIRE_DAYS", 30)
     # Bootstrap admin (local mode only) — created on first startup.
     ADMIN_EMAIL: Optional[str] = os.getenv("ADMIN_EMAIL")
     ADMIN_PASSWORD: Optional[str] = os.getenv("ADMIN_PASSWORD")
 
-    # Upload limits
-    MAX_UPLOAD_SIZE: int = 10 * 1024 * 1024  # 10 MB per file
-
-    # SQLite database for review batch tracking (transitional — migrating to PostgreSQL)
+    # SQLite review batch DB (transitional — migrating to PostgreSQL)
     REVIEW_BATCH_DB_PATH: str = os.getenv("REVIEW_BATCH_DB_PATH", "")
 
     # Features
-    ENABLE_DOCS: bool = True  # Swagger UI
-    USE_POSTGRES: bool = os.getenv("USE_POSTGRES", "false").lower() == "true"  # toggle PG vs Firestore
+    ENABLE_DOCS: bool = _env_bool("ENABLE_DOCS", "true")  # Swagger UI
+    USE_POSTGRES: bool = _env_bool("USE_POSTGRES", "false")  # PG vs Firestore
+
+    # Logging
+    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
 
     class Config:
         env_file = ".env"

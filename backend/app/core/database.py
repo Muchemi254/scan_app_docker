@@ -126,7 +126,16 @@ async def init_pool() -> _RLSPool:
 
 async def _enable_rls(pool: asyncpg.Pool) -> None:
     """Enable RLS on all multi-tenant tables with user_id column."""
-    tables = ["receipts", "tasks", "review_batches", "audit_logs", "scan_errors", "scan_sessions"]
+    tables = [
+        "receipts",
+        "tasks",
+        "review_batches",
+        "audit_logs",
+        "scan_errors",
+        "scan_sessions",
+        "scan_session_items",
+        "user_ai_settings",
+    ]
     async with pool.acquire() as conn:
         for table in tables:
             exists = await conn.fetchval(

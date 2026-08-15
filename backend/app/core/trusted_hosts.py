@@ -64,6 +64,6 @@ async def load_trusted_hosts() -> None:
     except Exception as e:
         logger.warning("Failed to load persisted trusted hosts: %s", e)
     if hosts is None:
-        hosts = list(settings.ALLOWED_HOSTS)
+        hosts = list(settings.allowed_hosts_list)
     set_allowed_hosts(hosts)
     logger.info("Trusted hosts: %s", ", ".join(hosts) if hosts else "(none)")

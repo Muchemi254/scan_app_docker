@@ -24,7 +24,7 @@ from app.api import health, receipts, tasks, images, batches, exports, cleaning,
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, settings.LOG_LEVEL, logging.INFO),
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
@@ -45,10 +45,20 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info(f"Starting {settings.API_TITLE} v{settings.API_VERSION}")
 
-    # Enforce SECRET_KEY — refuse to start with default
-    if settings.SECRET_KEY == "change-me-in-production":
-        logger.critical("SECRET_KEY is still the default value. Set SECRET_KEY env var.")
+    # Enforce SECRET_KEY — refuse to start missing or with the default
+    if not settings.SECRET_KEY or settings.SECRET_KEY == "change-me-in-production":
+        logger.critical("SECRET_KEY must be a non-default value. Set SECRET_KEY env var.")
         raise RuntimeError("SECRET_KEY must be changed from default for security")
+
+    # Local auth — refuse to bootstrap with the default admin password
+    if settings.AUTH_MODE == "local" and (
+        not settings.ADMIN_PASSWORD
+        or settings.ADMIN_PASSWORD in ("admin12345", "change-me-admin-password")
+    ):
+        logger.critical(
+            "ADMIN_PASSWORD is unset or still the default. Set ADMIN_PASSWORD env var."
+        )
+        raise RuntimeError("ADMIN_PASSWORD must be changed from default for security")
 
     logger.info(f"Auth Mode: {settings.AUTH_MODE}")
     logger.info(f"Firebase Credentials: {settings.FIREBASE_CREDENTIALS_PATH}")
@@ -145,7 +155,7 @@ def create_app() -> FastAPI:
     # CORS - Allow frontend to call backend
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.BACKEND_CORS_ORIGINS,
+        allow_origins=settings.cors_origins_list,
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],

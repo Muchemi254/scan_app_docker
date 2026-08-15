@@ -131,7 +131,7 @@ async def client():
         # Reset the dynamic trusted-host registry so tests are isolated and the
         # persisted value (truncated below) doesn't leak from a previous test.
         trusted_hosts.reset()
-        trusted_hosts.set_allowed_hosts(settings.ALLOWED_HOSTS)
+        trusted_hosts.set_allowed_hosts(settings.allowed_hosts_list)
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://localhost") as c:
             yield c
