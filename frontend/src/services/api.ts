@@ -10,7 +10,7 @@
  *   const list = await receiptApi.list();
  */
 
-import { getAuthHeader as getToken } from './auth';
+import { getAuthHeader as getToken, getUserId } from './auth';
 import { useScopeStore } from '../stores/scopeStore';
 
 // Use a relative path so the app works on any device/IP on the network.
