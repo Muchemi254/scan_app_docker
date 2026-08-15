@@ -34,6 +34,13 @@ JPEG_QUALITY_AI = 75    # good balance for OCR-grade extraction
 THUMB_DIMENSION = 400   # px — quick preview in lists
 THUMB_QUALITY = 60      # smaller file for thumbnails
 
+# JPEGs at-or-below display dimensions and ≤ this size are treated as
+# already-optimized and stored as-is. Re-encoding one (e.g. a user re-scans an
+# image they exported or already compressed) would soften text a little more
+# with every pass and degrade later AI extraction, so zero-loss passthrough is
+# safer than another generation-loss cycle.
+REUSE_MAX_BYTES = 300 * 1024
+
 # Number of images per Gemini batch call — keep small to limit
 # memory per API request and isolate chunk failures.
 BATCH_CHUNK_SIZE = 10
@@ -109,6 +116,22 @@ def process_image(file_data: bytes, content_type: str) -> Tuple[bytes, str]:
     if not detected:
         raise ValueError("Unsupported image format — must be JPEG, PNG, WebP, or HEIC")
     content_type = detected  # Trust magic bytes, not client header
+
+    # Reuse already-optimized upright JPEGs verbatim (zero generation loss).
+    # Re-encoding an image that is already small/compressed — common when a user
+    # feeds an image they have previously exported or optimized — technically
+    # loses a little quality on every pass, which erodes OCR/LLM accuracy. Only
+    # passed through when it is within display size, small, and needs no EXIF
+    # rotation; anything else takes the normal normalize+encode path.
+    if detected == "image/jpeg" and len(file_data) <= REUSE_MAX_BYTES:
+        try:
+            with Image.open(io.BytesIO(file_data)) as img:
+                if img.width <= MAX_DIMENSION and img.height <= MAX_DIMENSION:
+                    orientation = int(img.getexif().get(0x0112, 1) or 1)
+                    if orientation == 1:
+                        return file_data, "image/jpeg"
+        except Exception:
+            pass  # any decode hiccup → fall through to the safe re-encode path
 
     try:
         with _open_and_normalise(file_data, content_type) as img:
