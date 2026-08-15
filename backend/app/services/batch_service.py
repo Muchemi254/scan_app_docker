@@ -173,6 +173,39 @@ async def get_user_batches(user_id: str) -> List[str]:
         return [str(r["id"]) for r in rows]
 
 
+TRANSIENT_ITEM_STATUSES = {"pending", "optimizing", "extracting"}
+
+
+def derive_session_status(batch: dict) -> str:
+    """Session status derived from item states (source of truth after prep).
+
+    A dispatched group finishing must NOT mark the whole session terminal
+    while other groups are still held as `prepared` — otherwise those held
+    groups could never be sent ({groupId} → 'batch already done'). So
+    `prepared` outranks `done` until every held image has been dispatched.
+    """
+    statuses = [i.get("status") for i in (batch.get("items") or [])]
+    if any(s in TRANSIENT_ITEM_STATUSES for s in statuses):
+        return "processing"                # something is in flight
+    if "prepared" in statuses:
+        return "prepared"                  # held work remains — still dispatchable
+    if any(s in ("done", "needs_review", "duplicate") for s in statuses):
+        return "done"                      # everything dispatched, at least one saved
+    if statuses:
+        return "failed"                    # everything failed
+    return batch.get("status") or "prepared"
+
+
+async def _reconcile_session_status(batch: dict) -> None:
+    """Persist the canonical session status if it drifted from item states."""
+    if batch["status"] == "uploading":
+        return
+    derived = derive_session_status(batch)
+    if derived != batch["status"]:
+        await set_batch_status(batch["userId"], batch["batchId"], derived)
+        batch["status"] = derived
+
+
 async def get_batch(user_id: str, batch_id: str) -> Optional[dict]:
     """Load a scan session + items, shaped like the old Redis batch object."""
     pool = await get_pool()
@@ -190,7 +223,7 @@ async def get_batch(user_id: str, batch_id: str) -> Optional[dict]:
     chunks = row["chunks"] or []
     if isinstance(chunks, str):
         chunks = json.loads(chunks)
-    return {
+    result = {
         "batchId": str(row["id"]),
         "userId": str(row["user_id"]),
         "batchTitle": row["title"],
@@ -202,6 +235,8 @@ async def get_batch(user_id: str, batch_id: str) -> Optional[dict]:
         "items": [_row_to_item(r) for r in items],
         "chunks": chunks,
     }
+    await _reconcile_session_status(result)
+    return result
 
 
 async def set_batch_status(user_id: str, batch_id: str, status: str) -> None:

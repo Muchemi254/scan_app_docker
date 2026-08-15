@@ -235,3 +235,85 @@ async def test_held_sessions_list_and_survive(client):
     assert sum(1 for i in again["items"] if i["status"] == "prepared") == 3
 
     await client.delete(f"/api/v1/users/{user_id}/batches/{batch_id}", headers=headers)
+
+
+@pytest.mark.asyncio
+async def test_group_completion_keeps_remaining_groups_dispatchable(client, monkeypatch):
+    """
+    Regression: dispatching one group and finishing it must NOT lock the rest.
+
+    Session status is derived from item states — if held `prepared` items
+    remain, the session stays `prepared` (dispatchable), never `done`.
+    """
+    user_id, headers = await _make_user(client)
+    batch_id, data = await _create_and_prep(client, headers, user_id, "Partial", 55)
+    assert data["prepared"] == 55
+
+    from app.services import batch_service
+
+    calls = []
+    class Recorder:
+        def delay(self, *args, **kwargs):
+            calls.append((args, kwargs))
+    monkeypatch.setattr("app.api.batches.process_batch_task", Recorder())
+
+    # Dispatch group 1 (indices 50..54) only.
+    resp = await client.post(
+        f"/api/v1/users/{user_id}/batches/{batch_id}/dispatch",
+        json={"groups": [1]},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["dispatched"] == 5
+
+    # Simulate the worker: dispatches batch finishes → chunk done all items.
+    await batch_service.set_batch_status(user_id, batch_id, "processing")
+    for idx in range(50, 55):
+        await batch_service.update_item(user_id, batch_id, idx, "done")
+    b = await batch_service.get_batch(user_id, batch_id)
+    assert batch_service.derive_session_status(b) == "prepared"
+
+    # Stored status must reflect the derived one, and held group is dispatchable.
+    batch = (await client.get(f"/api/v1/users/{user_id}/batches/{batch_id}", headers=headers)).json()
+    assert batch["status"] == "prepared", "held items must keep session prepared"
+    assert sum(1 for i in batch["items"] if i["status"] == "prepared") == 50
+
+    resp = await client.post(
+        f"/api/v1/users/{user_id}/batches/{batch_id}/dispatch",
+        json={"groups": [0]},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["dispatched"] == 50
+
+    await client.delete(f"/api/v1/users/{user_id}/batches/{batch_id}", headers=headers)
+
+
+@pytest.mark.asyncio
+async def test_session_done_only_when_all_items_dispatched(client, monkeypatch):
+    """Once no prepared items remain, the session properly goes terminal."""
+    user_id, headers = await _make_user(client)
+    batch_id, _ = await _create_and_prep(client, headers, user_id, "Send all", 5)
+
+    from app.services import batch_service
+
+    calls = []
+    class Recorder:
+        def delay(self, *args, **kwargs):
+            calls.append((args, kwargs))
+    monkeypatch.setattr("app.api.batches.process_batch_task", Recorder())
+
+    resp = await client.post(
+        f"/api/v1/users/{user_id}/batches/{batch_id}/dispatch",
+        json={"all": True},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+
+    for idx in range(5):
+        await batch_service.update_item(user_id, batch_id, idx, "done")
+    batch = (await client.get(f"/api/v1/users/{user_id}/batches/{batch_id}", headers=headers)).json()
+    assert batch["status"] == "done"
+    assert sum(1 for i in batch["items"] if i["status"] == "prepared") == 0
+
+    await client.delete(f"/api/v1/users/{user_id}/batches/{batch_id}", headers=headers)

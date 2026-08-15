@@ -793,14 +793,12 @@ async def _process_batch_sync(user_id: str, batch_id: str, batch_dir: str,
             chunk_size=chunk_size,
         )
 
-        # Final status derived from chunk outcomes — if every chunk failed
-        # (e.g. quota/auth), the batch is 'failed', not 'done'.
+        # Final status derived from ITEM states, not the dispatched subset —
+        # groups still held as `prepared` keep the session dispatchable.
         b = await batch_service.get_batch(user_id, batch_id)
-        if b and (b.get("chunks") or []):
-            final = "done" if any(c["status"] == "done" for c in b["chunks"]) else "failed"
-        else:
-            final = "done"
-        await batch_service.set_batch_status(user_id, batch_id, final)
+        if b:
+            final = batch_service.derive_session_status(b)
+            await batch_service.set_batch_status(user_id, batch_id, final)
         logger.info(f"Batch {batch_id}: all items processed ({final})")
         await _log_batch_failures(user_id, batch_id, batch_title)
 
@@ -863,16 +861,13 @@ async def _retry_item_sync(user_id: str, batch_id: str, batch_dir: str,
             item_update, None, None,   # no chunk-level callbacks for item retry
         )
 
-        # If no item is still in a transient state, flip the batch back to a
-        # terminal status so polling can stop.
+        # Session status is derived from all item states, so remaining
+        # prepared (held) items keep the session dispatchable.
         b = await batch_service.get_batch(user_id, batch_id)
         if b:
-            transient = {"pending", "optimizing", "processing"}
-            if not any(it["status"] in transient for it in b["items"]):
-                any_saved = any(it["status"] in ("done", "needs_review", "duplicate") for it in b["items"])
-                await batch_service.set_batch_status(
-                    user_id, batch_id, "done" if any_saved else "failed"
-                )
+            await batch_service.set_batch_status(
+                user_id, batch_id, batch_service.derive_session_status(b)
+            )
             await _log_batch_failures(user_id, batch_id, batch_title)
     except Exception as e:
         logger.error(f"Retry item {entry.get('index')} of batch {batch_id} failed: {e}")
@@ -919,14 +914,13 @@ async def _retry_chunk_sync(user_id: str, batch_id: str, batch_dir: str,
             item_update, None, chunk_update,
         )
 
-        # If every chunk is now done/failed, flip the batch state
+        # Session status is derived from all item states, so remaining
+        # prepared (held) items keep the session dispatchable.
         b = await batch_service.get_batch(user_id, batch_id)
         if b:
-            statuses = {c["status"] for c in (b.get("chunks") or [])}
-            if statuses and statuses.issubset({"done", "failed"}):
-                # 'done' if anything succeeded, otherwise 'failed'
-                final = "done" if any(c["status"] == "done" for c in b["chunks"]) else "failed"
-                await batch_service.set_batch_status(user_id, batch_id, final)
+            await batch_service.set_batch_status(
+                user_id, batch_id, batch_service.derive_session_status(b)
+            )
             await _log_batch_failures(user_id, batch_id, batch_title)
     except Exception as e:
         logger.error(f"Retry chunk {chunk_index} of batch {batch_id} failed: {e}")
