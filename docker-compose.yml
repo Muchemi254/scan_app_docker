@@ -7,6 +7,13 @@ services:
     container_name: scan-app-redis
     restart: unless-stopped
     command: redis-server --maxmemory ${REDIS_MAXMEMORY:-128mb} --maxmemory-policy ${REDIS_MAXMEMORY_POLICY:-allkeys-lru} --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     networks:
       - data-network
 
@@ -96,9 +103,15 @@ services:
       BACKEND_CORS_ORIGINS: ${BACKEND_CORS_ORIGINS}
       ALLOWED_HOSTS: ${ALLOWED_HOSTS}
 
+      # Apply DB migrations at startup (entrypoint.sh). Defaults on so a fresh
+      # install works with a single `docker compose up -d --build`.
+      RUN_MIGRATIONS: ${RUN_MIGRATIONS:-true}
+
     depends_on:
-      - redis
-      - postgres
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
 
     # Health check
     healthcheck:

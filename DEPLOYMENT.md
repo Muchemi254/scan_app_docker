@@ -70,50 +70,35 @@ The backend **refuses to boot** with `SECRET_KEY=change-me-in-production` or
 `ADMIN_PASSWORD=admin12345` (and compose aborts if any secret var is missing),
 so a lazily copied template fails fast instead of running insecure.
 
-### 3.2 Order matters: infra → migrate → everything
+### 3.2 One command on a fresh machine
+
+Migrations run **automatically** at backend startup (`RUN_MIGRATIONS=true`), so a
+fresh clone needs no manual schema step:
 
 ```bash
-# 3. Start Postgres + Redis first (needed before migrating)
-docker compose up -d postgres redis
-# wait until `docker compose ps` shows postgres healthy (usually a few seconds)
+# 1. Clone
+git clone <your-repo-url> scan_app
+cd scan_app
 
-# 4. Create the database schema BEFORE the backend tries to boot.
-#    The backend aborts on startup if the schema is missing (local auth needs the
-#    `users` table), so never skip this step on a fresh database.
-docker compose run --rm backend alembic upgrade head
+# 2. Env — change ONLY the REQUIRED values
+cp .env.example .env
+nano .env          # SECRET_KEY + ADMIN_PASSWORD (+ GEMINI_API_KEY for AI)
 
-# 5. Build everything and start
+# 3. Build and start everything — the backend auto-migrates on first boot
 docker compose up -d --build
 
-# 6. Verify
+# 4. Verify
 docker compose ps            # all 5 services up, backend healthy
 curl http://localhost:8003/health
 # open http://localhost:8081 in a browser
 ```
+
+The backend waits for Postgres/Redis to be healthy, applies any pending
+`alembic upgrade head`, then starts. `RUN_MIGRATIONS=false` restores the manual
+flow (`docker compose run --rm backend alembic upgrade head`).
 
 Postgres is bound to `127.0.0.1:5432` (host-local only — never published to the
 LAN); the frontend listens on `0.0.0.0:8081`, the API on `0.0.0.0:8003`.
-
-### 3.2 Order matters: infra → migrate → everything
-
-```bash
-# 3. Start Postgres + Redis first (needed before migrating)
-docker compose up -d postgres redis
-# wait until `docker compose ps` shows postgres healthy (usually a few seconds)
-
-# 4. Create the database schema BEFORE the backend tries to boot.
-#    The backend aborts on startup if the schema is missing (local auth needs the
-#    `users` table), so never skip this step on a fresh database.
-docker compose run --rm backend alembic upgrade head
-
-# 5. Build everything and start
-docker compose up -d --build
-
-# 6. Verify
-docker compose ps            # all 5 services up, backend healthy
-curl http://localhost:8003/health
-# open http://localhost:8081 in a browser
-```
 
 If your host already runs Postgres/Redis or uses ports 8081/8003/5432, edit the ports in
 `docker-compose.yml`.
@@ -153,10 +138,10 @@ git pull                                       # or pull the published images
 # Build the changed images (code is baked in — no live-reload in containers)
 docker compose build backend worker frontend
 
-# Apply any new database migrations BEFORE restarting services
-ls backend/alembic/versions/*.py               # new files = new migrations
-docker compose up -d postgres redis            # ensure infra up
-docker compose run --rm backend alembic upgrade head
+# Migrations are applied automatically at backend startup (RUN_MIGRATIONS=true).
+# Only if you disabled that, apply them manually first:
+#   ls backend/alembic/versions/*.py   # new files = new migrations
+#   docker compose run --rm backend alembic upgrade head
 
 # Restart
 docker compose up -d backend worker frontend
@@ -171,7 +156,7 @@ Users on a hosted instance see the new version on their next page load — no ac
 
 | Symptom | Cause / fix |
 |---|---|
-| Backend crash-loops at boot | Schema missing → run `alembic upgrade head` (Section 3.2). |
+| Backend crash-loops at boot | Schema missing (e.g. `relation "users" does not exist`) → auto-migration runs at startup; if disabled, run `docker compose run --rm backend alembic upgrade head`. |
 | `ModuleNotFoundError: name 'asyncio'` in worker | Worker running a stale image → rebuild (`docker compose build worker`). |
 | UI features unchanged after a code change | Nginx serves the built bundle → rebuild `frontend`. |
 | Port already in use | Edit compose ports; prefer binding 5432 to 127.0.0.1. |
@@ -184,7 +169,7 @@ Users on a hosted instance see the new version on their next page load — no ac
 
 - Change `ADMIN_PASSWORD` and `DB_PASSWORD`/`REDIS_PASSWORD` defaults.
 - Put a real `SECRET_KEY` in `.env`.
-- Bind Postgres to `127.0.0.1:5432` (it currently publishes on `0.0.0.0`).
+- Postgres is already bound to `127.0.0.1:5432` (host-local only).
 - Put Nginx/Caddy behind **TLS** (HTTPS), proxy `:8081`/`:8003`, and only expose the frontend port.
 - Restrict the SQL `users`/`user_ai_settings` access and keep RLS policies (enabled at pool init).
 - Set `ENABLE_DOCS=false` in `.env` for production.
