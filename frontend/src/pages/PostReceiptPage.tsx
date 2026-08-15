@@ -20,7 +20,7 @@ const PostReceiptPage = ({ userId }: { userId: string | null }) => {
     setLoading(true);
     try {
       const created = await receiptApi.create(
-        { ...data, status: 'processed' },
+        { ...data, status: 'needs_review' },
         imageFile || undefined
       );
       add(created);

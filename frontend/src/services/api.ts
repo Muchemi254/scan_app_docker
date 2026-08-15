@@ -10,7 +10,8 @@
  *   const list = await receiptApi.list();
  */
 
-import { getAuthHeader as getToken, getUserId } from './auth';
+import { getAuthHeader as getToken } from './auth';
+import { useScopeStore } from '../stores/scopeStore';
 
 // Use a relative path so the app works on any device/IP on the network.
 // Nginx proxies /api/* → backend container. Absolute URL only applies
@@ -27,15 +28,25 @@ function getAuthHeader(): string {
 }
 
 /**
+ * The user whose workspace every request should target.
+ * Normal users target their own uid; an admin who selected a user scope
+ * (see Layout scope selector) targets that user instead.
+ */
+function getScopeUid(): string {
+  return useScopeStore.getState().activeUid || getUserId();
+}
+
+/**
  * Generic API request handler
  */
 async function apiRequest<T>(
   method: string,
   endpoint: string,
-  data?: any
+  data?: any,
+  ownerUid?: string
 ): Promise<T> {
   const authorization = await getAuthHeader();
-  const userId = getUserId();
+  const userId = ownerUid || getScopeUid();
   const url = `${API_BASE_URL}/users/${userId}${endpoint}`;
 
   const options: RequestInit = {
@@ -79,7 +90,7 @@ async function apiUpload<T>(
   data?: any
 ): Promise<T> {
   const authorization = await getAuthHeader();
-  const userId = getUserId();
+  const userId = getScopeUid();
   const url = `${API_BASE_URL}/users/${userId}${endpoint}`;
 
   const formData = new FormData();
@@ -138,7 +149,7 @@ export const receiptApi = {
    */
   async batchExtract(files: File[]): Promise<{ task_id: string }> {
     const authorization = await getAuthHeader();
-    const userId = getUserId();
+    const userId = getScopeUid();
     const url = `${API_BASE_URL}/users/${userId}/receipts/batch-extract`;
 
     const formData = new FormData();
@@ -255,6 +266,45 @@ export const receiptApi = {
     return apiRequest('GET', `/receipts/${receiptId}/audit`);
   },
 
+  // ── Review → approval workflow ──────────────────────────────────────────
+  // ownerUid is explicit so admins acting on another user's receipt (global
+  // Approvals page) work independently of the currently selected scope.
+
+  /** needs_review → pending_approval (owner or admin). */
+  async submitForApproval(ownerUid: string, receiptId: string): Promise<any> {
+    return apiRequest('POST', `/receipts/${receiptId}/submit`, undefined, ownerUid);
+  },
+
+  /** pending_approval → needs_review (owner or admin). */
+  async recall(ownerUid: string, receiptId: string): Promise<any> {
+    return apiRequest('POST', `/receipts/${receiptId}/recall`, undefined, ownerUid);
+  },
+
+  /** pending_approval → processed (admin only). */
+  async approve(ownerUid: string, receiptId: string): Promise<any> {
+    return apiRequest('POST', `/receipts/${receiptId}/approve`, undefined, ownerUid);
+  },
+
+  /** pending_approval → needs_review (admin only), with optional note. */
+  async reject(ownerUid: string, receiptId: string, note?: string): Promise<any> {
+    return apiRequest('POST', `/receipts/${receiptId}/reject`, note ? { note } : undefined, ownerUid);
+  },
+
+  /** Cross-tenant list of every pending-approval receipt (admin only). */
+  async listPendingApproval(): Promise<any[]> {
+    const authorization = await getAuthHeader();
+    const response = await fetch(`${API_BASE_URL}/admin/receipts/pending-approval`, {
+      method: 'GET',
+      headers: { 'Authorization': authorization, 'Content-Type': 'application/json' },
+    });
+    if (!response.ok) {
+      let detail = `API error: ${response.status}`;
+      try { const error = await response.json(); detail = error.detail || detail; } catch {}
+      throw new Error(detail);
+    }
+    return response.json();
+  },
+
   /**
    * Generate spending summary with AI analysis
    */
@@ -363,7 +413,7 @@ export const batchApi = {
     onProgress?: (percent: number) => void
   ): Promise<any> {
     const authorization = await getAuthHeader();
-    const userId = getUserId();
+    const userId = getScopeUid();
     const url = `${API_BASE_URL}/users/${userId}/batches/${batchId}/process`;
 
     const form = new FormData();
@@ -590,7 +640,7 @@ export const exportApi = {
     columns?: string[];
   }): Promise<void> {
     const authorization = await getAuthHeader();
-    const userId = getUserId();
+    const userId = getScopeUid();
     const url = `${API_BASE_URL}/users/${userId}/receipts/export`;
 
     const response = await fetch(url, {

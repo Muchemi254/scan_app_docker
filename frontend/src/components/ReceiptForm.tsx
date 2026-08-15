@@ -27,7 +27,7 @@ const ReceiptForm = ({
     kraPin: initialData?.kraPin || '',
     buyerKraPin: initialData?.buyerKraPin || '',
     cuInvoice: initialData?.cuInvoice || '',
-    status: initialData?.status || 'processed',
+    status: initialData?.status || 'needs_review',
     items: initialData?.items?.length
       ? initialData.items.map((item: any) => ({
           ...item,
@@ -75,7 +75,7 @@ const ReceiptForm = ({
         kraPin: initialData.kraPin || '',
         buyerKraPin: initialData.buyerKraPin || '',
         cuInvoice: initialData.cuInvoice || '',
-        status: initialData.status || 'processed',
+        status: initialData.status || 'needs_review',
         items: initialData.items?.length
           ? initialData.items.map((item: any) => ({
               ...item,
@@ -616,7 +616,7 @@ const ReceiptForm = ({
       </div>
 
       {/* Submit buttons */}
-      <div className="flex gap-2 mt-4">
+      <div className="flex flex-wrap gap-2 mt-4">
         <button
           type="submit"
           disabled={loading}
@@ -625,15 +625,27 @@ const ReceiptForm = ({
           {loading ? 'Saving...' : 'Save Changes'}
         </button>
 
+        {formData.status === 'needs_review' && (
+          <button
+            type="button"
+            disabled={loading}
+            onClick={(e) => handleSubmit(e, 'pending_approval')}
+            className="px-4 py-1.5 bg-indigo-600 text-white rounded text-sm hover:bg-indigo-700 disabled:bg-gray-400 font-medium transition-colors"
+            title="Submit to the admin for approval"
+          >
+            {loading ? 'Saving...' : 'Submit for Approval'}
+          </button>
+        )}
+
         {formData.status === 'needs_review' && isAdmin && (
           <button
             type="button"
             disabled={loading}
-            onClick={(e) => handleSubmit(e, 'super_processed')}
-            className="px-4 py-1.5 bg-indigo-600 text-white rounded text-sm hover:bg-indigo-700 disabled:bg-gray-400 font-medium transition-colors"
-            title="Admin only"
+            onClick={(e) => handleSubmit(e, 'processed')}
+            className="px-4 py-1.5 bg-green-600 text-white rounded text-sm hover:bg-green-700 disabled:bg-gray-400 font-medium transition-colors"
+            title="Admin only — finalize directly without the approval step"
           >
-            {loading ? 'Saving...' : 'Save as Super Processed'}
+            {loading ? 'Saving...' : 'Save as Processed'}
           </button>
         )}
       </div>

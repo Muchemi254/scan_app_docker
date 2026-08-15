@@ -119,9 +119,9 @@ class DashboardService:
             total_spent += _parse_amount(r.get("totalAmount"))
             largest = max(largest, _parse_amount(r.get("totalAmount")))
 
-            if r.get("status") in ("processed", "super_processed"):
+            if r.get("status") == "processed":
                 processed += 1
-            elif r.get("status") == "needs_review":
+            elif r.get("status") in ("needs_review", "pending_approval"):
                 review += 1
 
             sup = (r.get("supplier") or "").strip()

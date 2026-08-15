@@ -1,11 +1,13 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../stores/authStore';
+import { useScopeStore } from '../stores/scopeStore';
+import { adminListUsers } from '../services/auth';
 import {
   Home, Camera, FileText, ClipboardCheck, Download,
   LogOut, Menu, X, ChevronDown, User, Settings,
   Images, Sparkles, Search, ListChecks, Bell,
-  Shield, PlusCircle,
+  Shield, PlusCircle, CheckCheck, Users,
 } from 'lucide-react';
 import { scanErrorApi } from '../services/api';
 
@@ -65,6 +67,22 @@ const Layout = () => {
 
   const userEmail = user?.email || 'User';
   const userName = userEmail.split('@')[0];
+
+  const setActiveUid = useScopeStore((s) => s.setActiveUid);
+  const activeUid = useScopeStore((s) => s.activeUid);
+  const [scopeUsers, setScopeUsers] = useState<any[]>([]);
+
+  // Load the user list for the admin scope selector.
+  useEffect(() => {
+    if (!user?.is_admin) {
+      setScopeUsers([]);
+      return;
+    }
+    adminListUsers()
+      .then(setScopeUsers)
+      .catch(() => setScopeUsers([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.is_admin]);
 
   const receiptsItems = [
     { path: '/receipts', label: 'All Receipts', icon: FileText },
@@ -154,6 +172,34 @@ const Layout = () => {
                     <Shield className="h-4 w-4" /><span>Admin</span>
                   </Link>
                 )}
+
+                {user?.is_admin && (
+                  <Link to="/approvals"
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                      isActive('/approvals') ? 'bg-blue-100 text-blue-700 font-medium' : 'text-gray-600 hover:bg-gray-100'
+                    }`}>
+                    <CheckCheck className="h-4 w-4" /><span>Approvals</span>
+                  </Link>
+                )}
+
+                {user?.is_admin && (
+                  <div className="flex items-center gap-1.5 ml-1 pl-2 border-l border-gray-200">
+                    <Users className="h-4 w-4 text-gray-400" />
+                    <select
+                      value={activeUid || user.uid}
+                      onChange={(e) => setActiveUid(e.target.value === user.uid ? null : e.target.value)}
+                      title="Admin: choose whose workspace to view/edit"
+                      className="max-w-[150px] px-2 py-1 text-xs border rounded bg-white text-gray-700"
+                    >
+                      <option value={user.uid}>My account</option>
+                      {scopeUsers
+                        .filter((u: any) => u.uid !== user.uid)
+                        .map((u: any) => (
+                          <option key={u.uid} value={u.uid}>{u.email}</option>
+                        ))}
+                    </select>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -240,6 +286,12 @@ const Layout = () => {
               <Link to="/admin" onClick={() => setMobileMenuOpen(false)}
                 className={`flex items-center gap-3 px-4 py-2.5 rounded-lg ${isExact('/admin') ? 'bg-blue-100 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-100'}`}>
                 <Shield className="h-5 w-5" /><span>Admin</span>
+              </Link>
+            )}
+            {user?.is_admin && (
+              <Link to="/approvals" onClick={() => setMobileMenuOpen(false)}
+                className={`flex items-center gap-3 px-4 py-2.5 rounded-lg ${isExact('/approvals') ? 'bg-blue-100 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-100'}`}>
+                <CheckCheck className="h-5 w-5" /><span>Approvals</span>
               </Link>
             )}
             <button onClick={() => { setMobileMenuOpen(false); handleLogout(); }}

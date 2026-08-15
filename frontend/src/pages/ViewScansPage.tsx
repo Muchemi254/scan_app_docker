@@ -20,7 +20,7 @@ const isComplete = (receipt: any) =>
   !isMissing(receipt.totalAmount) &&
   !isMissing(receipt.supplier) &&
   !isMissing(receipt.category) &&
-  (receipt.status === 'processed' || receipt.status === 'super_processed');
+  receipt.status === 'processed';
 
 const ViewScansPage = ({ userId }: { userId: string | null }) => {
   const navigate = useNavigate();

@@ -23,11 +23,17 @@ from app.schemas.receipt import (
     ReceiptCreate, Receipt, ReceiptList, ReceiptGroup, ReceiptGroupList,
     ReceiptUpdate, ReceiptStatus,
     DuplicateCheckRequest, DuplicateCheckResponse, DuplicateMatch,
-    AuditEntry, AuditList, SpendingSummaryRequest, SpendingSummaryResponse,
+    AuditEntry, AuditList, RejectRequest, SpendingSummaryRequest, SpendingSummaryResponse,
     CategoryBreakdown, SupplierBreakdown, MonthlyTrend,
 )
 from app.services.data_adapter import DataService
 from app.services import auth_service
+from app.services.receipt_workflow_service import (
+    submit as workflow_submit,
+    recall as workflow_recall,
+    approve as workflow_approve,
+    reject as workflow_reject,
+)
 from app.services.database_service import save_image, save_thumbnail, delete_receipt_images
 from app.services.firebase_service import StorageService
 from app.services.gemini import extract_receipt_data, generate_ai_summary
@@ -45,27 +51,28 @@ router = APIRouter(
 )
 
 
-def verify_user_access(user_id: str, current_user_id: str):
+async def verify_user_access(user_id: str, current_user_id: str):
     """
     Verify that current user can access user_id's data.
 
-    Multi-tenant security: users can only access their own data.
+    Multi-tenant security: users can only access their own data. Administrators
+    may impersonate another user's scope — switching the RLS context to the
+    target tenant — so they can supervise that user's work.
     """
-    if user_id != current_user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied: cannot access other user's data"
-        )
+    if user_id == current_user_id:
+        return user_id
 
-
-async def _require_super_processed_rights(current_user_id: str) -> None:
-    """Guard the admin-only 'super_processed' status."""
+    # Cross-tenant access is reserved for admins (impersonation).
     user = await auth_service.get_user_by_uid(current_user_id)
-    if not user or not user["is_admin"]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin privileges required to mark a receipt as super processed",
-        )
+    if user and user["is_admin"]:
+        from app.core.database import set_current_user_id
+        set_current_user_id(user_id)  # adopt the target tenant as RLS scope
+        return user_id
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Access denied: cannot access other user's data",
+    )
 
 
 # ============================================================================
@@ -85,7 +92,7 @@ async def batch_extract_receipts(
     """
     Queue batch receipt extraction asynchronously.
     """
-    verify_user_access(userId, current_user_id)
+    await verify_user_access(userId, current_user_id)
 
     # 1. Create task
     task_id = await TaskService.create_task(
@@ -148,7 +155,7 @@ async def extract_receipt_from_image(
         ReceiptCreate schema with extracted data
     """
     # Verify access
-    verify_user_access(userId, current_user_id)
+    await verify_user_access(userId, current_user_id)
 
     try:
         # Validate file type (HEIC/HEIF accepted — converted server-side)
@@ -202,15 +209,22 @@ async def create_receipt(
     Create a new receipt.
     receipt_data: JSON-encoded ReceiptCreate (sent as a single form field).
     """
-    verify_user_access(userId, current_user_id)
+    await verify_user_access(userId, current_user_id)
 
     try:
         parsed = ReceiptCreate.model_validate(json.loads(receipt_data))
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Invalid receipt_data: {e}")
 
-    if parsed.status == ReceiptStatus.SUPER_PROCESSED:
-        await _require_super_processed_rights(current_user_id)
+    # Controlled flow: only an admin may create an already-finalized receipt.
+    # Non-admins must route through needs_review → submit → approval.
+    if parsed.status == ReceiptStatus.PROCESSED:
+        user = await auth_service.get_user_by_uid(current_user_id)
+        if not (user and user["is_admin"]):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only admins may finalize a receipt without approval",
+            )
 
     try:
         # Pre-generate receipt ID
@@ -299,7 +313,7 @@ async def list_receipts(
     Returns:
         Paginated receipt list
     """
-    verify_user_access(userId, current_user_id)
+    await verify_user_access(userId, current_user_id)
 
     try:
         receipts, total = await DataService.list_receipts(
@@ -337,7 +351,7 @@ async def list_receipt_groups(
     Each group includes a count, thumbnail URL, total amount, and latest date.
     Only receipts with images are included.
     """
-    verify_user_access(userId, current_user_id)
+    await verify_user_access(userId, current_user_id)
     try:
         groups = await DataService.get_receipt_groups(userId)
         return ReceiptGroupList(
@@ -364,7 +378,7 @@ async def search_receipts_endpoint(
     batch title, category, date, amount, or item names.
     Returns ranked results with relevance scores.
     """
-    verify_user_access(userId, current_user_id)
+    await verify_user_access(userId, current_user_id)
     try:
         result = await DataService.search_receipts_fulltext(userId, q, limit, offset)
         return result
@@ -384,7 +398,7 @@ async def get_receipt(
     current_user_id: str = Depends(get_current_user_id),
 ):
     """Get a single receipt by ID."""
-    verify_user_access(userId, current_user_id)
+    await verify_user_access(userId, current_user_id)
 
     try:
         receipt = await DataService.get_receipt(userId, receiptId)
@@ -424,15 +438,12 @@ async def update_receipt(
     current_user_id: str = Depends(get_current_user_id),
 ):
     """Update a receipt. receipt_data: JSON-encoded ReceiptUpdate form field."""
-    verify_user_access(userId, current_user_id)
+    await verify_user_access(userId, current_user_id)
 
     try:
         updates = ReceiptUpdate.model_validate(json.loads(receipt_data))
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Invalid receipt_data: {e}")
-
-    if updates.status == ReceiptStatus.SUPER_PROCESSED:
-        await _require_super_processed_rights(current_user_id)
 
     try:
         # Get current receipt
@@ -441,6 +452,13 @@ async def update_receipt(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Receipt not found"
+            )
+
+        # Enforce the controlled status pipeline when a status change is sent.
+        if "status" in updates.model_fields_set and updates.status is not None:
+            from app.services.receipt_workflow_service import assert_status_transition
+            await assert_status_transition(
+                current.get("status"), updates.status.value, current_user_id, userId
             )
 
         # Upload new image if provided
@@ -492,6 +510,75 @@ async def update_receipt(
         )
 
 
+# ============================================================================
+# REVIEW → APPROVAL WORKFLOW
+# ============================================================================
+
+@router.post(
+    "/{userId}/receipts/{receiptId}/submit",
+    response_model=Receipt,
+    summary="Submit a receipt for approval (needs_review → pending_approval)"
+)
+async def submit_receipt(
+    userId: str,
+    receiptId: str,
+    current_user_id: str = Depends(get_current_user_id),
+):
+    """Owner (or admin) submits a needs_review receipt for admin approval."""
+    await verify_user_access(userId, current_user_id)
+    updated = await workflow_submit(userId, receiptId, current_user_id)
+    return Receipt(**updated)
+
+
+@router.post(
+    "/{userId}/receipts/{receiptId}/recall",
+    response_model=Receipt,
+    summary="Recall a submitted receipt (pending_approval → needs_review)"
+)
+async def recall_receipt(
+    userId: str,
+    receiptId: str,
+    current_user_id: str = Depends(get_current_user_id),
+):
+    """Owner (or admin) pulls a pending_approval receipt back to needs_review."""
+    await verify_user_access(userId, current_user_id)
+    updated = await workflow_recall(userId, receiptId, current_user_id)
+    return Receipt(**updated)
+
+
+@router.post(
+    "/{userId}/receipts/{receiptId}/approve",
+    response_model=Receipt,
+    summary="Admin approves a receipt (pending_approval → processed)"
+)
+async def approve_receipt(
+    userId: str,
+    receiptId: str,
+    current_user_id: str = Depends(get_current_user_id),
+):
+    """Admin approves a pending_approval receipt into the processed state."""
+    await verify_user_access(userId, current_user_id)
+    updated = await workflow_approve(userId, receiptId, current_user_id)
+    return Receipt(**updated)
+
+
+@router.post(
+    "/{userId}/receipts/{receiptId}/reject",
+    response_model=Receipt,
+    summary="Admin rejects a receipt back to review (pending_approval → needs_review)"
+)
+async def reject_receipt(
+    userId: str,
+    receiptId: str,
+    body: RejectRequest,
+    current_user_id: str = Depends(get_current_user_id),
+):
+    """Admin sends a pending_approval receipt back for rework, optionally with a note."""
+    await verify_user_access(userId, current_user_id)
+    updated = await workflow_reject(userId, receiptId, current_user_id, note=body.note)
+    return Receipt(**updated)
+
+
 @router.delete(
     "/{userId}/receipts/{receiptId}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -503,7 +590,7 @@ async def delete_receipt(
     current_user_id: str = Depends(get_current_user_id),
 ):
     """Delete a receipt."""
-    verify_user_access(userId, current_user_id)
+    await verify_user_access(userId, current_user_id)
 
     try:
         # Get receipt to delete image
@@ -559,7 +646,7 @@ async def generate_summary(
     body: SpendingSummaryRequest,
     current_user_id: str = Depends(get_current_user_id),
 ):
-    verify_user_access(userId, current_user_id)
+    await verify_user_access(userId, current_user_id)
     try:
         receipts, _ = await DataService.list_receipts(
             userId, skip=0, limit=5000,
@@ -674,7 +761,7 @@ async def check_duplicate(
     body: DuplicateCheckRequest,
     current_user_id: str = Depends(get_current_user_id),
 ):
-    verify_user_access(userId, current_user_id)
+    await verify_user_access(userId, current_user_id)
     try:
         matches = await DataService.check_duplicate(
             userId,
@@ -714,7 +801,7 @@ async def get_audit_trail(
     receiptId: str,
     current_user_id: str = Depends(get_current_user_id),
 ):
-    verify_user_access(userId, current_user_id)
+    await verify_user_access(userId, current_user_id)
     try:
         entries = await AuditService.get_audit_trail(userId, receiptId)
         audit_items = [
@@ -725,6 +812,7 @@ async def get_audit_trail(
                 changed_by=e.get("changed_by", ""),
                 timestamp=e["timestamp"],
                 changes=e.get("changes", []),
+                note=e.get("note"),
             )
             for e in entries
         ]

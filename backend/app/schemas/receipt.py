@@ -11,10 +11,10 @@ from enum import Enum
 
 
 class ReceiptStatus(str, Enum):
-    """Receipt processing status"""
+    """Receipt processing status (controlled review → approval pipeline)"""
     PROCESSED = "processed"
     NEEDS_REVIEW = "needs_review"
-    SUPER_PROCESSED = "super_processed"
+    PENDING_APPROVAL = "pending_approval"
 
 
 class ReceiptItemBase(BaseModel):
@@ -55,7 +55,7 @@ class ReceiptBase(BaseModel):
 class ReceiptCreate(ReceiptBase):
     """Receipt creation schema"""
     imageUrl: Optional[str] = Field(None, description="Image URL (set by backend)")
-    status: Optional[ReceiptStatus] = Field(default=ReceiptStatus.PROCESSED)
+    status: Optional[ReceiptStatus] = Field(default=ReceiptStatus.NEEDS_REVIEW)
 
 
 class ReceiptUpdate(BaseModel):
@@ -141,6 +141,10 @@ class AuditAction(str, Enum):
     CREATED = "created"
     UPDATED = "updated"
     DELETED = "deleted"
+    SUBMITTED = "submitted"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    RECALLED = "recalled"
 
 
 class AuditFieldChange(BaseModel):
@@ -156,6 +160,12 @@ class AuditEntry(BaseModel):
     changed_by: str
     timestamp: datetime
     changes: List[AuditFieldChange] = []
+    note: Optional[str] = None
+
+
+class RejectRequest(BaseModel):
+    """Body for the admin reject action on a pending-approval receipt."""
+    note: Optional[str] = Field(None, description="Optional note returned to the submitter on rejection")
 
 
 class AuditList(BaseModel):

@@ -1,6 +1,7 @@
 import { useEffect, useState, lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from './stores/authStore';
+import { useScopeStore } from './stores/scopeStore';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { TaskProvider } from './contexts/TaskContext';
 import { ApiConfigProvider } from './contexts/ApiConfigContext';
@@ -25,6 +26,7 @@ const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 const PostReceiptPage = lazy(() => import('./pages/PostReceiptPage'));
 const NotificationsPage = lazy(() => import('./pages/NotificationsPage'));
 const AdminPage = lazy(() => import('./pages/AdminPage'));
+const ApprovalsPage = lazy(() => import('./pages/ApprovalsPage'));
 
 import Layout from './components/Layout';
 import { ScannerProvider } from './contexts/ScannerContext';
@@ -56,12 +58,16 @@ const AppContent = () => {
   const user = useAuthStore(s => s.user);
   const status = useAuthStore(s => s.status);
   const restore = useAuthStore(s => s.restore);
+  const activeScopeUid = useScopeStore(s => s.activeUid);
 
   useEffect(() => {
     restore();
   }, [restore]);
 
-  const userId = user?.uid ?? null;
+  // Pages operate on the active user scope: an admin who selected a different
+  // user in the Layout scope selector works inside that user's workspace.
+  // For normal users this is their own uid.
+  const userId = (activeScopeUid ?? user?.uid) ?? null;
   const authLoading = status === 'loading';
 
   return (
@@ -224,6 +230,16 @@ const AppContent = () => {
                   element={
                     <PrivateRoute userId={userId} authLoading={authLoading}>
                       <AdminPage userId={userId} />
+                    </PrivateRoute>
+                  }
+                />
+
+                {/* Approvals — global cross-user approval queue (admin only) */}
+                <Route
+                  path="/approvals"
+                  element={
+                    <PrivateRoute userId={userId} authLoading={authLoading}>
+                      <ApprovalsPage />
                     </PrivateRoute>
                   }
                 />

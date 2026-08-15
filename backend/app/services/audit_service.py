@@ -90,6 +90,16 @@ class AuditService:
                 changes = r["changes"]
                 if isinstance(changes, str):
                     changes = json.loads(changes) if changes else []
+                changes = changes or []
+                note = None
+                # Extract a human note (e.g. admin rejection reason) out of the
+                # jsonb changes blob; it's stored as field="note".
+                filtered = []
+                for c in changes:
+                    if isinstance(c, dict) and c.get("field") == "note":
+                        note = c.get("new_value")
+                    else:
+                        filtered.append(c)
                 results.append({
                     "id": str(r["id"]),
                     "receipt_id": str(r["receipt_id"]),
@@ -97,7 +107,8 @@ class AuditService:
                     "action": r["action"],
                     "changed_by": r["changed_by"],
                     "timestamp": r["timestamp"],
-                    "changes": changes or [],
+                    "changes": filtered,
+                    "note": note,
                 })
             return results
 

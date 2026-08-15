@@ -7,6 +7,7 @@ import AuditTrail from './AuditTrail';
 import type { ReceiptData } from '../types/gemini';
 import ImageViewer from './ImageViewer';
 import { parseCurrencyToNumber } from '../utils/helpers';
+import { receiptStatusLabel, receiptStatusClass } from '../utils/receiptStatus';
 
 const ReviewPanel = ({
   userId,
@@ -26,6 +27,7 @@ const ReviewPanel = ({
   const { upsert, remove } = useReceiptStore();
   const [editing, setEditing] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
   const [newImage, setNewImage] = useState<File | null>(null);
   const [showUnsavedModal, setShowUnsavedModal] = useState(false);
   const [pendingId, setPendingId] = useState<string | null>(null);
@@ -99,6 +101,38 @@ const ReviewPanel = ({
     }
   };
 
+  // ── Review → approval workflow actions (pending_approval items) ─────────
+  const runWorkflowAction = async (fn: () => Promise<any>, success?: string) => {
+    if (!receipt.id) return;
+    try {
+      setActionLoading(true);
+      const updated = await fn();
+      upsert(updated);
+      if (success) alert(success);
+      onSaved?.(updated);
+    } catch (error) {
+      console.error('Workflow action failed', error);
+      alert(error instanceof Error ? error.message : 'Action failed');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleRecall = () =>
+    runWorkflowAction(() => receiptApi.recall(userId, receipt.id!));
+
+  const handleApprove = () =>
+    runWorkflowAction(() => receiptApi.approve(userId, receipt.id!), 'Receipt approved.');
+
+  const handleReject = () => {
+    const note = window.prompt('Reason for rejection (optional):', '') ?? null;
+    if (note === undefined) return; // cancelled
+    return runWorkflowAction(
+      () => receiptApi.reject(userId, receipt.id!, note || undefined),
+      'Receipt rejected.'
+    );
+  };
+
   const imageUrl = newImage ? URL.createObjectURL(newImage) : receipt.imageUrl;
 
   return (
@@ -131,10 +165,40 @@ const ReviewPanel = ({
         <h2 className="font-semibold text-sm sm:text-base truncate text-gray-800">
           {receipt.supplier || 'Receipt'}
         </h2>
-        <div className="flex gap-2 flex-shrink-0">
+        <div className="flex gap-2 flex-shrink-0 flex-wrap justify-end">
+          {!editing && receipt.status === 'pending_approval' && (
+            <>
+              <button
+                onClick={handleRecall}
+                disabled={actionLoading}
+                className="px-3 py-1.5 text-xs sm:text-sm rounded font-medium bg-gray-600 text-white hover:bg-gray-700 disabled:opacity-50"
+                title={isAdmin ? 'Return to needs-review' : 'Withdraw your submission for editing'}
+              >
+                {actionLoading ? '…' : 'Recall'}
+              </button>
+              {isAdmin && (
+                <>
+                  <button
+                    onClick={handleReject}
+                    disabled={actionLoading}
+                    className="px-3 py-1.5 text-xs sm:text-sm rounded font-medium bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50"
+                  >
+                    {actionLoading ? '…' : 'Reject'}
+                  </button>
+                  <button
+                    onClick={handleApprove}
+                    disabled={actionLoading}
+                    className="px-3 py-1.5 text-xs sm:text-sm rounded font-medium bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
+                  >
+                    {actionLoading ? '…' : 'Approve'}
+                  </button>
+                </>
+              )}
+            </>
+          )}
           <button
             onClick={() => setEditing(prev => !prev)}
-            disabled={loading}
+            disabled={loading || actionLoading}
             className={`px-3 py-1.5 text-xs sm:text-sm rounded font-medium transition-colors disabled:opacity-50 ${
               editing
                 ? 'bg-gray-200 text-gray-700 hover:bg-gray-300'
@@ -145,7 +209,7 @@ const ReviewPanel = ({
           </button>
           <button
             onClick={handleDelete}
-            disabled={loading}
+            disabled={loading || actionLoading}
             className="px-3 py-1.5 text-xs sm:text-sm rounded font-medium bg-red-500 text-white hover:bg-red-600 transition-colors disabled:opacity-50"
           >
             {loading && !editing ? '…' : 'Delete'}
@@ -195,7 +259,7 @@ const ReviewPanel = ({
                 ['Tax', receipt.taxAmount],
                 ['Date', receipt.receiptDate],
                 ['Category', receipt.category],
-                ['Status', receipt.status],
+                ['Status', receiptStatusLabel(receipt.status)],
                 ['Invoice #', receipt.invoiceNumber],
                 ['KRA PIN', receipt.kraPin],
                 ['CU Invoice', receipt.cuInvoice],
