@@ -317,3 +317,65 @@ async def test_session_done_only_when_all_items_dispatched(client, monkeypatch):
     assert sum(1 for i in batch["items"] if i["status"] == "prepared") == 0
 
     await client.delete(f"/api/v1/users/{user_id}/batches/{batch_id}", headers=headers)
+
+
+@pytest.mark.asyncio
+async def test_stuck_detector_preserves_held_prepared_items(client):
+    """
+    The stuck-detector must only fail in-flight items and must NOT destroy
+    held `prepared` groups — those were never dispatched and stay sendable.
+    """
+    user_id, headers = await _make_user(client)
+    batch_id, data = await _create_and_prep(client, headers, user_id, "Stuck", 55)
+    assert data["prepared"] == 55
+
+    from app.services import batch_service
+    from app.core.database import get_pool
+
+    # Simulate a crashed dispatch: session processing, subset in-flight, held
+    # prepared items remain, and the session timestamp is stale (>5 min).
+    await batch_service.set_batch_status(user_id, batch_id, "processing")
+    for idx in range(50, 55):
+        await batch_service.update_item(user_id, batch_id, idx, "pending")
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE scan_sessions SET updated_at = now() - interval '10 minutes' WHERE id = $1",
+            batch_id,
+        )
+        await conn.execute(
+            "UPDATE scan_session_items SET updated_at = now() - interval '10 minutes' "
+            "WHERE session_id = $1",
+            batch_id,
+        )
+
+    batch = (await client.get(f"/api/v1/users/{user_id}/batches/{batch_id}", headers=headers)).json()
+    held = [i for i in batch["items"] if i["status"] == "prepared"]
+    failed = [i for i in batch["items"] if i["status"] == "failed"]
+    assert len(held) == 50, "held prepared items must survive a stuck dispatch"
+    assert sorted(i["index"] for i in failed) == [50, 51, 52, 53, 54]
+    assert batch["status"] == "prepared", "session must stay dispatchable while held items remain"
+
+    # And the held group can still be dispatched.
+    await client.delete(f"/api/v1/users/{user_id}/batches/{batch_id}", headers=headers)
+
+
+@pytest.mark.asyncio
+async def test_slow_but_alive_batch_is_not_judged_stuck(client, monkeypatch):
+    """Item-level activity keeps a long-running batch alive (no false stuck)."""
+    user_id, headers = await _make_user(client)
+    batch_id, _ = await _create_and_prep(client, headers, user_id, "Slow", 5)
+
+    from app.services import batch_service
+
+    await batch_service.set_batch_status(user_id, batch_id, "processing")
+    # Items keep progressing; session timestamp itself is stale but items are
+    # recent — the batch must NOT be marked stuck.
+    for idx in range(5):
+        await batch_service.update_item(user_id, batch_id, idx, "optimizing")
+
+    batch = (await client.get(f"/api/v1/users/{user_id}/batches/{batch_id}", headers=headers)).json()
+    assert batch["status"] == "processing", "recent item progress must prevent stuck detection"
+    assert not any(i["status"] == "failed" for i in batch["items"])
+
+    await client.delete(f"/api/v1/users/{user_id}/batches/{batch_id}", headers=headers)

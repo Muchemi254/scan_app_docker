@@ -127,6 +127,7 @@ def _row_to_item(r) -> dict:
         "message": r["message"],
         "errorCode": r["error_code"],
         "groupIndex": r["group_index"],
+        "updatedAt": _epoch(r["updated_at"]),
     }
 
 

@@ -56,19 +56,32 @@ async def _load_batch(user_id: str, batch_id: str) -> Optional[dict]:
     last_activity = batch.get("lastActivity", created_at)
     now_ts = datetime.now(timezone.utc).timestamp()
 
+    # Item-level progress keeps the session alive: the worker only bumps
+    # session `updated_at` on set_batch_status/chunk updates, so a long
+    # Gemini run must still count item updated_at as recent activity —
+    # otherwise a slow-but-alive batch would be judged "stuck".
+    for it in batch.get("items") or []:
+        it_ts = it.get("updatedAt") or 0
+        if it_ts > last_activity:
+            last_activity = it_ts
+
     # If no activity for 5 minutes, it's stuck
     is_stuck = batch["status"] in ("uploading", "processing") and (now_ts - last_activity > 300)
 
     if is_stuck:
-        # Mark pending/processing items as failed
+        # ONLY in-flight items are stuck. Held `prepared` items were never
+        # dispatched — leave them alone so the session stays dispatchable
+        # and can still be sent later.
         msg = "Task timed out or was interrupted — please re-scan"
         for item in batch["items"]:
-            if item["status"] in ("pending", "processing", "optimizing", "prepared"):
+            if item["status"] in ("pending", "processing", "optimizing", "extracting"):
                 await batch_service.update_item(
                     user_id, batch_id, item["index"], "failed",
                     message=msg, stage="done", error_code="AI_TIMEOUT",
                 )
-        await batch_service.set_batch_status(user_id, batch_id, "failed")
+        # Session status derives from items: if prepared items remain it is
+        # back to `prepared` (dispatchable), otherwise `failed`. No forced
+        # terminal status — that would lock out untouched held groups.
 
         # Durable notification — the session is durable, but a notification
         # makes the stuck batch visible without opening the Scans page.
