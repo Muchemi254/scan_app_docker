@@ -9,11 +9,13 @@ const ReceiptForm = ({
   onSubmit,
   onImageChange,
   loading,
+  isAdmin = false,
 }: {
   initialData: any;
   onSubmit: (data: any) => void;
   onImageChange: (file: File | null) => void;
   loading: boolean;
+  isAdmin?: boolean;
 }) => {
   const [formData, setFormData] = useState(() => ({
     supplier: initialData?.supplier || '',
@@ -623,14 +625,15 @@ const ReceiptForm = ({
           {loading ? 'Saving...' : 'Save Changes'}
         </button>
 
-        {formData.status === 'needs_review' && (
+        {formData.status === 'needs_review' && isAdmin && (
           <button
             type="button"
             disabled={loading}
-            onClick={(e) => handleSubmit(e, 'processed')}
-            className="px-4 py-1.5 bg-green-600 text-white rounded text-sm hover:bg-green-700 disabled:bg-gray-400 font-medium transition-colors"
+            onClick={(e) => handleSubmit(e, 'super_processed')}
+            className="px-4 py-1.5 bg-indigo-600 text-white rounded text-sm hover:bg-indigo-700 disabled:bg-gray-400 font-medium transition-colors"
+            title="Admin only"
           >
-            {loading ? 'Saving...' : 'Save as Processed'}
+            {loading ? 'Saving...' : 'Save as Super Processed'}
           </button>
         )}
       </div>

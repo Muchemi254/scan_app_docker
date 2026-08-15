@@ -1,6 +1,7 @@
 // src/pages/ReviewPage.tsx
 import { useEffect, useState, useMemo } from 'react';
 import { useReceiptStore } from '../stores/receiptStore';
+import { useAuthStore } from '../stores/authStore';
 import { receiptApi } from '../services/api';
 import type { ReceiptData } from '../types/gemini';
 import ReviewPanel from '../components/ReviewPanel';
@@ -11,6 +12,8 @@ const PAGE_SIZE = 25;
 
 const ReviewPage = ({ userId }: { userId: string | null }) => {
   const { items: allReceipts, loading, load } = useReceiptStore();
+  const { user } = useAuthStore();
+  const isAdmin = !!user?.is_admin;
 
   // Search
   const [searchResults, setSearchResults] = useState<any[] | null>(null);
@@ -68,6 +71,28 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
     setSelectedId(newId);
     if (window.innerWidth < 1024) setSidebarOpen(false);
   };
+
+  // If a receipt leaves the needs_review view (status change or delete),
+  // advance the panel to the next pending receipt so it never dangles on
+  // stale/blank data.
+  const advancePast = (removedId: string) => {
+    setSelectedReceipt(null);
+    const remaining = receipts.filter(r => r.id !== removedId && r.status === 'needs_review');
+    if (remaining.length > 0) setSelectedId(remaining[0].id);
+    else setSelectedId(null);
+  };
+
+  // After a save, show the saved data (still editable) if the receipt remains
+  // in the needs_review view; otherwise advance to the next pending receipt.
+  const handleSaved = (updated: any) => {
+    if (updated?.status === 'needs_review') {
+      setSelectedReceipt(updated);
+    } else {
+      advancePast(updated?.id as string);
+    }
+  };
+
+  const handleDeleted = (id: string) => advancePast(id);
 
   // Fetch full receipt with items from API when selection changes
   useEffect(() => {
@@ -222,7 +247,7 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
         {/* Detail panel */}
         <div className="flex-1 min-w-0 overflow-y-auto">
           {selected ? (
-            <ReviewPanel userId={userId!} receipt={selected} setIsEditing={setIsEditing} />
+            <ReviewPanel userId={userId!} receipt={selected} setIsEditing={setIsEditing} isAdmin={isAdmin} onSaved={handleSaved} onDeleted={handleDeleted} />
           ) : (
             <div className="flex items-center justify-center h-full text-gray-400 text-sm">
               Select a receipt to review

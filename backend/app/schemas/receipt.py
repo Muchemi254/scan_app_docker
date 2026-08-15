@@ -14,6 +14,7 @@ class ReceiptStatus(str, Enum):
     """Receipt processing status"""
     PROCESSED = "processed"
     NEEDS_REVIEW = "needs_review"
+    SUPER_PROCESSED = "super_processed"
 
 
 class ReceiptItemBase(BaseModel):

@@ -12,10 +12,16 @@ const ReviewPanel = ({
   userId,
   receipt,
   setIsEditing,
+  isAdmin = false,
+  onSaved,
+  onDeleted,
 }: {
   userId: string;
   receipt: ReceiptData;
   setIsEditing: (v: boolean) => void;
+  isAdmin?: boolean;
+  onSaved?: (updated: any) => void;
+  onDeleted?: (id: string) => void;
 }) => {
   const { upsert, remove } = useReceiptStore();
   const [editing, setEditing] = useState(false);
@@ -63,6 +69,7 @@ const ReviewPanel = ({
       upsert(updated);
       setEditing(false);
       setNewImage(null);
+      onSaved?.(updated);
     } catch (error) {
       console.error('Update failed', error);
       alert(error instanceof Error ? error.message : 'Update failed');
@@ -83,6 +90,7 @@ const ReviewPanel = ({
       setLoading(true);
       await receiptApi.delete(receipt.id);
       remove(receipt.id);
+      onDeleted?.(receipt.id);
     } catch (error) {
       console.error('Delete failed', error);
       alert(error instanceof Error ? error.message : 'Delete failed');
@@ -173,6 +181,7 @@ const ReviewPanel = ({
                 onSubmit={handleUpdate}
                 onImageChange={setNewImage}
                 loading={loading}
+                isAdmin={isAdmin}
               />
             </div>
           </div>

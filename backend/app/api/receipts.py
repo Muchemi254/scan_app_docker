@@ -21,12 +21,13 @@ from app.core.config import settings
 from app.core.security import get_current_user_id
 from app.schemas.receipt import (
     ReceiptCreate, Receipt, ReceiptList, ReceiptGroup, ReceiptGroupList,
-    ReceiptUpdate,
+    ReceiptUpdate, ReceiptStatus,
     DuplicateCheckRequest, DuplicateCheckResponse, DuplicateMatch,
     AuditEntry, AuditList, SpendingSummaryRequest, SpendingSummaryResponse,
     CategoryBreakdown, SupplierBreakdown, MonthlyTrend,
 )
 from app.services.data_adapter import DataService
+from app.services import auth_service
 from app.services.database_service import save_image, save_thumbnail, delete_receipt_images
 from app.services.firebase_service import StorageService
 from app.services.gemini import extract_receipt_data, generate_ai_summary
@@ -54,6 +55,16 @@ def verify_user_access(user_id: str, current_user_id: str):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Access denied: cannot access other user's data"
+        )
+
+
+async def _require_super_processed_rights(current_user_id: str) -> None:
+    """Guard the admin-only 'super_processed' status."""
+    user = await auth_service.get_user_by_uid(current_user_id)
+    if not user or not user["is_admin"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required to mark a receipt as super processed",
         )
 
 
@@ -197,6 +208,9 @@ async def create_receipt(
         parsed = ReceiptCreate.model_validate(json.loads(receipt_data))
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Invalid receipt_data: {e}")
+
+    if parsed.status == ReceiptStatus.SUPER_PROCESSED:
+        await _require_super_processed_rights(current_user_id)
 
     try:
         # Pre-generate receipt ID
@@ -416,6 +430,9 @@ async def update_receipt(
         updates = ReceiptUpdate.model_validate(json.loads(receipt_data))
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Invalid receipt_data: {e}")
+
+    if updates.status == ReceiptStatus.SUPER_PROCESSED:
+        await _require_super_processed_rights(current_user_id)
 
     try:
         # Get current receipt

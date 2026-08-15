@@ -3,6 +3,7 @@ import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Hash, Calendar, Clock, Filter, X } from 'lucide-react';
 import { useReceiptStore } from '../stores/receiptStore';
+import { useAuthStore } from '../stores/authStore';
 import { receiptApi } from '../services/api';
 import ReviewPanel from '../components/ReviewPanel';
 import SearchBar from '../components/SearchBar';
@@ -19,11 +20,13 @@ const isComplete = (receipt: any) =>
   !isMissing(receipt.totalAmount) &&
   !isMissing(receipt.supplier) &&
   !isMissing(receipt.category) &&
-  receipt.status === 'processed';
+  (receipt.status === 'processed' || receipt.status === 'super_processed');
 
 const ViewScansPage = ({ userId }: { userId: string | null }) => {
   const navigate = useNavigate();
   const { items: receipts, loading, load } = useReceiptStore();
+  const { user } = useAuthStore();
+  const isAdmin = !!user?.is_admin;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [showExportModal, setShowExportModal] = useState(false);
@@ -399,6 +402,7 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
               userId={userId!}
               receipt={selected}
               setIsEditing={setIsEditing}
+              isAdmin={isAdmin}
             />
           ) : (
             <div className="flex items-center justify-center h-full text-gray-400 text-sm">
