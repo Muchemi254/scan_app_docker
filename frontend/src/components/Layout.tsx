@@ -20,6 +20,14 @@ const Layout = () => {
   const navigate = useNavigate();
   const user = useAuthStore(s => s.user);
   const signOut = useAuthStore(s => s.signOut);
+  const setActiveUid = useScopeStore((s) => s.setActiveUid);
+  const activeUid = useScopeStore((s) => s.activeUid);
+  const [scopeUsers, setScopeUsers] = useState<any[]>([]);
+
+  // Admin is operating inside another user's workspace (approval-mode).
+  const impersonating = !!activeUid && activeUid !== user?.uid;
+  const scopeOwnerEmail =
+    scopeUsers.find((u: any) => u.uid === activeUid)?.email || 'this user';
 
   const receiptsRef = useRef<HTMLDivElement>(null);
   const profileRef = useRef<HTMLDivElement>(null);
@@ -69,15 +77,6 @@ const Layout = () => {
 
   const userEmail = user?.email || 'User';
   const userName = userEmail.split('@')[0];
-
-  const setActiveUid = useScopeStore((s) => s.setActiveUid);
-  const activeUid = useScopeStore((s) => s.activeUid);
-  const [scopeUsers, setScopeUsers] = useState<any[]>([]);
-
-  // Admin is operating inside another user's workspace (approval-mode).
-  const impersonating = !!activeUid && activeUid !== user?.uid;
-  const scopeOwnerEmail =
-    scopeUsers.find((u: any) => u.uid === activeUid)?.email || 'this user';
 
   // When impersonating, lock any page that isn't approval/review related.
   useEffect(() => {
