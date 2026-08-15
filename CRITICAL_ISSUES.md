@@ -1,135 +1,107 @@
 # Critical Issues & Security Concerns
 
-## Resolved Issues (Migration)
-
-| ID | Issue | Impact | Fix |
-|----|-------|--------|-----|
-| M1 | Items not displaying in view/edit forms | User couldn't see/edit line items | `useState` replaced with `useEffect` sync in ReceiptForm; `list_receipts` now batch-loads items |
-| M2 | Images 404 — HEIC files stored raw, Docker volume mismatch | 222 receipts had broken images | HEIC→JPEG conversion on-the-fly in image proxy; `docker cp` images to volume |
-| M3 | JSONB columns returned as strings | Settings/Audit API returned 500 | `json.loads()` fallback on read, `json.dumps()` on write |
-| M4 | 4× item row duplication from re-migration | 5,860 rows instead of 1,465 | `ON CONFLICT (receipt_id, sort_order)` + dedup script |
-| M5 | Update blanking optional fields with `''` | batchTitle, kraPin, cuInvoice cleared on edit | Dynamic SET skips empty strings for optional fields |
-| M6 | Delete returns 500 — datetime not JSON serializable | Could not delete receipts | `json.dumps(default=str)` in audit log |
-| M7 | Audit log shows null/empty/N/A entries | Misleading audit trail display | Filter meaningless values in `log_create` and `log_delete` |
-| M8 | Batch scan retry button never appears | Failed scans couldn't be retried | Backend polling implemented in `useTaskProgress` (3s interval) |
-| M9 | Scans auto-marked as `processed` | Receipts skipped manual review | All scans now always `needs_review` |
-| M10 | Text PKs vs UUID — Firestore IDs incompatible | Migration failed on ID insert | Changed all PKs from UUID to TEXT |
-| M11 | `::uuid` casts left in SQL after TEXT PK change | Query errors | Removed all `::uuid` casts |
+Last reviewed: 2026-08-14. Every item below was verified against the current codebase
+(main.py, database.py, security.py, image_service.py, batches.py, docker-compose.yml,
+frontend/nginx.conf). Firebase is now legacy (`AUTH_MODE=local` is the default), and scan
+session state is durable Postgres — the old "Redis live scans" section is gone.
 
 ---
 
-## Security Concerns — Infrastructure
+## ✅ Resolved since this doc was last written
 
-### Secrets & Credentials
-
-| # | Concern | Severity | Current State | Recommendation |
-|---|---------|----------|---------------|----------------|
-| S1 | **SECRET_KEY defaults to `"change-me-in-production"`** | 🔴 Critical | `config.py:70` — no startup enforcement | Require env var, crash on default. Rotate existing keys. |
-| S2 | **API keys stored plaintext in PostgreSQL** | 🔴 Critical | `user_ai_settings.configs` contains Gemini + DeepSeek API keys as plaintext JSON | Encrypt at rest via `encryption.py:encrypt_api_key()`. Keys are only encrypted on next write — run a one-shot migration to encrypt all existing keys. |
-| S3 | **DB password in docker-compose.yml** | 🟡 Medium | `DB_PASSWORD` env var with default `scanapp_dev` exposed in compose file | Use Docker secrets or `.env` file (gitignored). Never commit default password. |
-| S4 | **Firebase service account JSON mounted readable** | 🔴 Critical | `docker-compose.yml:25` — `firebaseservice.json:ro` mounted into container | The service account has full project access. Restrict IAM role. Consider workload identity federation. Ensure `.gitignore` blocks this file (it does now). |
-| S5 | **Backup files contain plaintext API keys** | 🔴 Critical | `backup_service.py:export_user_data()` — exports `user_ai_settings` including `configs` with plaintext API keys | Encrypt keys in the backup, or strip `configs` from backup export. |
-| S6 | **Redis has no authentication** | 🟡 Medium | `REDIS_URL: redis://redis:6379/0` — no password | Add `requirepass` to Redis config. Use `rediss://` if TLS needed. |
-| S7 | **Celery worker uses same Firebase credentials** | 🟡 Medium | Worker mounts same `firebaseservice.json` with full access | Same as S4 — restrict IAM. Worker only needs Storage access, not Firestore. |
-
-### Network & Transport
-
-| # | Concern | Severity | Current State | Recommendation |
-|---|---------|----------|---------------|----------------|
-| N1 | **No HTTPS/TLS** | 🔴 Critical | Nginx listens on port 80 only, no SSL termination | Add TLS via Let's Encrypt or reverse proxy. Tailscale provides encryption but LAN traffic is plaintext. |
-| N2 | **Nginx accepts any hostname** | 🟡 Medium | `server_name _;` in frontend nginx.conf — no host validation | Restrict to known hostnames to prevent DNS rebinding attacks. |
-| N3 | **Nginx hides backend Server header** | ✅ Good | `proxy_hide_header Server;` configured | Already done. |
-| N4 | **SSRF protection in image proxy** | 🟡 Medium | `images.py` validates URLs against private IP ranges | Good. Add hostname allowlist (only firebasestorage.googleapis.com + local). |
-| N5 | **Rate limiting bypassable** | 🟡 Low | Rate limits per IP — can be bypassed with multiple IPs | Add token-based rate limiting for authenticated users. |
-| N6 | **Docker containers on same bridge network** | 🟡 Medium | All services share `app-network` — compromised container can reach all others | Use separate networks per tier (frontend→backend, backend→db, backend→redis). |
-
-### Container Security
-
-| # | Concern | Severity | Current State | Recommendation |
-|---|---------|----------|---------------|----------------|
-| C1 | **Containers run as root** | 🟡 Medium | Backend Dockerfile has no `USER` directive. Frontend Nginx runs as root. | Add `USER 1000` in Dockerfiles. Nginx can use `nginx` user. |
-| C2 | **No read-only filesystem** | 🟡 Low | Container filesystems are writable | Mount code as read-only, only `/app/data/images` needs write access. |
-| C3 | **No resource limits** | 🟡 Low | No `mem_limit` or `cpu_shares` in docker-compose | Add limits to prevent DoS via resource exhaustion. |
-| C4 | **Pillow/imaging library surface** | 🟡 Low | HEIC→JPEG conversion processes untrusted input | Keep pillow-heif updated. Add file size limits before processing. |
+| ID | Item | How it was resolved |
+|----|------|---------------------|
+| S1 | SECRET_KEY default not enforced | `main.py` raises `RuntimeError` at startup when `SECRET_KEY == "change-me-in-production"` (see open #5 for the empty-key gap) |
+| S2 | API keys stored plaintext | `encryption.py` encrypts on write (Fernet, key derived from SECRET_KEY) and decrypts on read; legacy plaintext auto-encrypts on next save |
+| S5 | Backups leaked plaintext API keys | `backup_service.py` redacts `configs[].api_key` as `[REDACTED]` on export |
+| S6 | Redis had no auth | compose runs `redis-server --requirepass` and `REDIS_URL` carries the password |
+| T1 | No Row-Level Security | `database.py` enables RLS + `user_isolation` policy on user-data tables (see open #3 for coverage gaps) |
+| T2 | Manual per-route userId checks | `security.validate_user_access` — shared dependency that validates URL `userId` == token uid |
+| T3 | No logging of cross-tenant attempts | `validate_user_access` logs a `SECURITY:` warning with user/IP/endpoint on 403 |
+| N3 | Nginx leaked Server header | `proxy_hide_header Server` configured |
+| N4 | SSRF in image proxy | `images.py` blocks RFC1918/link-local/loopback ranges + a blocked-hostname list |
+| N5 | No rate limiting | nginx `limit_req` zones: `api` 10 r/s, `extract` 2 r/s, backups/batch with burst |
+| A2 | No CSP | `Content-Security-Policy` added on all nginx responses (caveat: `unsafe-inline`, see open #9) |
+| A3 | Uploads trusted Content-Type | `image_service.py` detects format from magic bytes and ignores the client header |
+| A4 | No request correlation | `main.py` adds `X-Request-ID` middleware |
+| A6 | Swagger exposed | compose sets `ENABLE_DOCS: "false"` |
+| C1 | Backend/worker ran as root | backend `Dockerfile` ends with `USER appuser`; entrypoint drops via `runuser` (frontend still root — open #7) |
+| C2 | Writable code mounts | app code is baked into images; only `/app/data*` and `/app/backups` are writable mounts |
+| D1 | No backup capability | backup API + `backup_data` volume exist (no schedule — open #10) |
+| D3 | Image orphans on failure | upload path removes temp files on exception |
+| — | Firebase everywhere | `AUTH_MODE=local` (Postgres users + JWT) is the default; Firebase init is skipped entirely |
 
 ---
 
-## Security Concerns — Multi-Tenant Data Isolation
+## 🔴 Open — Critical
 
-| # | Concern | Severity | Current State | Recommendation |
-|---|---------|----------|---------------|----------------|
-| T1 | **No row-level security** | 🔴 Critical | Multi-tenancy enforced only via `WHERE user_id = $1` in every query. A missing WHERE clause exposes all users' data. | Enable PostgreSQL Row-Level Security: `CREATE POLICY user_isolation ON receipts USING (user_id = current_setting('app.current_user_id'))`. |
-| T2 | **URL path user validation is manual** | 🟡 Medium | Each endpoint calls `verify_user_access(userId, current_user_id)` — human error possible | Move to middleware/dependency that validates `userId == token.uid` before route handler executes. |
-| T3 | **No audit trail for cross-tenant access attempts** | 🟡 Low | 403 returned but not logged as security event | Log all 403 responses with user/endpoint/IP for intrusion detection. |
-| T4 | **Image files not namespaced by user** | 🟡 Low | Images stored as `{receipt_id}.jpg` — receipt_id is global but tied to user via DB | Add user directory: `{user_id}/{receipt_id}.jpg` for defense in depth. |
-
----
-
-## Security Concerns — Application Layer
-
-| # | Concern | Severity | Current State | Recommendation |
-|---|---------|----------|---------------|----------------|
-| A1 | **XSS via supplier/item names** | 🟡 Medium | Supplier names from receipts injected into HTML without sanitization | React's JSX auto-escapes most content. Verify `<img>` alt text and `title` attributes don't bypass. Add CSP header. |
-| A2 | **No Content Security Policy** | 🟡 Medium | No CSP header set by Nginx or backend | Add `Content-Security-Policy` header restricting scripts/styles to self. |
-| A3 | **File upload validation by content-type** | 🟡 Low | `batches.py:218` checks `content_type` but trusts client header | Validate by magic bytes, not Content-Type header. |
-| A4 | **No request ID / correlation tracking** | 🟡 Low | Logs don't include request IDs | Add middleware to generate and attach `X-Request-ID` for debugging. |
-| A5 | **Firebase token expiry not refreshed** | 🟡 Medium | Frontend `firebase.tsx` uses `onAuthStateChanged` — no explicit refresh | Verify Firebase SDK auto-refreshes. Add 401 interceptor for token refresh. |
-| A6 | **Debug endpoints enabled in production** | 🟡 Low | `/docs` (Swagger UI) always exposed | Conditionally enable based on `ENABLE_DOCS` env var (already exists, default True). Set to False in production. |
+| # | Concern | Current State (verified) | Recommendation |
+|---|---------|--------------------------|----------------|
+| 1 | **No HTTPS/TLS** | Frontend `network_mode: host` listening on `:8081`; backend on `:8003`. Everything plaintext on the LAN. | Terminate TLS (Caddy/nginx/certbot, or Tailscale TLS). Move frontend off `network_mode: host` onto the bridge network. |
+| 2 | **Postgres published to the host** | `docker-compose.yml` publishes `5432:5432` to `0.0.0.0` with default password `scanapp_dev` (`.env` does not set `DB_PASSWORD`). Anyone on the LAN can connect as `scanapp`. | Remove the `ports:` mapping (backend/worker reach it via `data-network`); set a real `DB_PASSWORD`. |
+| 3 | **RLS coverage gaps** | `_enable_rls` covers `receipts, tasks, review_batches, audit_logs, scan_errors, scan_sessions`. **Missing: `user_ai_settings`** (user-owned, contains API keys) and `scan_session_items` (child rows keyed by `session_id` only, no `user_id` column). | Add `user_ai_settings` to the RLS list; for `scan_session_items`, add a `user_id` column (or enforce via session join) so a direct-connection query can't read another user's session items. |
+| 4 | **Default admin password** | `ADMIN_PASSWORD` unset → compose default `admin12345`; frontend is LAN-reachable. | Require `ADMIN_PASSWORD` in `.env`; refuse to boot with the default (mirror the SECRET_KEY check). |
 
 ---
 
-## Data Integrity
+## 🟠 Open — High
 
-| # | Concern | Severity | Current State | Recommendation |
-|---|---------|----------|---------------|----------------|
-| D1 | **No database backups configured** | 🔴 Critical | No automated pg_dump or backup schedule | Implement cron/pg_dump + upload to external storage. Use the existing backup system as periodic export. |
-| D2 | **No migration rollback tested** | 🟡 Medium | Alembic downgrade not verified | Test `alembic downgrade` on staging before production deployments. |
-| D3 | **Image orphans on failed saves** | ✅ Fixed | `batches.py` now cleans up images on exception | Already fixed in M2/M9. |
-| D4 | **No data validation on import** | 🟡 Medium | `export_user_data` includes all fields, `import_user_data` trusts the data | Validate imported data against Pydantic schemas before INSERT. |
+| # | Concern | Current State (verified) | Recommendation |
+|---|---------|--------------------------|----------------|
+| 5 | **SECRET_KEY empty value passes the guard** | `main.py` only rejects the literal default string. If `SECRET_KEY` is unset/empty, compose injects `""` → JWT HMAC uses an empty key and startup succeeds. | Reject empty/missing SECRET_KEY too (`if not settings.SECRET_KEY or settings.SECRET_KEY == "change-me-in-production"`). |
+| 6 | **Legacy plaintext API keys still at rest** | New writes are encrypted, but keys written before encryption remain plaintext in `user_ai_settings.configs` until each user rewrites them. | Run a one-shot migration that loads each `configs` blob and re-saves it via `encrypt_api_key()`. |
 
 ---
 
-## Priority Action Items (Ordered)
+## 🟡 Open — Medium
 
-1. **🔴 Encrypt API keys at rest** — Run one-shot script to encrypt all `user_ai_settings.configs` values using `encryption.py`
-2. **🔴 Enable RLS on PostgreSQL** — Row-level security for multi-tenant isolation
-3. **🔴 Add HTTPS** — TLS termination via Let's Encrypt or Cloudflare Tunnel
-4. **🔴 Secure SECRET_KEY** — Crash on default, rotate
-5. **🔴 Strip API keys from backups** — Or encrypt the backup file
-6. **🟡 Restrict Firebase IAM** — Create minimal-permission service account
-7. ✅ **Add Redis auth** — `--requirepass` in redis.conf, password in REDIS_URL
-8. 🟡 Container non-root — Add USER directives to Dockerfiles
-9. 🟡 Add Content-Security-Policy header
-10. 🟡 Database backups — Automated pg_dump schedule
-11. 🟡 Network segmentation — Separate Docker networks per tier
-12. 🟡 Disable Swagger in production — `ENABLE_DOCS=false`
+| # | Concern | Current State (verified) | Recommendation |
+|---|---------|--------------------------|----------------|
+| 7 | **Frontend Nginx runs as root** | `frontend/Dockerfile` has no `USER`; `nginx -g "daemon off"` as root. | Add `USER nginx` (nginx:alpine provides it) and make `/var/cache/nginx` writable. |
+| 8 | **No hostname validation in nginx** | `server_name localhost` is commented out; the default-server `return 444` block is commented out ("re-enable for production"). | Restrict `server_name` and re-enable the default-server reject to stop DNS rebinding. |
+| 9 | **CSP allows `unsafe-inline` scripts** | `script-src 'self' 'unsafe-inline'` — inline script execution weakens XSS defense. | Move inline scripts/styles out; drop `'unsafe-inline'` from `script-src`. |
+| 10 | **No automated backups** | Backup API + volume exist but nothing schedules `pg_dump` / export. | Add a cron/sidecar that runs pg_dump + the backup export to external storage. |
+| 11 | **Redis default password** | `redis_dev` when `REDIS_PASSWORD` unset (not published externally — low exposure). | Set a real password; consider `rediss://`. |
+| 12 | **Frontend uses `network_mode: host`** | Nginx shares the host net namespace — no isolation, LAN-visible. | Move to the `app-network` bridge with a published port. |
 
 ---
 
-## Redis — Data Isolation & Live Scans
+## 🟢 Open — Low
 
-### Architecture
+| # | Concern | Current State (verified) | Recommendation |
+|---|---------|--------------------------|----------------|
+| 13 | Rate limits are per-IP | `limit_req_zone $binary_remote_addr` — bypassable via multiple IPs. | Add token-based limiting for authenticated endpoints. |
+| 14 | No CPU/memory limits | Only Redis sets `--maxmemory`. No `mem_limit`/`cpus` on services. | Add compose resource limits to prevent exhaustion DoS. |
+| 15 | Alembic downgrade untested | `downgrade()` exists but has not been exercised. | Test `alembic downgrade` on a staging DB. |
+| 16 | `firebaseservice.json` still mounted | Mounted `:ro` into backend + worker, but unused in `AUTH_MODE=local`. | Remove the mount (or guard it behind `AUTH_MODE=firebase`) to shrink the credential surface. |
 
-Redis stores two kinds of data:
+---
 
-| Key Pattern | Data | User-Isolated | TTL |
-|---|---|---|---|
-| `batch:{userId}:{batchId}` | Batch scan state (progress, per-file status, receipt IDs) | ✅ Namespaced by userId | 24h |
-| `user_batches:{userId}` | Set of active batch IDs for a user | ✅ Per-user set | None |
-| `heic:img:{url}` | Image proxy cache (JPEG bytes) | ❌ Shared across users | 24h |
-| In-memory `_batch_images` dict | Raw image bytes during batch processing | ❌ No isolation, lost on restart | Process lifetime |
+## RLS coverage matrix (as of review)
 
-### Security Measures Applied
+| Table | user_id col | RLS enabled |
+|-------|-------------|-------------|
+| receipts | ✅ | ✅ |
+| tasks | ✅ | ✅ |
+| review_batches | ✅ | ✅ |
+| audit_logs | ✅ | ✅ |
+| scan_errors | ✅ | ✅ |
+| scan_sessions | ✅ | ✅ |
+| **user_ai_settings** | ✅ | ❌ **missing** |
+| **scan_session_items** | ❌ (session_id only) | ❌ **missing** |
+| users | ✅ | (admin-managed — intentionally not RLS'd) |
 
-1. **Redis password authentication** — `redis-server --requirepass` prevents unauthorized access
-2. **Batch keys namespaced by user** — `batch:{userId}:{batchId}` prevents cross-user batch access via Redis directly
-3. **API-level access control** — `_require_owner(batch, userId)` checks `batch.userId` before returning data
-4. **Image cache** — Keys are URL-based. Local receipt image URLs are unguessable UUIDs/strings. For production, add signed URL tokens.
+---
 
-### Remaining Risks
+## Priority action items (ordered)
 
-| Risk | Mitigation |
-|---|---|
-| Image proxy no auth (can't send headers via `<img>` tags) | Receipt IDs are opaque — brute-force impractical. Add short-lived tokens for production. |
-| In-memory image store not isolated | Cleared after batch completion. Lost on restart (batch auto-failed). |
-| Redis single-instance, no failover | Add Redis Sentinel or use managed Redis for production. |
+1. **🔴 Reject empty SECRET_KEY** — close the #5 gap in `main.py`.
+2. **🔴 Stop publishing Postgres on `0.0.0.0:5432`** — remove the `ports:` mapping, set `DB_PASSWORD`.
+3. **🔴 Add TLS / move frontend off host network** — secure the LAN surface.
+4. **🔴 Require non-default ADMIN_PASSWORD** — refuse to boot with `admin12345`.
+5. **🔴 Close RLS gaps** — add `user_ai_settings`; plan `scan_session_items.user_id`.
+6. **🟠 One-shot migration to encrypt legacy API keys**.
+7. **🟡 Non-root frontend nginx** — `USER nginx` in `frontend/Dockerfile`.
+8. **🟡 Nginx hostname validation** — `server_name` + default-server `444`.
+9. **🟡 Scheduled backups** — cron/pg_dump to external storage.
+10. **🟡 Tighten CSP** — remove `'unsafe-inline'` from `script-src`.
