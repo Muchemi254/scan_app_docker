@@ -8,6 +8,7 @@ interface AIModel {
   name: string;
   provider: string;
   description: string;
+  caveat?: string;
 }
 
 interface ProviderConfig {
@@ -218,6 +219,14 @@ const AiScanningEnginePage = ({ userId }: { userId: string | null }) => {
                   <p className="mt-1 text-sm text-gray-500">
                     {models.find(m => m.id === settings.model_id)?.description}
                   </p>
+                  {models.find(m => m.id === settings.model_id)?.caveat && (
+                    <div className="mt-2 p-3 bg-amber-50 rounded-lg border border-amber-200 flex gap-2">
+                      <AlertCircle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+                      <p className="text-xs text-amber-700 leading-relaxed">
+                        {models.find(m => m.id === settings.model_id)?.caveat}
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -300,7 +309,7 @@ const AiScanningEnginePage = ({ userId }: { userId: string | null }) => {
                     <div className="flex flex-wrap gap-3">
                       <button
                         onClick={() => setShowTestModal(true)}
-                        disabled={!activeConfig.api_key || testing}
+                        disabled={!activeConfig.api_key || testing || hasChanges}
                         className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2 border border-gray-300 bg-white text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 disabled:bg-gray-100 disabled:text-gray-400 transition-all"
                       >
                         {testing ? <RefreshCcw className="h-4 w-4 animate-spin" /> : <Shield className="h-4 w-4" />}
@@ -311,6 +320,12 @@ const AiScanningEnginePage = ({ userId }: { userId: string | null }) => {
                         <p className="text-xs text-amber-600 flex items-center gap-1">
                           <AlertCircle className="h-3 w-3" />
                           Don't forget to Save your changes!
+                        </p>
+                      )}
+                      {hasChanges && (
+                        <p className="text-xs text-amber-600 flex items-center gap-1">
+                          <AlertCircle className="h-3 w-3" />
+                          Apply your changes first — the test and your scans use saved settings, not unsaved ones.
                         </p>
                       )}
                     </div>

@@ -16,7 +16,7 @@ import {
 import { settingsApi } from '../services/api';
 import {
   ShieldAlert, Plus, Trash2, RefreshCw, User as UserIcon, Globe, X, Key,
-  Eye, EyeOff, CheckCircle, Shield,
+  Eye, EyeOff, CheckCircle, Shield, AlertCircle,
 } from 'lucide-react';
 
 interface Props {
@@ -29,6 +29,7 @@ interface AIModel {
   provider: string;
   description: string;
   supports_thinking: boolean;
+  caveat?: string;
 }
 
 const PROVIDER_LABELS: Record<string, string> = {
@@ -493,6 +494,14 @@ const AdminPage = ({ userId }: Props) => {
                           <p className="mt-1 text-xs text-gray-500">
                             {models.find(m => m.id === cfg.model_id)?.description}
                           </p>
+                        )}
+                        {models.find(m => m.id === cfg.model_id)?.caveat && (
+                          <div className="mt-1 p-2 bg-amber-50 rounded-lg border border-amber-200 flex gap-2">
+                            <AlertCircle className="h-3 w-3 text-amber-600 shrink-0 mt-0.5" />
+                            <p className="text-xs text-amber-700 leading-relaxed">
+                              {models.find(m => m.id === cfg.model_id)?.caveat}
+                            </p>
+                          </div>
                         )}
                       </div>
 
