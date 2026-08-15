@@ -50,9 +50,12 @@ def test_jwt_roundtrip():
 
 def test_jwt_rejects_tampered_token():
     token = create_access_token("uid-123")
-    flip = "A" if token[-1] != "A" else "B"
+    # Flip the penultimate char: the LAST base64url char encodes only the 2
+    # unused padding bits, so tampering it can leave the signature bytes
+    # unchanged and still verify. This position always corrupts the signature.
+    flip = "A" if token[-2] != "A" else "B"
     with pytest.raises(ValueError):
-        decode_access_token(token[:-1] + flip)
+        decode_access_token(token[:-2] + flip + token[-1])
 
 
 def test_jwt_rejects_expired_token(monkeypatch):
