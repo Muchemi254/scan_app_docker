@@ -48,26 +48,51 @@ All persistent data lives in named volumes: `pgdata`, `image_data`, `review_batc
 git clone <your-repo-url> scan_app
 cd scan_app
 
-# 2. Create local env from the template, then EDIT it
+# 2. Create local env from the template, then change ONLY the REQUIRED values
 cp .env.example .env
 nano .env
 ```
 
-### 3.1 `.env` — the values that matter
+### 3.1 `.env` — minimal setup
 
-| Variable | Required | Notes |
-|---|---|---|
-| `SECRET_KEY` | **Yes** | JWT + key encryption. Set a long random value: `python3 -c "import secrets;print(secrets.token_urlsafe(32))"`. **Never rotate it later** — it invalidates logins and breaks stored AI-key decryption. |
-| `DB_PASSWORD` | yes | Postgres password (default in compose is `scanapp_dev` — change it). |
-| `REDIS_PASSWORD` | yes | Redis password (default `redis_dev` — change it). |
-| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | recommended | First admin account created automatically at boot (default `admin@local` / `admin12345` — change in production). |
-| `GEMINI_API_KEY` | if using Gemini | Seeded once as the admin Gemini key on first boot. |
-| `VITE_API_URL` | no | Leave `/api/v1` (relative — works from any host/IP). |
-| `MAX_AI_CONCURRENCY` | no | Async batch concurrency (default 4; free tiers: 1–2). |
+Everything lives in `.env` (single source of truth — nothing is hardcoded in the
+compose file or the backend). Non-secret values come prefilled with working
+defaults; **only the REQUIRED section needs your attention**:
 
-Firebase vars and `firebaseservice.json` are **legacy** — `AUTH_MODE=local` (the default)
-skips Firebase entirely. If the file is absent on a fresh clone, the compose mount creates
-an empty placeholder; harmless in local mode.
+| Variable | Note |
+|---|---|
+| `SECRET_KEY` | **Required to change.** `python3 -c "import secrets;print(secrets.token_urlsafe(32))"`. Never rotate it later. |
+| `ADMIN_PASSWORD` | **Required to change.** First admin login. |
+| `GEMINI_API_KEY` | Set if you want AI scanning (seeded once as the admin Gemini key). |
+| `DB_PASSWORD` / `REDIS_PASSWORD` / `ADMIN_EMAIL` | Prefilled defaults — strengthen if exposing beyond your machine. |
+
+The backend **refuses to boot** with `SECRET_KEY=change-me-in-production` or
+`ADMIN_PASSWORD=admin12345` (and compose aborts if any secret var is missing),
+so a lazily copied template fails fast instead of running insecure.
+
+### 3.2 Order matters: infra → migrate → everything
+
+```bash
+# 3. Start Postgres + Redis first (needed before migrating)
+docker compose up -d postgres redis
+# wait until `docker compose ps` shows postgres healthy (usually a few seconds)
+
+# 4. Create the database schema BEFORE the backend tries to boot.
+#    The backend aborts on startup if the schema is missing (local auth needs the
+#    `users` table), so never skip this step on a fresh database.
+docker compose run --rm backend alembic upgrade head
+
+# 5. Build everything and start
+docker compose up -d --build
+
+# 6. Verify
+docker compose ps            # all 5 services up, backend healthy
+curl http://localhost:8003/health
+# open http://localhost:8081 in a browser
+```
+
+Postgres is bound to `127.0.0.1:5432` (host-local only — never published to the
+LAN); the frontend listens on `0.0.0.0:8081`, the API on `0.0.0.0:8003`.
 
 ### 3.2 Order matters: infra → migrate → everything
 
@@ -91,7 +116,7 @@ curl http://localhost:8003/health
 ```
 
 If your host already runs Postgres/Redis or uses ports 8081/8003/5432, edit the ports in
-`docker-compose.yml` (or bind 5432 to `127.0.0.1:5432:5432`).
+`docker-compose.yml`.
 
 ---
 
