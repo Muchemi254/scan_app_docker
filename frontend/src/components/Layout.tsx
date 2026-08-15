@@ -110,7 +110,6 @@ const Layout = () => {
         { path: '/review-batches', label: 'Batches', icon: ListChecks },
         { path: '/cleaning', label: 'Clean', icon: Sparkles },
         { path: '/post-receipt', label: 'Manual Entry', icon: PlusCircle },
-        { path: '/my-approvals', label: 'My Approvals', icon: CheckCheck },
       ];
 
   const DropdownMenu = ({ items, open, onSelect }: { items: any[], open: boolean, onSelect: () => void }) => (
@@ -181,6 +180,14 @@ const Layout = () => {
                   </button>
                   <DropdownMenu items={receiptsItems} open={receiptsOpen} onSelect={() => setReceiptsOpen(false)} />
                 </div>
+
+                {/* My Approvals — user's own pending/approved documents */}
+                {!impersonating && (
+                  <Link to="/my-approvals"
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors ${isActive('/my-approvals') ? 'bg-blue-100 text-blue-700 font-medium' : 'text-gray-600 hover:bg-gray-100'}`}>
+                    <CheckCheck className="h-4 w-4" /><span>My Approvals</span>
+                  </Link>
+                )}
 
                 {/* Settings — direct link (tabs handle sub-navigation) */}
                 {!impersonating && (
@@ -313,6 +320,12 @@ const Layout = () => {
                 </Link>
               );
             })}
+            {!impersonating && (
+              <Link to="/my-approvals" onClick={() => setMobileMenuOpen(false)}
+                className={`flex items-center gap-3 px-4 py-2.5 rounded-lg ${isActive('/my-approvals') ? 'bg-blue-100 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-100'}`}>
+                <CheckCheck className="h-5 w-5" /><span>My Approvals</span>
+              </Link>
+            )}
             {!impersonating && (
               <>
                 <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-4 pt-2">Settings</div>
