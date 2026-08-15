@@ -172,3 +172,47 @@ async def test_admin_cross_tenant_pending_list(client):
     assert data["total"] == 2
     uids = {i["owner_uid"] for i in data["items"]}
     assert uids == {alice["uid"], bob["uid"]}
+
+
+async def test_non_admin_cannot_edit_or_delete_processed(client):
+    admin_headers, _, _ = await login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+    alice = await _user(client, admin_headers, "alice@pytest.local")
+    ah, _, _ = await login(client, "alice@pytest.local", "pass-123")
+    uid = alice["uid"]
+
+    rec = await _create(client, ah, uid)
+    await _transition(client, ah, uid, rec["id"], "submit")
+    r = await _transition(client, admin_headers, uid, rec["id"], "approve")
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "processed"
+
+    # owner cannot edit an approved (processed) receipt
+    resp = await client.put(
+        f"/api/v1/users/{uid}/receipts/{rec['id']}",
+        headers=ah,
+        files={"receipt_data": (None, json.dumps({"supplier": "Hacked"}))},
+    )
+    assert resp.status_code == 403, resp.text
+
+    # owner cannot delete an approved (processed) receipt
+    resp = await client.delete(
+        f"/api/v1/users/{uid}/receipts/{rec['id']}", headers=ah
+    )
+    assert resp.status_code == 403, resp.text
+
+
+async def test_double_approve_returns_conflict(client):
+    admin_headers, _, _ = await login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+    alice = await _user(client, admin_headers, "alice@pytest.local")
+    ah, _, _ = await login(client, "alice@pytest.local", "pass-123")
+    uid = alice["uid"]
+
+    rec = await _create(client, ah, uid)
+    await _transition(client, ah, uid, rec["id"], "submit")
+
+    r = await _transition(client, admin_headers, uid, rec["id"], "approve")
+    assert r.status_code == 200, r.text
+
+    # second approve on the now-processed receipt → guarded UPDATE misses → 409
+    r2 = await _transition(client, admin_headers, uid, rec["id"], "approve")
+    assert r2.status_code == 409, r2.text

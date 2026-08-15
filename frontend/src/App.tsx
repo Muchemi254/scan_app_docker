@@ -27,6 +27,7 @@ const PostReceiptPage = lazy(() => import('./pages/PostReceiptPage'));
 const NotificationsPage = lazy(() => import('./pages/NotificationsPage'));
 const AdminPage = lazy(() => import('./pages/AdminPage'));
 const ApprovalsPage = lazy(() => import('./pages/ApprovalsPage'));
+const MyApprovalsPage = lazy(() => import('./pages/MyApprovalsPage'));
 
 import Layout from './components/Layout';
 import { ScannerProvider } from './contexts/ScannerContext';
@@ -240,6 +241,16 @@ const AppContent = () => {
                   element={
                     <PrivateRoute userId={userId} authLoading={authLoading}>
                       <ApprovalsPage />
+                    </PrivateRoute>
+                  }
+                />
+
+                {/* My Approvals — user's own pending/approved documents */}
+                <Route
+                  path="/my-approvals"
+                  element={
+                    <PrivateRoute userId={userId} authLoading={authLoading}>
+                      <MyApprovalsPage />
                     </PrivateRoute>
                   }
                 />

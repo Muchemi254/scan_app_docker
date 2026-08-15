@@ -48,6 +48,11 @@ async def _is_admin(actor_uid: str) -> bool:
     return bool(user and user["is_admin"])
 
 
+async def is_admin_actor(actor_uid: str) -> bool:
+    """Public helper: True when the actor is an admin (used by API guards)."""
+    return await _is_admin(actor_uid)
+
+
 async def assert_status_transition(
     current: str,
     target: str,
@@ -88,14 +93,21 @@ async def _transition(
     owner_uid: str,
     receipt_id: str,
     target: ReceiptStatus,
+    prereq: ReceiptStatus,
     action: AuditAction,
     actor_uid: str,
     note: Optional[str] = None,
 ) -> dict:
-    """Apply a validated status transition + audit entry. Returns the receipt."""
+    """Apply a validated, concurrency-safe status transition + audit entry.
+
+    The status update is a guarded ``UPDATE ... WHERE status = prereq`` so two
+    admins acting on the same receipt concurrently cannot double-apply — the
+    second gets 409 instead of silently re-approving.
+    """
+    from fastapi import HTTPException
+
     current = await DataService.get_receipt(owner_uid, receipt_id)
     if not current:
-        from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Receipt not found")
 
     await assert_status_transition(
@@ -112,7 +124,23 @@ async def _transition(
     if note:
         changes.append(AuditFieldChange(field="note", old_value=None, new_value=note))
 
-    await DataService.update_receipt(owner_uid, receipt_id, {"status": target.value})
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            UPDATE receipts
+               SET status = $1, updated_at = now()
+             WHERE id = $2 AND user_id = $3 AND status = $4
+            RETURNING id
+            """,
+            target.value, str(receipt_id), owner_uid, prereq.value,
+        )
+    if row is None:
+        raise HTTPException(
+            status_code=409,
+            detail="This receipt was changed by someone else first; refresh and try again",
+        )
+
     await AuditService.log(
         owner_uid, receipt_id, action, actor_uid, changes=changes
     )
@@ -124,6 +152,7 @@ async def submit(owner_uid: str, receipt_id: str, actor_uid: str) -> dict:
     """needs_review → pending_approval (owner or admin)."""
     return await _transition(
         owner_uid, receipt_id, ReceiptStatus.PENDING_APPROVAL,
+        ReceiptStatus.NEEDS_REVIEW,
         AuditAction.SUBMITTED, actor_uid,
     )
 
@@ -132,6 +161,7 @@ async def recall(owner_uid: str, receipt_id: str, actor_uid: str) -> dict:
     """pending_approval → needs_review (owner or admin)."""
     return await _transition(
         owner_uid, receipt_id, ReceiptStatus.NEEDS_REVIEW,
+        ReceiptStatus.PENDING_APPROVAL,
         AuditAction.RECALLED, actor_uid,
     )
 
@@ -145,6 +175,7 @@ async def approve(owner_uid: str, receipt_id: str, actor_uid: str) -> dict:
         )
     return await _transition(
         owner_uid, receipt_id, ReceiptStatus.PROCESSED,
+        ReceiptStatus.PENDING_APPROVAL,
         AuditAction.APPROVED, actor_uid,
     )
 
@@ -160,17 +191,32 @@ async def reject(
         )
     return await _transition(
         owner_uid, receipt_id, ReceiptStatus.NEEDS_REVIEW,
+        ReceiptStatus.PENDING_APPROVAL,
         AuditAction.REJECTED, actor_uid, note=note,
     )
 
 
 async def list_pending_for_admin() -> list:
-    """Cross-tenant list of every pending-approval receipt (admin only)."""
+    """Cross-tenant list of every pending-approval receipt (admin only).
+
+    Deliberately lean: only the fields needed to make an approval decision,
+    plus owner identity and an image flag — never the full receipt payload.
+    """
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT r.*, u.email AS owner_email, u.display_name AS owner_display_name
+            SELECT r.id,
+                   r.user_id                               AS owner_uid,
+                   u.email                                 AS owner_email,
+                   u.display_name                          AS owner_display_name,
+                   r.supplier                              AS supplier,
+                   r.receipt_date                          AS receipt_date,
+                   r.total_amount                          AS total_amount,
+                   r.status                                AS status,
+                   r.updated_at                            AS updated_at,
+                   r.created_at                            AS created_at,
+                   (r.image_filename IS NOT NULL)          AS has_image
             FROM receipts r
             LEFT JOIN users u ON u.uid = r.user_id
             WHERE r.status = $1
@@ -181,7 +227,21 @@ async def list_pending_for_admin() -> list:
         out = []
         for r in rows:
             d = dict(r)
-            d["id"] = str(d["id"])
-            d["owner_uid"] = d.pop("user_id", None)
-            out.append(d)
+            rid = str(d["id"])
+            image_url = f"/receipt-images/{rid}" if d.pop("has_image") else None
+            out.append(
+                {
+                    "id": rid,
+                    "owner_uid": d["owner_uid"],
+                    "owner_email": d["owner_email"],
+                    "owner_display_name": d["owner_display_name"],
+                    "supplier": d["supplier"],
+                    "receipt_date": d["receipt_date"],
+                    "total_amount": d["total_amount"],
+                    "status": d["status"],
+                    "updated_at": d["updated_at"],
+                    "created_at": d["created_at"],
+                    "imageUrl": image_url,
+                }
+            )
         return out

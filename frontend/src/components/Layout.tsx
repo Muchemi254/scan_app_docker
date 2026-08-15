@@ -10,6 +10,7 @@ import {
   Shield, PlusCircle, CheckCheck, Users,
 } from 'lucide-react';
 import { scanErrorApi } from '../services/api';
+import { isAllowedWhileImpersonating } from '../utils/scope';
 
 const Layout = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -23,18 +24,19 @@ const Layout = () => {
   const receiptsRef = useRef<HTMLDivElement>(null);
   const profileRef = useRef<HTMLDivElement>(null);
 
-  // Unread scan/error notifications badge
+  // Unread scan/error notifications badge (skipped while impersonating so we
+  // never pull another user's personal data).
   const [unread, setUnread] = useState(0);
   const currentUid = user?.uid;
   const refreshUnread = useCallback(async () => {
-    if (!currentUid) return;
+    if (!currentUid || impersonating) return;
     try {
       const { unread: n } = await scanErrorApi.unreadCount();
       setUnread(n ?? 0);
     } catch {
       /* badge is best-effort */
     }
-  }, [currentUid]);
+  }, [currentUid, impersonating]);
 
   useEffect(() => {
     refreshUnread();
@@ -72,6 +74,18 @@ const Layout = () => {
   const activeUid = useScopeStore((s) => s.activeUid);
   const [scopeUsers, setScopeUsers] = useState<any[]>([]);
 
+  // Admin is operating inside another user's workspace (approval-mode).
+  const impersonating = !!activeUid && activeUid !== user?.uid;
+  const scopeOwnerEmail =
+    scopeUsers.find((u: any) => u.uid === activeUid)?.email || 'this user';
+
+  // When impersonating, lock any page that isn't approval/review related.
+  useEffect(() => {
+    if (impersonating && !isAllowedWhileImpersonating(location.pathname)) {
+      navigate('/review', { replace: true });
+    }
+  }, [impersonating, location.pathname, navigate]);
+
   // Load the user list for the admin scope selector.
   useEffect(() => {
     if (!user?.is_admin) {
@@ -84,14 +98,20 @@ const Layout = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.is_admin]);
 
-  const receiptsItems = [
-    { path: '/receipts', label: 'All Receipts', icon: FileText },
-    { path: '/review', label: 'Review', icon: ClipboardCheck },
-    { path: '/gallery', label: 'Gallery', icon: Images },
-    { path: '/review-batches', label: 'Batches', icon: ListChecks },
-    { path: '/cleaning', label: 'Clean', icon: Sparkles },
-    { path: '/post-receipt', label: 'Manual Entry', icon: PlusCircle },
-  ];
+  const receiptsItems = impersonating
+    ? [
+        { path: '/receipts', label: 'All Receipts', icon: FileText },
+        { path: '/review', label: 'Review', icon: ClipboardCheck },
+      ]
+    : [
+        { path: '/receipts', label: 'All Receipts', icon: FileText },
+        { path: '/review', label: 'Review', icon: ClipboardCheck },
+        { path: '/gallery', label: 'Gallery', icon: Images },
+        { path: '/review-batches', label: 'Batches', icon: ListChecks },
+        { path: '/cleaning', label: 'Clean', icon: Sparkles },
+        { path: '/post-receipt', label: 'Manual Entry', icon: PlusCircle },
+        { path: '/my-approvals', label: 'My Approvals', icon: CheckCheck },
+      ];
 
   const DropdownMenu = ({ items, open, onSelect }: { items: any[], open: boolean, onSelect: () => void }) => (
     <div className={`absolute top-full left-0 mt-1 w-56 bg-white rounded-lg shadow-lg border py-1 z-50 transition-all duration-150 ${open ? 'opacity-100 visible' : 'opacity-0 invisible'}`}>
@@ -129,20 +149,26 @@ const Layout = () => {
 
               {/* Desktop Nav Items */}
               <div className="hidden md:flex items-center gap-0.5">
-                <Link to="/dashboard"
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors ${isExact('/dashboard') ? 'bg-blue-100 text-blue-700 font-medium' : 'text-gray-600 hover:bg-gray-100'}`}>
-                  <Home className="h-4 w-4" /><span>Dashboard</span>
-                </Link>
+                {!impersonating && (
+                  <Link to="/dashboard"
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors ${isExact('/dashboard') ? 'bg-blue-100 text-blue-700 font-medium' : 'text-gray-600 hover:bg-gray-100'}`}>
+                    <Home className="h-4 w-4" /><span>Dashboard</span>
+                  </Link>
+                )}
 
-                <Link to="/scanner"
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors ${isExact('/scanner') ? 'bg-blue-100 text-blue-700 font-medium' : 'text-gray-600 hover:bg-gray-100'}`}>
-                  <Camera className="h-4 w-4" /><span>Scanner</span>
-                </Link>
+                {!impersonating && (
+                  <Link to="/scanner"
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors ${isExact('/scanner') ? 'bg-blue-100 text-blue-700 font-medium' : 'text-gray-600 hover:bg-gray-100'}`}>
+                    <Camera className="h-4 w-4" /><span>Scanner</span>
+                  </Link>
+                )}
 
-                <Link to="/scans"
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors ${isExact('/scans') ? 'bg-blue-100 text-blue-700 font-medium' : 'text-gray-600 hover:bg-gray-100'}`}>
-                  <ListChecks className="h-4 w-4" /><span>Scans</span>
-                </Link>
+                {!impersonating && (
+                  <Link to="/scans"
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors ${isExact('/scans') ? 'bg-blue-100 text-blue-700 font-medium' : 'text-gray-600 hover:bg-gray-100'}`}>
+                    <ListChecks className="h-4 w-4" /><span>Scans</span>
+                  </Link>
+                )}
 
                 {/* Receipts Dropdown */}
                 <div ref={receiptsRef} className="relative">
@@ -157,12 +183,14 @@ const Layout = () => {
                 </div>
 
                 {/* Settings — direct link (tabs handle sub-navigation) */}
-                <Link to="/settings"
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors ${
-                    isActive('/settings') ? 'bg-blue-100 text-blue-700 font-medium' : 'text-gray-600 hover:bg-gray-100'
-                  }`}>
-                  <Settings className="h-4 w-4" /><span>Settings</span>
-                </Link>
+                {!impersonating && (
+                  <Link to="/settings"
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                      isActive('/settings') ? 'bg-blue-100 text-blue-700 font-medium' : 'text-gray-600 hover:bg-gray-100'
+                    }`}>
+                    <Settings className="h-4 w-4" /><span>Settings</span>
+                  </Link>
+                )}
 
                 {user?.is_admin && (
                   <Link to="/admin"
@@ -205,18 +233,20 @@ const Layout = () => {
 
             {/* Right: Notifications bell + Profile Dropdown */}
             <div className="flex items-center gap-2">
-              <Link
-                to="/notifications"
-                className="relative p-2 rounded-lg text-gray-600 hover:bg-gray-100 transition"
-                aria-label="Notifications"
-              >
-                <Bell className="h-5 w-5" />
-                {unread > 0 && (
-                  <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-semibold flex items-center justify-center">
-                    {unread > 99 ? '99+' : unread}
-                  </span>
-                )}
-              </Link>
+              {!impersonating && (
+                <Link
+                  to="/notifications"
+                  className="relative p-2 rounded-lg text-gray-600 hover:bg-gray-100 transition"
+                  aria-label="Notifications"
+                >
+                  <Bell className="h-5 w-5" />
+                  {unread > 0 && (
+                    <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-semibold flex items-center justify-center">
+                      {unread > 99 ? '99+' : unread}
+                    </span>
+                  )}
+                </Link>
+              )}
 
               <div ref={profileRef} className="relative hidden md:block">
                 <button onClick={() => setProfileOpen(!profileOpen)}
@@ -255,18 +285,24 @@ const Layout = () => {
         {/* Mobile Menu */}
         <div className={`md:hidden transition-all duration-300 ease-in-out overflow-hidden ${mobileMenuOpen ? 'max-h-screen opacity-100' : 'max-h-0 opacity-0'}`}>
           <div className="px-4 pt-2 pb-4 space-y-1 border-t">
-            <Link to="/dashboard" onClick={() => setMobileMenuOpen(false)}
-              className={`flex items-center gap-3 px-4 py-2.5 rounded-lg ${isExact('/dashboard') ? 'bg-blue-100 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-100'}`}>
-              <Home className="h-5 w-5" /><span>Dashboard</span>
-            </Link>
-            <Link to="/scanner" onClick={() => setMobileMenuOpen(false)}
-              className={`flex items-center gap-3 px-4 py-2.5 rounded-lg ${isExact('/scanner') ? 'bg-blue-100 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-100'}`}>
-              <Camera className="h-5 w-5" /><span>Scanner</span>
-            </Link>
-            <Link to="/scans" onClick={() => setMobileMenuOpen(false)}
-              className={`flex items-center gap-3 px-4 py-2.5 rounded-lg ${isExact('/scans') ? 'bg-blue-100 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-100'}`}>
-              <ListChecks className="h-5 w-5" /><span>Scans</span>
-            </Link>
+            {!impersonating && (
+              <Link to="/dashboard" onClick={() => setMobileMenuOpen(false)}
+                className={`flex items-center gap-3 px-4 py-2.5 rounded-lg ${isExact('/dashboard') ? 'bg-blue-100 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-100'}`}>
+                <Home className="h-5 w-5" /><span>Dashboard</span>
+              </Link>
+            )}
+            {!impersonating && (
+              <Link to="/scanner" onClick={() => setMobileMenuOpen(false)}
+                className={`flex items-center gap-3 px-4 py-2.5 rounded-lg ${isExact('/scanner') ? 'bg-blue-100 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-100'}`}>
+                <Camera className="h-5 w-5" /><span>Scanner</span>
+              </Link>
+            )}
+            {!impersonating && (
+              <Link to="/scans" onClick={() => setMobileMenuOpen(false)}
+                className={`flex items-center gap-3 px-4 py-2.5 rounded-lg ${isExact('/scans') ? 'bg-blue-100 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-100'}`}>
+                <ListChecks className="h-5 w-5" /><span>Scans</span>
+              </Link>
+            )}
             <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-4 pt-2">Receipts</div>
             {receiptsItems.map(item => {
               const Icon = item.icon;
@@ -277,11 +313,15 @@ const Layout = () => {
                 </Link>
               );
             })}
-            <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-4 pt-2">Settings</div>
-            <Link to="/settings" onClick={() => setMobileMenuOpen(false)}
-              className={`flex items-center gap-3 px-4 py-2.5 rounded-lg ${isExact('/settings') ? 'bg-blue-100 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-100'}`}>
-              <Settings className="h-5 w-5" /><span>Settings</span>
-            </Link>
+            {!impersonating && (
+              <>
+                <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-4 pt-2">Settings</div>
+                <Link to="/settings" onClick={() => setMobileMenuOpen(false)}
+                  className={`flex items-center gap-3 px-4 py-2.5 rounded-lg ${isExact('/settings') ? 'bg-blue-100 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-100'}`}>
+                  <Settings className="h-5 w-5" /><span>Settings</span>
+                </Link>
+              </>
+            )}
             {user?.is_admin && (
               <Link to="/admin" onClick={() => setMobileMenuOpen(false)}
                 className={`flex items-center gap-3 px-4 py-2.5 rounded-lg ${isExact('/admin') ? 'bg-blue-100 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-100'}`}>
@@ -301,6 +341,21 @@ const Layout = () => {
           </div>
         </div>
       </nav>
+
+      {impersonating && (
+        <div className="bg-amber-100 border-b border-amber-200 px-4 py-2 flex items-center justify-between gap-3 flex-wrap">
+          <p className="text-sm text-amber-900">
+            <Shield className="h-4 w-4 inline mr-1 -mt-0.5" />
+            Approval mode — viewing <strong>{scopeOwnerEmail}</strong>'s workspace. Only review &amp; approvals are available here.
+          </p>
+          <button
+            onClick={() => { setActiveUid(null); navigate('/dashboard'); }}
+            className="text-xs px-3 py-1 rounded bg-amber-600 text-white hover:bg-amber-700 font-medium"
+          >
+            Exit scope
+          </button>
+        </div>
+      )}
 
       <main className="w-full">
         <Outlet />

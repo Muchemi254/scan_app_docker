@@ -7,6 +7,7 @@ import {
   ChevronDown, ChevronRight, X, Sparkles, FileSpreadsheet,
 } from 'lucide-react';
 import AiScanningEnginePage from './AiScanningEnginePage';
+import { useIsImpersonating } from '../utils/scope';
 
 // Keep export page import for its report logic
 import { receiptApi, exportApi } from '../services/api';
@@ -58,6 +59,7 @@ const RECEIPT_FIELDS = [
 ];
 
 const SettingsPage = ({ userId }: { userId: string | null }) => {
+  const impersonating = useIsImpersonating();
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab') as Tab | null;
   const [activeTab, setActiveTab] = useState<Tab>(tabParam || 'ai');
@@ -184,6 +186,20 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
   };
 
   if (!userId) return null;
+  if (impersonating) {
+    return (
+      <div className="p-6">
+        <div className="bg-white rounded-lg shadow p-8 text-center">
+          <div className="text-5xl mb-4">🔒</div>
+          <h2 className="text-xl font-bold text-gray-800 mb-1">Settings are locked</h2>
+          <p className="text-gray-500 text-sm">
+            You're viewing another user's workspace in approval mode. Switch back to your
+            own workspace to manage settings.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   const tabs = [
     { key: 'ai', label: 'AI Engine', icon: Sparkles },

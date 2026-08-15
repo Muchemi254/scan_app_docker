@@ -118,6 +118,9 @@ const ReviewPanel = ({
     }
   };
 
+  const isApproved = receipt.status === 'processed';
+  const readOnly = isApproved && !isAdmin;
+
   const handleRecall = () =>
     runWorkflowAction(() => receiptApi.recall(userId, receipt.id!));
 
@@ -196,24 +199,31 @@ const ReviewPanel = ({
               )}
             </>
           )}
-          <button
-            onClick={() => setEditing(prev => !prev)}
-            disabled={loading || actionLoading}
-            className={`px-3 py-1.5 text-xs sm:text-sm rounded font-medium transition-colors disabled:opacity-50 ${
-              editing
-                ? 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                : 'bg-blue-500 text-white hover:bg-blue-600'
-            }`}
-          >
-            {editing ? 'Cancel' : 'Edit'}
-          </button>
-          <button
-            onClick={handleDelete}
-            disabled={loading || actionLoading}
-            className="px-3 py-1.5 text-xs sm:text-sm rounded font-medium bg-red-500 text-white hover:bg-red-600 transition-colors disabled:opacity-50"
-          >
-            {loading && !editing ? '…' : 'Delete'}
-          </button>
+          {!readOnly && (
+            <button
+              onClick={() => setEditing(prev => !prev)}
+              disabled={loading || actionLoading}
+              className={`px-3 py-1.5 text-xs sm:text-sm rounded font-medium transition-colors disabled:opacity-50 ${
+                editing
+                  ? 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                  : 'bg-blue-500 text-white hover:bg-blue-600'
+              }`}
+            >
+              {editing ? 'Cancel' : 'Edit'}
+            </button>
+          )}
+          {!readOnly && (
+            <button
+              onClick={handleDelete}
+              disabled={loading || actionLoading}
+              className="px-3 py-1.5 text-xs sm:text-sm rounded font-medium bg-red-500 text-white hover:bg-red-600 transition-colors disabled:opacity-50"
+            >
+              {loading && !editing ? '…' : 'Delete'}
+            </button>
+          )}
+          {readOnly && (
+            <span className="self-center text-xs text-gray-500 italic">Read-only (approved)</span>
+          )}
         </div>
       </div>
 

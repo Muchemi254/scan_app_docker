@@ -33,6 +33,7 @@ from app.services.receipt_workflow_service import (
     recall as workflow_recall,
     approve as workflow_approve,
     reject as workflow_reject,
+    is_admin_actor,
 )
 from app.services.database_service import save_image, save_thumbnail, delete_receipt_images
 from app.services.firebase_service import StorageService
@@ -454,6 +455,16 @@ async def update_receipt(
                 detail="Receipt not found"
             )
 
+        # Approved receipts are immutable for non-admins — a user cannot
+        # re-edit an entry that has already been approved.
+        if current.get("status") == ReceiptStatus.PROCESSED.value and not await is_admin_actor(
+            current_user_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Approved receipts are read-only; contact an administrator to change them",
+            )
+
         # Enforce the controlled status pipeline when a status change is sent.
         if "status" in updates.model_fields_set and updates.status is not None:
             from app.services.receipt_workflow_service import assert_status_transition
@@ -599,6 +610,15 @@ async def delete_receipt(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Receipt not found"
+            )
+
+        # Approved receipts can only be deleted by admins (audit integrity).
+        if receipt.get("status") == ReceiptStatus.PROCESSED.value and not await is_admin_actor(
+            current_user_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Approved receipts cannot be deleted by non-admin users",
             )
 
         # Delete images
