@@ -319,12 +319,6 @@ async def dispatch_scan(
         raise HTTPException(status_code=404, detail="Batch not found")
     _require_owner(batch, userId)
 
-    if batch["status"] in ("processing", "done"):
-        raise HTTPException(
-            status_code=409,
-            detail=f"Batch is already {batch['status']} — only prepared items can be dispatched",
-        )
-
     selected = await batch_service.get_dispatch_items(
         userId, batchId,
         groups=body.groups, items=body.items, all_=bool(body.all),
@@ -343,18 +337,26 @@ async def dispatch_scan(
         )
 
     indexes = [i["index"] for i in selected]
-    await batch_service.mark_queued(userId, batchId, indexes)
+    # Atomic: only still-prepared indexes are flipped, so a parallel dispatch
+    # of the same group won't enqueue already-sent images.
+    flipped = await batch_service.mark_queued(userId, batchId, indexes)
+    if not flipped:
+        raise HTTPException(
+            status_code=409,
+            detail="Those images are already being sent — nothing new was queued",
+        )
     await batch_service.set_batch_status(userId, batchId, "processing")
 
+    by_index = {i["index"]: i for i in selected}
     entries = [
         {
-            "index": i["index"],
-            "filename": i["filename"],
-            "mime": i.get("mime") or "image/jpeg",
-            "sha256": i.get("sha256"),
-            "orig_filename": i.get("origFilename"),
+            "index": i,
+            "filename": by_index[i]["filename"],
+            "mime": by_index[i].get("mime") or "image/jpeg",
+            "sha256": by_index[i].get("sha256"),
+            "orig_filename": by_index[i].get("origFilename"),
         }
-        for i in selected
+        for i in flipped
     ]
     process_batch_task.delay(userId, batchId, batch_dir, entries, batch["batchTitle"])
     return {"batchId": batchId, "dispatched": len(entries), "status": "processing"}

@@ -178,13 +178,20 @@ async def test_dispatch_sends_only_requested_group(client, monkeypatch):
     for idx in range(0, 50):
         assert items[idx]["status"] == "prepared", "non-dispatched items must stay held"
 
-    # Cannot dispatch while processing.
+    # Parallel sends are allowed: dispatching the remaining held group while
+    # one is already processing works, and only still-prepared items go out
+    # (the in-flight 5 are NOT re-sent).
     resp = await client.post(
         f"/api/v1/users/{user_id}/batches/{batch_id}/dispatch",
         json={"all": True},
         headers=headers,
     )
-    assert resp.status_code == 409
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["dispatched"] == 50
+    assert len(calls) == 2
+    entries2 = calls[1][0][3]
+    assert sorted(e["index"] for e in entries2) == list(range(0, 50))
+    assert "sha256" in entries2[0]
 
     await client.delete(f"/api/v1/users/{user_id}/batches/{batch_id}", headers=headers)
 

@@ -486,20 +486,30 @@ async def get_dispatch_items(
     return [i for i in eligible if _matches_filter(i, groups, items, False)]
 
 
-async def mark_queued(user_id: str, batch_id: str, indexes: List[int]) -> None:
-    """Flip selected prepared items back to `pending` for dispatch."""
+async def mark_queued(user_id: str, batch_id: str, indexes: List[int]) -> List[int]:
+    """Flip selected prepared items back to `pending` for dispatch.
+
+    Atomic per item (`status = 'prepared'` guard) so concurrent dispatches of
+    the same group can't double-send: only items still prepared are flipped,
+    and the actually-flipped indexes are returned for the enqueue step.
+    """
     if not indexes:
-        return
+        return []
     pool = await get_pool()
+    flipped: List[int] = []
     async with pool.acquire() as conn:
         async with conn.transaction():
             for idx in indexes:
-                await conn.execute(
+                row = await conn.fetchrow(
                     """
                     UPDATE scan_session_items
                     SET status = 'pending', stage = 'queued', message = 'Ready for AI',
                         error_code = NULL, error_message = NULL, updated_at = now()
-                    WHERE session_id = $1 AND item_index = $2
+                    WHERE session_id = $1 AND item_index = $2 AND status = 'prepared'
+                    RETURNING item_index
                     """,
                     batch_id, idx,
                 )
+                if row:
+                    flipped.append(idx)
+    return flipped
