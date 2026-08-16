@@ -210,3 +210,71 @@ async def test_delete_backup_removes_file_and_row(client):
         f"/api/v1/users/{uid}/backup/download/{entry['id']}", headers=headers
     )
     assert resp.status_code == 404
+
+
+async def test_import_round_trips_receipts_with_datetimes(client):
+    """Export → import must round-trip `date`/`timestamptz` columns.
+
+    Regressions test for "invalid input for query argument $7 ... no attribute
+    'toordinal'": data.json stores `receipt_date`/`scanned_at`/... as ISO
+    strings, so import must coerce them back to `date`/`datetime` objects
+    before binding (asyncpg rejects raw strings). Restore happens into the same
+    user (the real restore flow), so ids match the exported rows.
+    """
+    import os
+    from datetime import date, datetime, timezone
+
+    from app.services.backup_service import export_user_data, import_user_data
+    from tests.conftest import TEST_DATABASE_URL
+
+    admin_headers = await _admin(client)
+    uid = (await _user(client, admin_headers, "bkpRound@pytest.local"))["uid"]
+
+    import asyncpg
+    conn = await asyncpg.connect(TEST_DATABASE_URL)
+    try:
+        await conn.execute(
+            """
+            INSERT INTO receipts (id, user_id, supplier, total_amount, receipt_date,
+                scanned_at, created_at, updated_at, status)
+            VALUES ($1, $2, 'ACME', 123.45, $3, $4, $5, $6, 'processed')
+            """,
+            "roundtrip_r1", uid,
+            date(2025, 3, 6),
+            datetime(2025, 3, 6, 10, 30, tzinfo=timezone.utc),
+            datetime(2025, 3, 6, 9, 0, tzinfo=timezone.utc),
+            datetime(2025, 3, 6, 11, 0, tzinfo=timezone.utc),
+        )
+        await conn.execute(
+            "INSERT INTO line_items (receipt_id, name, quantity, price) "
+            "VALUES ('roundtrip_r1', 'Milk', 2, 50.00)"
+        )
+    finally:
+        await conn.close()
+
+    exported = await export_user_data(uid)
+    assert exported["counts"]["receipts"] == 1
+    try:
+        stats = await import_user_data(uid, exported["path"], conflict="overwrite")
+        assert stats["receipts"] == 1, stats
+        assert stats["items"] == 1, stats
+        assert stats["errors"] == 0, stats
+
+        conn = await asyncpg.connect(TEST_DATABASE_URL)
+        try:
+            row = await conn.fetchrow(
+                "SELECT receipt_date, scanned_at, created_at, updated_at "
+                "FROM receipts WHERE user_id = $1",
+                uid,
+            )
+            assert row["receipt_date"] == date(2025, 3, 6)
+            assert row["scanned_at"] == datetime(2025, 3, 6, 10, 30, tzinfo=timezone.utc)
+            assert row["created_at"] == datetime(2025, 3, 6, 9, 0, tzinfo=timezone.utc)
+            assert row["updated_at"] == datetime(2025, 3, 6, 11, 0, tzinfo=timezone.utc)
+        finally:
+            await conn.close()
+    finally:
+        try:
+            os.remove(exported["path"])
+        except OSError:
+            pass

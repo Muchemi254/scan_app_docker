@@ -19,7 +19,7 @@ import os
 import tarfile
 import io
 import uuid
-from datetime import datetime, timezone
+from datetime import date as date_type, datetime, time, timezone
 from decimal import Decimal
 from typing import Optional, List, Dict, Any
 
@@ -47,6 +47,53 @@ def _serialize_row(row):
         elif hasattr(v, 'isoformat'):
             d[k] = v.isoformat()
     return d
+
+
+def _parse_datetime(value):
+    """Coerce a backup JSON value into a datetime.
+
+    data.json stores timestamps as ISO strings (export → ``isoformat()``),
+    but asyncpg requires real ``datetime`` objects for ``timestamptz``
+    columns — passing the string makes it fail with "no attribute 'toordinal'".
+    """
+    if value is None or isinstance(value, datetime):
+        return value
+    if isinstance(value, date_type):
+        return datetime.combine(value, time.min)
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+        try:
+            return datetime.fromisoformat(s.replace("Z", "+00:00"))
+        except ValueError:
+            try:
+                return datetime.combine(date_type.fromisoformat(s[:10]), time.min)
+            except ValueError:
+                return None
+    return None
+
+
+def _parse_date(value):
+    """Coerce a backup JSON value into a ``date`` (asyncpg requirement)."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date_type):
+        return value
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+        try:
+            return datetime.fromisoformat(s.replace("Z", "+00:00")).date()
+        except ValueError:
+            try:
+                return date_type.fromisoformat(s[:10])
+            except ValueError:
+                return None
+    return None
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -270,7 +317,7 @@ async def import_user_data(
                     r.get("supplier", ""),
                     Decimal(str(r.get("total_amount", "0"))),
                     Decimal(str(r["tax_amount"])) if r.get("tax_amount") else None,
-                    r.get("receipt_date"),
+                    _parse_date(r.get("receipt_date")),
                     r.get("category"),
                     r.get("invoice_number"),
                     r.get("kra_pin"),
@@ -279,9 +326,9 @@ async def import_user_data(
                     r.get("image_filename"),
                     r.get("thumbnail_filename"),
                     r.get("legacy_image_url"),
-                    r.get("scanned_at"),
-                    r.get("created_at"),
-                    r.get("updated_at"),
+                    _parse_datetime(r.get("scanned_at")),
+                    _parse_datetime(r.get("created_at")),
+                    _parse_datetime(r.get("updated_at")),
                 )
                 stats["receipts"] += 1
 
@@ -331,10 +378,10 @@ async def import_user_data(
                         t.get("error"),
                         json.dumps(t.get("metadata", {})),
                         json.dumps(t.get("results", {})),
-                        t.get("created_at"),
-                        t.get("updated_at"),
-                        t.get("started_at"),
-                        t.get("completed_at"),
+                        _parse_datetime(t.get("created_at")),
+                        _parse_datetime(t.get("updated_at")),
+                        _parse_datetime(t.get("started_at")),
+                        _parse_datetime(t.get("completed_at")),
                     )
                     stats["tasks"] += 1
                 except Exception:
@@ -365,7 +412,9 @@ async def import_user_data(
                         VALUES ($1,$2,$3,$4,$5,$6)
                         ON CONFLICT (id) DO NOTHING
                     """, rb["id"], user_id, rb.get("name", ""),
-                        rb.get("csv_filename"), rb.get("created_at"), rb.get("updated_at"))
+                        rb.get("csv_filename"),
+                        _parse_datetime(rb.get("created_at")),
+                        _parse_datetime(rb.get("updated_at")))
                 except Exception:
                     stats["errors"] += 1
 
@@ -377,7 +426,8 @@ async def import_user_data(
                         ON CONFLICT (batch_id, receipt_id) DO NOTHING
                     """, rbi.get("batch_id"), rbi.get("receipt_id"),
                         rbi.get("review_status", "pending_review"),
-                        rbi.get("reviewer_notes"), rbi.get("reviewed_at"))
+                        rbi.get("reviewer_notes"),
+                        _parse_datetime(rbi.get("reviewed_at")))
                 except Exception:
                     stats["errors"] += 1
 
