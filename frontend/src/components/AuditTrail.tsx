@@ -11,7 +11,7 @@ interface AuditEntry {
   changes: { field: string; old_value: any; new_value: any }[];
 }
 
-const AuditTrail = ({ receiptId }: { receiptId: string }) => {
+const AuditTrail = ({ receiptId, ownerUid }: { receiptId: string; ownerUid?: string }) => {
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(false);
@@ -20,7 +20,7 @@ const AuditTrail = ({ receiptId }: { receiptId: string }) => {
     if (!receiptId) return;
     const fetch = async () => {
       try {
-        const res = await receiptApi.getAuditTrail(receiptId);
+        const res = await receiptApi.getAuditTrail(receiptId, ownerUid);
         setEntries(res.items || []);
       } catch (err) {
         console.error('Failed to load audit trail:', err);
@@ -29,7 +29,7 @@ const AuditTrail = ({ receiptId }: { receiptId: string }) => {
       }
     };
     fetch();
-  }, [receiptId]);
+  }, [receiptId, ownerUid]);
 
   if (loading) return null;
   if (entries.length === 0) return null;

@@ -16,6 +16,7 @@ const ReviewPanel = ({
   isAdmin = false,
   onSaved,
   onDeleted,
+  useStore = true,
 }: {
   userId: string;
   receipt: ReceiptData;
@@ -23,6 +24,9 @@ const ReviewPanel = ({
   isAdmin?: boolean;
   onSaved?: (updated: any) => void;
   onDeleted?: (id: string) => void;
+  /** Skip writes to the shared in-memory receipt store (used by the admin
+   *  approval center, where receipts belong to another user's tenant). */
+  useStore?: boolean;
 }) => {
   const { upsert, remove } = useReceiptStore();
   const [editing, setEditing] = useState(false);
@@ -75,8 +79,8 @@ const ReviewPanel = ({
     if (!receipt.id) return;
     try {
       setLoading(true);
-      const updated = await receiptApi.update(receipt.id, data, newImage || undefined);
-      upsert(updated);
+      const updated = await receiptApi.update(receipt.id, data, newImage || undefined, userId);
+      if (useStore) upsert(updated);
       setEditing(false);
       setNewImage(null);
       onSaved?.(updated);
@@ -98,8 +102,8 @@ const ReviewPanel = ({
     if (!receipt.id) return;
     try {
       setLoading(true);
-      await receiptApi.delete(receipt.id);
-      remove(receipt.id);
+      await receiptApi.delete(receipt.id, userId);
+      if (useStore) remove(receipt.id);
       onDeleted?.(receipt.id);
     } catch (error) {
       console.error('Delete failed', error);
@@ -115,7 +119,7 @@ const ReviewPanel = ({
     try {
       setActionLoading(true);
       const updated = await fn();
-      upsert(updated);
+      if (useStore) upsert(updated);
       if (success) alert(success);
       onSaved?.(updated);
     } catch (error) {
@@ -348,7 +352,7 @@ const ReviewPanel = ({
 
             {receipt.id && (
               <div className="mt-6">
-                <AuditTrail receiptId={receipt.id} />
+                <AuditTrail receiptId={receipt.id} ownerUid={userId} />
               </div>
             )}
           </div>

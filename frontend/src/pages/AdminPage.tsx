@@ -47,7 +47,44 @@ const AdminPage = ({ userId }: Props) => {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
 
-  // User deletions (background data purge — poll /ops for live progress)
+  // Create form
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [creating, setCreating] = useState(false);
+
+  // Trusted hosts
+  const [hosts, setHosts] = useState<string[]>([]);
+  const [hostInput, setHostInput] = useState('');
+  const [savingHosts, setSavingHosts] = useState(false);
+
+  // Shared AI provider keys
+  const [aiProviders, setAiProviders] = useState<Record<string, AdminAIProvider>>({});
+  const [models, setModels] = useState<AIModel[]>([]);
+  const [aiSaving, setAiSaving] = useState(false);
+  const [testingProvider, setTestingProvider] = useState<string | null>(null);
+  const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
+
+  // Locations reference data
+  const [locations, setLocations] = useState<{ id: string; name: string; is_active: boolean }[]>([]);
+  const [locationInput, setLocationInput] = useState('');
+  const [savingLocations, setSavingLocations] = useState(false);
+
+  const loadUsers = useCallback(async () => {
+    setLoadingUsers(true);
+    setError('');
+    try {
+      setUsers(await adminListUsers());
+    } catch (err: any) {
+      setError(err?.message || 'Failed to load users');
+    } finally {
+      setLoadingUsers(false);
+    }
+  }, []);
+
+  // User deletions (background data purge — poll /ops for live progress).
+  // Declared AFTER loadUsers since the pollers close over it.
   const [deleting, setDeleting] = useState<Record<string, { opId: string; email: string; status: string; message: string; counts: Record<string, number> }>>({});
   const deletePollers = useRef<Record<string, number>>({});
 
@@ -94,42 +131,6 @@ const AdminPage = ({ userId }: Props) => {
     }).catch(() => {});
     return () => { Object.values(deletePollers.current).forEach(clearInterval); deletePollers.current = {}; };
   }, [pollDeleteOp]);
-
-  // Create form
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [displayName, setDisplayName] = useState('');
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [creating, setCreating] = useState(false);
-
-  // Trusted hosts
-  const [hosts, setHosts] = useState<string[]>([]);
-  const [hostInput, setHostInput] = useState('');
-  const [savingHosts, setSavingHosts] = useState(false);
-
-  // Shared AI provider keys
-  const [aiProviders, setAiProviders] = useState<Record<string, AdminAIProvider>>({});
-  const [models, setModels] = useState<AIModel[]>([]);
-  const [aiSaving, setAiSaving] = useState(false);
-  const [testingProvider, setTestingProvider] = useState<string | null>(null);
-  const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
-
-  // Locations reference data
-  const [locations, setLocations] = useState<{ id: string; name: string; is_active: boolean }[]>([]);
-  const [locationInput, setLocationInput] = useState('');
-  const [savingLocations, setSavingLocations] = useState(false);
-
-  const loadUsers = useCallback(async () => {
-    setLoadingUsers(true);
-    setError('');
-    try {
-      setUsers(await adminListUsers());
-    } catch (err: any) {
-      setError(err?.message || 'Failed to load users');
-    } finally {
-      setLoadingUsers(false);
-    }
-  }, []);
 
   const loadHosts = useCallback(async () => {
     setError('');

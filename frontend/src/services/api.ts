@@ -269,8 +269,8 @@ export const receiptApi = {
   /**
    * Get single receipt by ID
    */
-  async get(receiptId: string): Promise<any> {
-    return apiRequest('GET', `/receipts/${receiptId}`);
+  async get(receiptId: string, ownerUid?: string): Promise<any> {
+    return apiRequest('GET', `/receipts/${receiptId}`, undefined, ownerUid);
   },
 
   /**
@@ -284,8 +284,8 @@ export const receiptApi = {
   /**
    * Delete receipt
    */
-  async delete(receiptId: string): Promise<void> {
-    return apiRequest('DELETE', `/receipts/${receiptId}`);
+  async delete(receiptId: string, ownerUid?: string): Promise<void> {
+    return apiRequest('DELETE', `/receipts/${receiptId}`, undefined, ownerUid);
   },
 
   /**
@@ -306,8 +306,8 @@ export const receiptApi = {
   /**
    * Get audit trail for a receipt
    */
-  async getAuditTrail(receiptId: string): Promise<{ items: any[]; total: number }> {
-    return apiRequest('GET', `/receipts/${receiptId}/audit`);
+  async getAuditTrail(receiptId: string, ownerUid?: string): Promise<{ items: any[]; total: number }> {
+    return apiRequest('GET', `/receipts/${receiptId}/audit`, undefined, ownerUid);
   },
 
   // ── Review → approval workflow ──────────────────────────────────────────
