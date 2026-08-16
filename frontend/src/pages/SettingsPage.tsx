@@ -17,7 +17,7 @@ import { useReceiptStore } from '../stores/receiptStore';
 import { exportReport, exportMultiSheetExcel, defaultPivotConfig, type ReportType, type ExportFormat, type PivotConfig } from '../services/export';
 import { FileText, BarChart3, TrendingUp, Building2, Receipt, Percent, Table2 } from 'lucide-react';
 
-type Tab = 'ai' | 'export' | 'backup';
+type Tab = 'ai' | 'export' | 'backup' | 'tax';
 
 const CONFLICT_MODES = [
   { value: 'skip', label: 'Skip existing', desc: 'Import only new receipts, keep current data' },
@@ -251,85 +251,13 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
   const tabs = [
     { key: 'ai', label: 'AI Engine', icon: Sparkles },
     { key: 'export', label: 'Export', icon: FileSpreadsheet },
+    { key: 'tax', label: 'Tax', icon: Percent },
     { key: 'backup', label: 'Backup & Restore', icon: Shield },
   ] as const;
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
       <h1 className="text-2xl font-bold text-gray-900">Settings</h1>
-
-      {/* Tax Defaults card */}
-      <div className="bg-white rounded-lg shadow p-6 space-y-4">
-        <h2 className="font-semibold text-gray-800 flex items-center gap-2">
-          <Percent className="h-5 w-5 text-blue-600" /> Tax Rate
-        </h2>
-        {taxNotice && (
-          <div className="flex items-center gap-2 text-green-700 text-sm bg-green-50 px-3 py-2 rounded"><CheckCircle className="h-4 w-4" />{taxNotice}</div>
-        )}
-        {taxError && (
-          <div className="flex items-center gap-2 text-red-600 text-sm bg-red-50 px-3 py-2 rounded"><AlertCircle className="h-4 w-4" />{taxError}</div>
-        )}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
-              My Default Tax Rate (%) {taxError === '' ? '' : ''}
-            </label>
-            <p className="text-xs text-gray-400 mb-2">
-              Used as the starting tax rate on new receipts. Overridable per receipt and per item.
-            </p>
-            <div className="flex gap-2">
-              <input
-                type="number"
-                min="0"
-                max="100"
-                step="0.01"
-                value={personalTax}
-                onChange={e => setPersonalTax(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
-                placeholder="16"
-              />
-              <button
-                onClick={savePersonalTax}
-                disabled={taxSaving}
-                className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 whitespace-nowrap"
-              >
-                <Save className="h-4 w-4" />{taxSaving ? 'Saving...' : 'Save'}
-              </button>
-            </div>
-          </div>
-
-          {authUser?.is_admin && (
-            <div className="sm:border-l sm:border-gray-200 sm:pl-4">
-              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
-                Global Default Tax Rate (%) — all users
-              </label>
-              <p className="text-xs text-gray-400 mb-2">
-                Fallback for users who haven't set their own default. Change applies to new receipts
-                immediately.
-              </p>
-              <div className="flex gap-2">
-                <input
-                  type="number"
-                  min="0"
-                  max="100"
-                  step="0.01"
-                  value={globalTax}
-                  onChange={e => setGlobalTax(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
-                  placeholder="16"
-                />
-                <button
-                  onClick={saveGlobalTax}
-                  disabled={taxSaving}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 whitespace-nowrap"
-                >
-                  <Save className="h-4 w-4" />{taxSaving ? 'Saving...' : 'Save Global'}
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
 
       {/* Tabs */}
       <div className="flex gap-1 border-b overflow-x-auto">
@@ -342,6 +270,81 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
           </button>
         ))}
       </div>
+
+      {/* ── Tax Tab ── */}
+      {activeTab === 'tax' && (
+        <div className="bg-white rounded-lg shadow p-6 space-y-4">
+          <h2 className="font-semibold text-gray-800 flex items-center gap-2">
+            <Percent className="h-5 w-5 text-blue-600" /> Tax Rate
+          </h2>
+          {taxNotice && (
+            <div className="flex items-center gap-2 text-green-700 text-sm bg-green-50 px-3 py-2 rounded"><CheckCircle className="h-4 w-4" />{taxNotice}</div>
+          )}
+          {taxError && (
+            <div className="flex items-center gap-2 text-red-600 text-sm bg-red-50 px-3 py-2 rounded"><AlertCircle className="h-4 w-4" />{taxError}</div>
+          )}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                My Default Tax Rate (%)
+              </label>
+              <p className="text-xs text-gray-400 mb-2">
+                Used as the starting tax rate on new receipts. Overridable per receipt and per item.
+              </p>
+              <div className="flex gap-2">
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.01"
+                  value={personalTax}
+                  onChange={e => setPersonalTax(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                  placeholder="16"
+                />
+                <button
+                  onClick={savePersonalTax}
+                  disabled={taxSaving}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 whitespace-nowrap"
+                >
+                  <Save className="h-4 w-4" />{taxSaving ? 'Saving...' : 'Save'}
+                </button>
+              </div>
+            </div>
+
+            {authUser?.is_admin && (
+              <div className="sm:border-l sm:border-gray-200 sm:pl-4">
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                  Global Default Tax Rate (%) — all users
+                </label>
+                <p className="text-xs text-gray-400 mb-2">
+                  Fallback for users who haven't set their own default. Change applies to new receipts
+                  immediately.
+                </p>
+                <div className="flex gap-2">
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.01"
+                    value={globalTax}
+                    onChange={e => setGlobalTax(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                    placeholder="16"
+                  />
+                  <button
+                    onClick={saveGlobalTax}
+                    disabled={taxSaving}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 whitespace-nowrap"
+                  >
+                    <Save className="h-4 w-4" />{taxSaving ? 'Saving...' : 'Save Global'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ── AI Engine Tab ── */}
       {activeTab === 'ai' && <AiScanningEnginePage userId={userId} />}

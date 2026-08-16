@@ -292,22 +292,50 @@ const AdminPage = ({ userId }: Props) => {
     return !!model?.supports_thinking;
   };
 
+  const [activeTab, setActiveTab] = useState<'users' | 'security' | 'locations' | 'ai'>('users');
+
+  const ADMIN_TABS = [
+    { key: 'users', label: 'Users', icon: UserIcon },
+    { key: 'security', label: 'Security', icon: Globe },
+    { key: 'locations', label: 'Locations', icon: MapPin },
+    { key: 'ai', label: 'AI Providers', icon: Key },
+  ] as const;
+
   return (
     <div className="min-h-screen bg-gray-50 px-4 py-6 sm:py-8">
       <div className="max-w-4xl mx-auto space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">Admin — User Management</h1>
-            <p className="text-sm text-gray-500">Accounts are created by administrators only.</p>
+            <h1 className="text-2xl font-bold text-gray-800">Admin</h1>
+            <p className="text-sm text-gray-500">Manage users, locations, network security, and AI providers.</p>
           </div>
-          <button
-            onClick={loadUsers}
-            disabled={loadingUsers}
-            className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm bg-white border border-gray-300 text-gray-600 hover:bg-gray-100 transition-colors"
-          >
-            <RefreshCw className={`h-4 w-4 ${loadingUsers ? 'animate-spin' : ''}`} />
-            Refresh
-          </button>
+          {activeTab === 'users' && (
+            <button
+              onClick={loadUsers}
+              disabled={loadingUsers}
+              className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm bg-white border border-gray-300 text-gray-600 hover:bg-gray-100 transition-colors"
+            >
+              <RefreshCw className={`h-4 w-4 ${loadingUsers ? 'animate-spin' : ''}`} />
+              Refresh
+            </button>
+          )}
+        </div>
+
+        {/* Tabs */}
+        <div className="flex gap-1 border-b overflow-x-auto">
+          {ADMIN_TABS.map(tab => (
+            <button
+              key={tab.key}
+              onClick={() => setActiveTab(tab.key)}
+              className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
+                activeTab === tab.key
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              <tab.icon className="h-4 w-4" />{tab.label}
+            </button>
+          ))}
         </div>
 
         {error && (
@@ -317,8 +345,10 @@ const AdminPage = ({ userId }: Props) => {
           <div className="bg-green-50 border border-green-200 text-green-700 text-sm px-4 py-3 rounded-lg">{notice}</div>
         )}
 
-        {/* Create user */}
-        <form onSubmit={handleCreate} className="bg-white rounded-xl shadow p-6 space-y-4">
+        {activeTab === 'users' && (
+          <>
+            {/* Create user */}
+            <form onSubmit={handleCreate} className="bg-white rounded-xl shadow p-6 space-y-4">
           <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
             <Plus className="h-5 w-5 text-blue-600" /> Create User
           </h2>
@@ -431,8 +461,12 @@ const AdminPage = ({ userId }: Props) => {
             </table>
           </div>
         </div>
+          </>
+        )}
 
-        {/* Trusted hosts */}
+        {activeTab === 'security' && (
+          <>
+            {/* Trusted hosts */}
         <div className="bg-white rounded-xl shadow p-6 space-y-4">
           <div className="flex items-start justify-between gap-4">
             <div>
@@ -498,8 +532,12 @@ const AdminPage = ({ userId }: Props) => {
             </button>
           </div>
         </div>
+          </>
+        )}
 
-        {/* Locations reference data */}
+        {activeTab === 'locations' && (
+          <>
+            {/* Locations reference data */}
         <div className="bg-white rounded-xl shadow p-6 space-y-4">
           <div>
             <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
@@ -569,8 +607,12 @@ const AdminPage = ({ userId }: Props) => {
             </ul>
           )}
         </div>
+          </>
+        )}
 
-        {/* Shared AI provider keys */}
+        {activeTab === 'ai' && (
+          <>
+            {/* Shared AI provider keys */}
         <div className="bg-white rounded-xl shadow p-6 space-y-5">
           <div>
             <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
@@ -713,6 +755,8 @@ const AdminPage = ({ userId }: Props) => {
             </button>
           </div>
         </div>
+          </>
+        )}
       </div>
     </div>
   );
