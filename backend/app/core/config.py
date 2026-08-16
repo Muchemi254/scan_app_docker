@@ -83,6 +83,18 @@ class Settings(BaseSettings):
     BACKUP_STORAGE_DIR: str = os.getenv("BACKUP_STORAGE_DIR", "/app/backups")
     MAX_UPLOAD_SIZE: int = _env_int("MAX_UPLOAD_SIZE", 10 * 1024 * 1024)  # 10 MB
 
+    # Backup storage limits — per-user quota + retention. These are the
+    # fallback defaults; admins can override them at runtime via
+    # app_settings (see backup API / Admin UI).
+    BACKUP_MAX_BYTES_PER_USER: int = _env_int(
+        "BACKUP_MAX_BYTES_PER_USER", 5 * 1024 * 1024 * 1024
+    )  # 5 GB
+    BACKUP_MAX_COUNT_PER_USER: int = _env_int("BACKUP_MAX_COUNT_PER_USER", 3)
+    # Refuse writing a backup when less than this much free disk remains.
+    BACKUP_MIN_FREE_BYTES: int = _env_int(
+        "BACKUP_MIN_FREE_BYTES", 512 * 1024 * 1024
+    )  # 512 MB
+
     # AI
     GEMINI_API_KEY: Optional[str] = os.getenv("GEMINI_API_KEY")
 

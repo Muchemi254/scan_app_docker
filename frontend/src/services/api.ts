@@ -683,6 +683,16 @@ export const settingsApi = {
   async setGlobalTaxRate(default_tax_rate: number): Promise<{ default_tax_rate: number }> {
     return apiGlobalRequest('PUT', '/settings/global/tax-rate', { default_tax_rate });
   },
+
+  /** Get the admin-managed per-user backup quota + retention. */
+  async getBackupLimits(): Promise<{ max_backup_bytes_per_user: number; max_backups_per_user: number }> {
+    return apiGlobalRequest('GET', '/settings/global/backup-limits');
+  },
+
+  /** Set the admin-managed per-user backup quota + retention. */
+  async setBackupLimits(max_backup_bytes_per_user: number, max_backups_per_user: number): Promise<{ max_backup_bytes_per_user: number; max_backups_per_user: number }> {
+    return apiGlobalRequest('PUT', '/settings/global/backup-limits', { max_backup_bytes_per_user, max_backups_per_user });
+  },
 };
 
 // ============================================================================

@@ -12,6 +12,8 @@ logger = logging.getLogger(__name__)
 
 KEY_TRUSTED_HOSTS = "trusted_hosts"
 KEY_DEFAULT_TAX_RATE = "default_tax_rate"
+KEY_BACKUP_MAX_BYTES = "max_backup_bytes_per_user"
+KEY_BACKUP_MAX_COUNT = "max_backups_per_user"
 
 
 async def get_setting(key: str) -> Optional[str]:
@@ -54,3 +56,33 @@ async def get_trusted_hosts() -> Optional[List[str]]:
 
 async def set_trusted_hosts(hosts: List[str]) -> None:
     await set_setting(KEY_TRUSTED_HOSTS, json.dumps(hosts))
+
+
+async def get_backup_limits() -> dict:
+    """Return the effective backup limits (admin-tunable, env defaults as fallback)."""
+    from app.core.config import settings
+
+    max_bytes = settings.BACKUP_MAX_BYTES_PER_USER
+    max_count = settings.BACKUP_MAX_COUNT_PER_USER
+    raw_bytes = await get_setting(KEY_BACKUP_MAX_BYTES)
+    raw_count = await get_setting(KEY_BACKUP_MAX_COUNT)
+    if raw_bytes:
+        try:
+            max_bytes = int(float(raw_bytes))
+        except (ValueError, TypeError):
+            pass
+    if raw_count:
+        try:
+            max_count = int(raw_count)
+        except (ValueError, TypeError):
+            pass
+    return {
+        "max_backup_bytes_per_user": max(max_bytes, 0),
+        "max_backups_per_user": max(max_count, 0),
+    }
+
+
+async def set_backup_limits(max_backup_bytes_per_user: int, max_backups_per_user: int) -> dict:
+    await set_setting(KEY_BACKUP_MAX_BYTES, str(int(max_backup_bytes_per_user)))
+    await set_setting(KEY_BACKUP_MAX_COUNT, str(int(max_backups_per_user)))
+    return await get_backup_limits()

@@ -3,10 +3,16 @@ Backup API endpoints.
 
 POST   /users/{userId}/backup/export          Create + download backup
 GET    /users/{userId}/backup/list             List backup history
+GET    /users/{userId}/backup/quota            Per-user quota usage summary
 GET    /users/{userId}/backup/download/{id}    Download a backup file
 POST   /users/{userId}/backup/preview          Preview a backup file's contents
 POST   /users/{userId}/backup/import           Import a backup with conflict options
 DELETE /users/{userId}/backup/{id}             Delete a backup
+
+Metadata lives in the `backups` Postgres table (shared server-side storage),
+so the same account can list and download its backups from any device.
+Creating a new export may prune this user's oldest backups to stay within
+the admin-tunable per-user quota and retention limit.
 """
 
 import json
@@ -14,20 +20,20 @@ import logging
 import os
 import shutil
 from datetime import datetime, timezone
-from typing import Optional, List
+from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse, Response
 
-from app.core.security import get_current_user_id
-from app.services.backup_service import export_user_data, import_user_data, parse_backup
 from app.core.config import settings
+from app.core.security import get_current_user_id, get_current_user_id_optional
+from app.services.backup_service import export_user_data, import_user_data, parse_backup
+from app.services.app_settings_service import get_backup_limits
+from app.services.database_service import DatabaseService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/users", tags=["backup"])
-
-BACKUP_DB = os.path.join(settings.BACKUP_STORAGE_DIR, "backup_history.json")
 
 
 def _verify_access(user_id: str, current_user_id: str):
@@ -35,18 +41,76 @@ def _verify_access(user_id: str, current_user_id: str):
         raise HTTPException(status_code=403, detail="Access denied")
 
 
-def _load_history() -> List[dict]:
+def _check_disk_space(filepath: str) -> None:
+    """Refuse to write a backup when the server is nearly out of disk."""
     try:
-        with open(BACKUP_DB, "r") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return []
+        min_free = settings.BACKUP_MIN_FREE_BYTES
+        if min_free > 0:
+            usage = shutil.disk_usage(os.path.dirname(filepath))
+            if usage.free < min_free:
+                raise HTTPException(
+                    status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
+                    detail=(
+                        "Server is low on storage — delete some backups or "
+                        "contact an administrator before creating another."
+                    ),
+                )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.warning("Could not check free disk space", exc_info=True)
 
 
-def _save_history(history: List[dict]):
-    os.makedirs(os.path.dirname(BACKUP_DB), exist_ok=True)
-    with open(BACKUP_DB, "w") as f:
-        json.dump(history, f, indent=2, default=str)
+async def _remove_backup(user_id: str, backup_id: str) -> None:
+    """Delete the archive file + its metadata row (missing file is fine)."""
+    path = os.path.join(settings.BACKUP_STORAGE_DIR, f"{backup_id}.tar.gz")
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+    await DatabaseService.delete_backup_record(user_id, backup_id)
+
+
+async def _prune_backups(user_id: str) -> None:
+    """
+    Auto-prune the user's oldest backups until both limits hold:
+      * at most `max_backups_per_user` archives, and
+      * at most `max_backup_bytes_per_user` total bytes.
+    Only rows with actual files are counted for the byte quota.
+    """
+    limits = await get_backup_limits()
+    max_count = int(limits["max_backups_per_user"])
+    max_bytes = int(limits["max_backup_bytes_per_user"])
+
+    # 1. Retention — keep the newest N.
+    if max_count > 0:
+        newest = await DatabaseService.list_backups(user_id)  # DESC
+        for row in newest[max_count:]:
+            await _remove_backup(user_id, row["id"])
+
+    # 2. Byte quota — delete oldest until the total fits.
+    if max_bytes > 0:
+        oldest = await DatabaseService.list_oldest_backups(user_id)  # ASC
+        total = 0
+        for row in oldest:
+            fpath = os.path.join(settings.BACKUP_STORAGE_DIR, f"{row['id']}.tar.gz")
+            if os.path.exists(fpath):
+                try:
+                    total += int(os.path.getsize(fpath))
+                except OSError:
+                    pass
+        i = 0
+        while total > max_bytes and i < len(oldest):
+            row = oldest[i]
+            fpath = os.path.join(settings.BACKUP_STORAGE_DIR, f"{row['id']}.tar.gz")
+            size = 0
+            try:
+                size = int(os.path.getsize(fpath))
+            except OSError:
+                pass
+            await _remove_backup(user_id, row["id"])
+            total -= size
+            i += 1
 
 
 # ── Export ───────────────────────────────────────────────────────────────────
@@ -59,6 +123,9 @@ async def create_backup(
     """Create a backup of all user data + images and stream as download."""
     _verify_access(userId, current_user_id)
 
+    os.makedirs(settings.BACKUP_STORAGE_DIR, exist_ok=True)
+    _check_disk_space(settings.BACKUP_STORAGE_DIR)
+
     try:
         result = await export_user_data(userId)
     except Exception as e:
@@ -67,20 +134,14 @@ async def create_backup(
 
     filepath = result["path"]
     backup_id = result["id"]
-    timestamp = datetime.now(timezone.utc).isoformat()
     filename = f"scanapp_backup_{userId[:8]}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.tar.gz"
 
-    # Record in history
-    history = _load_history()
-    history.insert(0, {
-        "id": backup_id,
-        "user_id": userId,
-        "filename": filename,
-        "created_at": timestamp,
-        "size_bytes": result["size_bytes"],
-        "size_kb": result["size_bytes"] // 1024,
-    })
-    _save_history(history)
+    await DatabaseService.create_backup_record(
+        userId, backup_id, filename, result["size_bytes"], datetime.now(timezone.utc),
+    )
+
+    # Enforce the per-user quota/retention — prunes this user's oldest archives.
+    await _prune_backups(userId)
 
     return FileResponse(
         path=filepath,
@@ -99,17 +160,41 @@ async def list_backups(
     userId: str,
     current_user_id: str = Depends(get_current_user_id),
 ):
-    """List available backups for this user."""
+    """List available backups for this user (from any device)."""
     _verify_access(userId, current_user_id)
+    rows = await DatabaseService.list_backups(userId)
+    for row in rows:
+        backup_path = os.path.join(settings.BACKUP_STORAGE_DIR, f"{row['id']}.tar.gz")
+        row["available"] = os.path.exists(backup_path)
+    return rows
 
-    history = _load_history()
-    user_backups = [h for h in history if h["user_id"] == userId]
 
-    for h in user_backups:
-        backup_path = os.path.join(settings.BACKUP_STORAGE_DIR, f"{h['id']}.tar.gz")
-        h["available"] = os.path.exists(backup_path)
+# ── Quota ────────────────────────────────────────────────────────────────────
 
-    return user_backups
+@router.get("/{userId}/backup/quota")
+async def backup_quota(
+    userId: str,
+    current_user_id: str = Depends(get_current_user_id),
+):
+    """Per-user backup quota usage, for the Settings UI to report space left."""
+    _verify_access(userId, current_user_id)
+    limits = await get_backup_limits()
+    total = 0
+    count = 0
+    for row in await DatabaseService.list_backups(userId):
+        fpath = os.path.join(settings.BACKUP_STORAGE_DIR, f"{row['id']}.tar.gz")
+        if os.path.exists(fpath):
+            count += 1
+            try:
+                total += int(os.path.getsize(fpath))
+            except OSError:
+                pass
+    return {
+        "used_bytes": total,
+        "limit_bytes": int(limits["max_backup_bytes_per_user"]),
+        "count": count,
+        "max_count": int(limits["max_backups_per_user"]),
+    }
 
 
 # ── Download ─────────────────────────────────────────────────────────────────
@@ -119,12 +204,16 @@ async def download_backup(
     userId: str,
     backupId: str,
     token: Optional[str] = Query(None),
-    current_user_id: str = Depends(get_current_user_id),
+    current_user_id: Optional[str] = Depends(get_current_user_id_optional),
 ):
-    """Download a previously created backup. Accepts ?token= for direct browser downloads."""
+    """
+    Download a previously created backup.
+
+    Auth: a `?token=` query string (for headerless browser links) takes
+    precedence; otherwise the `Authorization` header is required.
+    """
     if token:
         if settings.AUTH_MODE == "local":
-            # Offline path: verify a locally-signed JWT.
             from app.services.auth_service import decode_access_token
             try:
                 if decode_access_token(token) != userId:
@@ -140,15 +229,17 @@ async def download_backup(
                     raise HTTPException(status_code=403, detail="Access denied")
             except Exception:
                 raise HTTPException(status_code=401, detail="Invalid token")
-    else:
+    elif current_user_id is not None:
         _verify_access(userId, current_user_id)
+    else:
+        raise HTTPException(status_code=401, detail="Not authenticated")
 
-    history = _load_history()
-    entry = next(
-        (h for h in history if h["id"] == backupId and h["user_id"] == userId),
-        None,
-    )
-    if not entry:
+    # Let RLS adopt the target tenant for the DB lookup below.
+    from app.core.database import set_current_user_id
+    set_current_user_id(userId)
+
+    row = await DatabaseService.get_backup(userId, backupId)
+    if not row:
         raise HTTPException(status_code=404, detail="Backup not found")
 
     backup_path = os.path.join(settings.BACKUP_STORAGE_DIR, f"{backupId}.tar.gz")
@@ -158,9 +249,9 @@ async def download_backup(
     return FileResponse(
         path=backup_path,
         media_type="application/gzip",
-        filename=entry["filename"],
+        filename=row["filename"],
         headers={
-            "Content-Disposition": f'attachment; filename="{entry["filename"]}"',
+            "Content-Disposition": f'attachment; filename="{row["filename"]}"',
         },
     )
 
@@ -250,18 +341,8 @@ async def delete_backup(
     """Delete a backup file."""
     _verify_access(userId, current_user_id)
 
-    history = _load_history()
-    entry = next(
-        (h for h in history if h["id"] == backupId and h["user_id"] == userId),
-        None,
-    )
+    entry = await DatabaseService.get_backup(userId, backupId)
     if entry:
-        backup_path = os.path.join(settings.BACKUP_STORAGE_DIR, f"{backupId}.tar.gz")
-        try:
-            os.remove(backup_path)
-        except FileNotFoundError:
-            pass
-        history = [h for h in history if h["id"] != backupId]
-        _save_history(history)
+        await _remove_backup(userId, backupId)
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)

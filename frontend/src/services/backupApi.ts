@@ -41,6 +41,13 @@ export interface ImportResult {
   };
 }
 
+export interface BackupQuota {
+  used_bytes: number;
+  limit_bytes: number;
+  count: number;
+  max_count: number;
+}
+
 export const backupApi = {
   /** Create and download a backup with progress callback */
   async exportBackup(onProgress?: (pct: number, status: string) => void): Promise<void> {
@@ -105,19 +112,41 @@ export const backupApi = {
     return response.json();
   },
 
-  /** Download a specific backup — uses direct URL for large files */
+  /** Download a specific backup (cross-device: any device with the account's session can fetch it) */
   async downloadBackup(backupId: string, filename: string): Promise<void> {
     const authorization = await getAuthHeader();
     const userId = getUserId();
-    const token = authorization.replace('Bearer ', '');
-    const url = `${API_BASE_URL}/users/${userId}/backup/download/${backupId}?token=${encodeURIComponent(token)}`;
+    const response = await fetch(
+      `${API_BASE_URL}/users/${userId}/backup/download/${backupId}`,
+      { headers: { Authorization: authorization } }
+    );
 
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || 'Download failed');
+    }
+
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = filename;
+    a.download = filename || 'scanapp_backup.tar.gz';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  },
+
+  /** Per-user backup quota usage (for the Settings UI space meter) */
+  async getBackupQuota(): Promise<BackupQuota> {
+    const authorization = await getAuthHeader();
+    const userId = getUserId();
+    const response = await fetch(
+      `${API_BASE_URL}/users/${userId}/backup/quota`,
+      { headers: { Authorization: authorization } }
+    );
+    if (!response.ok) throw new Error('Failed to load backup quota');
+    return response.json();
   },
 
   /** Preview a backup file before import */

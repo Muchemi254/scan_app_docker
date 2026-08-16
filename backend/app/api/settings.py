@@ -3,7 +3,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from app.core.security import get_current_user_id
 from app.core.encryption import encrypt_api_key, decrypt_api_key
-from app.schemas.settings import AISettings, AISettingsUpdate, AIModel, AIProvider, AITestRequest, AITestResponse, TaxPreferenceOut, TaxPreferenceUpdate
+from app.schemas.settings import AISettings, AISettingsUpdate, AIModel, AIProvider, AITestRequest, AITestResponse, TaxPreferenceOut, TaxPreferenceUpdate, BackupLimitsOut, BackupLimitsUpdate
 from app.services.data_adapter import DataService
 from app.services.gemini import test_api_key
 from app.services.model_registry import get_all_models
@@ -222,6 +222,23 @@ async def set_global_tax_rate(
     """Set the admin-managed global default tax rate (percent)."""
     await set_setting(KEY_DEFAULT_TAX_RATE, str(body.default_tax_rate))
     return {"default_tax_rate": body.default_tax_rate}
+
+
+@global_router.get("/settings/global/backup-limits", response_model=BackupLimitsOut)
+async def get_backup_limits_endpoint():
+    """Admin-managed per-user backup quota. Returns effective values (env fallbacks)."""
+    from app.services.app_settings_service import get_backup_limits
+    return await get_backup_limits()
+
+
+@global_router.put("/settings/global/backup-limits", response_model=BackupLimitsOut)
+async def set_backup_limits_endpoint(
+    body: BackupLimitsUpdate,
+    _admin: str = Depends(require_admin),
+):
+    """Set the admin-managed per-user backup quota + retention."""
+    from app.services.app_settings_service import set_backup_limits
+    return await set_backup_limits(body.max_backup_bytes_per_user, body.max_backups_per_user)
 
 
 @global_router.get("/settings/models", response_model=List[AIModel])

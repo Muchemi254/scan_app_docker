@@ -930,6 +930,76 @@ class DatabaseService:
                 user_id, rate,
             )
 
+    # ── Backups (DB-backed metadata) ───────────────────────────────────────
+
+    @staticmethod
+    async def create_backup_record(
+        user_id: str, backup_id: str, filename: str, size_bytes: int,
+        created_at: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO backups (id, user_id, filename, created_at, size_bytes)
+                VALUES ($1, $2, $3, COALESCE($4, now()), $5)
+                RETURNING *
+                """,
+                backup_id, user_id, filename, created_at, size_bytes,
+            )
+            return dict(row) if row else {}
+
+    @staticmethod
+    async def list_backups(user_id: str) -> List[Dict[str, Any]]:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM backups WHERE user_id = $1 ORDER BY created_at DESC, id DESC",
+                user_id,
+            )
+            return [dict(r) for r in rows]
+
+    @staticmethod
+    async def get_backup(user_id: str, backup_id: str) -> Optional[Dict[str, Any]]:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM backups WHERE id = $1 AND user_id = $2",
+                backup_id, user_id,
+            )
+            return dict(row) if row else None
+
+    @staticmethod
+    async def delete_backup_record(user_id: str, backup_id: str) -> bool:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                "DELETE FROM backups WHERE id = $1 AND user_id = $2",
+                backup_id, user_id,
+            )
+            return result == "DELETE 1"
+
+    @staticmethod
+    async def sum_backup_bytes(user_id: str) -> int:
+        """Total bytes of this user's recorded backups."""
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            return int(await conn.fetchval(
+                "SELECT COALESCE(SUM(size_bytes), 0) FROM backups WHERE user_id = $1",
+                user_id,
+            ))
+
+    @staticmethod
+    async def list_oldest_backups(user_id: str, limit: int = -1) -> List[Dict[str, Any]]:
+        """Oldest-first backup rows (for pruning). limit=-1 returns all."""
+        sql = "SELECT * FROM backups WHERE user_id = $1 ORDER BY created_at ASC, id ASC"
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(sql, user_id)
+        if limit >= 0:
+            rows = rows[:limit]
+        return [dict(r) for r in rows]
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Image storage helpers (local filesystem)

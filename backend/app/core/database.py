@@ -136,6 +136,7 @@ async def _enable_rls(pool: asyncpg.Pool) -> None:
         "scan_session_items",
         "user_ai_settings",
         "user_preferences",
+        "backups",
     ]
     async with pool.acquire() as conn:
         for table in tables:

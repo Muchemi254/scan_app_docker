@@ -55,3 +55,14 @@ class TaxPreferenceOut(BaseModel):
 
 class TaxPreferenceUpdate(BaseModel):
     default_tax_rate: float = Field(..., ge=0, le=100, description="Default tax rate percent")
+
+
+class BackupLimitsOut(BaseModel):
+    """Admin-managed per-user backup quota + retention (bytes kept, count kept)."""
+    max_backup_bytes_per_user: int
+    max_backups_per_user: int
+
+
+class BackupLimitsUpdate(BaseModel):
+    max_backup_bytes_per_user: int = Field(..., ge=0, description="Per-user backup quota in bytes (0 = unlimited)")
+    max_backups_per_user: int = Field(..., ge=0, description="Max backup archives kept per user (0 = unlimited)")

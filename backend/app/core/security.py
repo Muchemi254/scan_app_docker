@@ -80,8 +80,10 @@ async def verify_firebase_token(credentials: HTTPAuthorizationCredentials = Depe
     In AUTH_MODE=local this decodes a locally-signed JWT (offline).
     In AUTH_MODE=firebase this verifies a Firebase ID token.
     """
-    token = credentials.credentials
+    return await _verify_token(credentials.credentials)
 
+
+async def _verify_token(token: str) -> str:
     if settings.AUTH_MODE == "local":
         return await _verify_local_token(token)
     return _verify_firebase_token(token)
@@ -95,6 +97,22 @@ async def get_current_user_id(user_id: str = Depends(verify_firebase_token)) -> 
     from app.core.database import set_current_user_id
     set_current_user_id(user_id)
     return user_id
+
+
+async def get_current_user_id_optional(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(
+        HTTPBearer(auto_error=False)
+    ),
+) -> Optional[str]:
+    """
+    Authenticate only when an Authorization header is present, returning
+    None otherwise.  Used by endpoints that can fall back to a
+    query-string token (e.g. backup download links opened directly in a
+    browser, which cannot send headers).
+    """
+    if credentials is None:
+        return None
+    return await _verify_token(credentials.credentials)
 
 
 async def validate_user_access(

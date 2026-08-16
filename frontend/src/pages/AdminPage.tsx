@@ -16,7 +16,7 @@ import {
 import { settingsApi, locationsApi } from '../services/api';
 import {
   ShieldAlert, Plus, Trash2, RefreshCw, User as UserIcon, Globe, X, Key,
-  Eye, EyeOff, CheckCircle, Shield, AlertCircle, MapPin,
+  Eye, EyeOff, CheckCircle, Shield, AlertCircle, MapPin, Database,
 } from 'lucide-react';
 
 interface Props {
@@ -292,13 +292,53 @@ const AdminPage = ({ userId }: Props) => {
     return !!model?.supports_thinking;
   };
 
-  const [activeTab, setActiveTab] = useState<'users' | 'security' | 'locations' | 'ai'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'security' | 'locations' | 'ai' | 'backups'>('users');
+
+  // ── Backup limits (admin) ──
+  const [backupLimitGB, setBackupLimitGB] = useState('5');
+  const [backupLimitCount, setBackupLimitCount] = useState('3');
+  const [backupLimitsSaving, setBackupLimitsSaving] = useState(false);
+
+  const loadBackupLimits = useCallback(async () => {
+    try {
+      const limits = await settingsApi.getBackupLimits();
+      setBackupLimitGB(String(Math.round(limits.max_backup_bytes_per_user / (1024 * 1024 * 1024) * 100) / 100));
+      setBackupLimitCount(String(limits.max_backups_per_user));
+    } catch (err: any) {
+      setError(err?.message || 'Failed to load backup limits');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'backups') loadBackupLimits();
+  }, [activeTab, loadBackupLimits]);
+
+  const saveBackupLimits = async () => {
+    const gb = Number(backupLimitGB);
+    const count = Number(backupLimitCount);
+    if (isNaN(gb) || gb < 0) { setError('Enter a valid size in GB (0 = unlimited)'); return; }
+    if (isNaN(count) || count < 0 || !Number.isInteger(count)) { setError('Enter a whole number for backups kept (0 = unlimited)'); return; }
+    setBackupLimitsSaving(true); setNotice(''); setError('');
+    try {
+      const limits = await settingsApi.setBackupLimits(
+        Math.round(gb * 1024 * 1024 * 1024), count,
+      );
+      setBackupLimitGB(String(limits.max_backup_bytes_per_user / (1024 * 1024 * 1024)));
+      setBackupLimitCount(String(limits.max_backups_per_user));
+      setNotice('Backup limits saved — applied to new exports immediately.');
+    } catch (err: any) {
+      setError(err?.message || 'Failed to save backup limits');
+    } finally {
+      setBackupLimitsSaving(false);
+    }
+  };
 
   const ADMIN_TABS = [
     { key: 'users', label: 'Users', icon: UserIcon },
     { key: 'security', label: 'Security', icon: Globe },
     { key: 'locations', label: 'Locations', icon: MapPin },
     { key: 'ai', label: 'AI Providers', icon: Key },
+    { key: 'backups', label: 'Backups', icon: Database },
   ] as const;
 
   return (
@@ -756,6 +796,60 @@ const AdminPage = ({ userId }: Props) => {
           </div>
         </div>
           </>
+        )}
+
+        {activeTab === 'backups' && (
+          <div className="bg-white rounded-xl shadow p-6 space-y-5">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
+                <Database className="h-5 w-5 text-blue-600" /> Backup Storage Limits
+              </h2>
+              <p className="text-sm text-gray-500 mt-1">
+                Backups are stored on the server shared across all users&apos; devices. Each user
+                gets this per-user quota; when a new export would exceed it, the oldest backups are
+                automatically removed. Applies immediately to new exports.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                  Max backup size per user (GB)
+                </label>
+                <p className="text-xs text-gray-400 mb-2">0 = unlimited</p>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.1"
+                  value={backupLimitGB}
+                  onChange={e => setBackupLimitGB(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                  Backups kept per user
+                </label>
+                <p className="text-xs text-gray-400 mb-2">0 = unlimited</p>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={backupLimitCount}
+                  onChange={e => setBackupLimitCount(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                />
+</div>
+            </div>
+
+            <button
+              onClick={saveBackupLimits}
+              disabled={backupLimitsSaving}
+              className="px-5 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 transition-colors disabled:opacity-50"
+            >
+              {backupLimitsSaving ? 'Saving...' : 'Save Limits'}
+            </button>
+          </div>
         )}
       </div>
     </div>

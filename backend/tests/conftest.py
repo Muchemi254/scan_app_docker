@@ -53,6 +53,7 @@ _TRUNCATE_TABLES = (
     "scan_sessions",
     "locations",
     "user_preferences",
+    "backups",
 )
 
 

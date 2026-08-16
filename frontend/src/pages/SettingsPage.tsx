@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { backupApi, type BackupEntry, type BackupPreview, type ImportResult } from '../services/backupApi';
+import { backupApi, type BackupEntry, type BackupPreview, type BackupQuota, type ImportResult } from '../services/backupApi';
 import { settingsApi } from '../services/api';
 import { useAuthStore } from '../stores/authStore';
 import {
@@ -46,6 +46,13 @@ const PIVOT_VALUES = [
   { value: 'count' as const, label: 'Receipt Count' },
 ];
 
+function formatBytes(bytes: number): string {
+  if (!bytes) return '0 MB';
+  const mb = bytes / (1024 * 1024);
+  if (mb < 1024) return `${mb.toFixed(1)} MB`;
+  return `${(mb / 1024).toFixed(2)} GB`;
+}
+
 const RECEIPT_FIELDS = [
   { key: 'supplier', label: 'Supplier' },
   { key: 'totalAmount', label: 'Total Amount' },
@@ -75,6 +82,7 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
 
   // ── Backup state ──
   const [backups, setBackups] = useState<BackupEntry[]>([]);
+  const [quota, setQuota] = useState<BackupQuota | null>(null);
   const [loadingBackups, setLoadingBackups] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState({ pct: 0, status: '' });
@@ -190,11 +198,12 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
     finally { setLoadingBackups(false); }
   }, []);
 
-  useEffect(() => { if (userId) loadBackups(); }, [userId, loadBackups]);
+  useEffect(() => { if (userId) { loadBackups(); backupApi.getBackupQuota().then(setQuota).catch(() => {}); } }, [userId, loadBackups]);
 
   const handleExport = async () => {
     try { setExporting(true); setError(''); setExportProgress({pct:0,status:'Starting...'});
-      await backupApi.exportBackup((pct, status) => setExportProgress({pct, status})); await loadBackups(); }
+      await backupApi.exportBackup((pct, status) => setExportProgress({pct, status})); await loadBackups();
+      backupApi.getBackupQuota().then(setQuota).catch(() => {}); }
     catch (e) { setError(e instanceof Error ? e.message : 'Export failed'); }
     finally { setExporting(false); }
   };
@@ -218,7 +227,8 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
 
   const handleDeleteBackup = async (backupId: string) => {
     if (!confirm('Delete this backup?')) return;
-    try { await backupApi.deleteBackup(backupId); await loadBackups(); }
+    try { await backupApi.deleteBackup(backupId); await loadBackups();
+      backupApi.getBackupQuota().then(setQuota).catch(() => {}); }
     catch (e) { setError(e instanceof Error ? e.message : 'Delete failed'); }
   };
 
@@ -483,6 +493,33 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
       {/* ── Backup Tab ── */}
       {activeTab === 'backup' && (
         <div className="space-y-6">
+          {quota && (
+            <div className="bg-white rounded-lg shadow p-6 space-y-3">
+              <div className="flex items-center justify-between">
+                <h2 className="font-semibold text-gray-800 flex items-center gap-2">
+                  <Database className="h-5 w-5 text-blue-600" /> Backup Storage
+                </h2>
+                <span className="text-xs text-gray-500">
+                  {formatBytes(quota.used_bytes)} used
+                  {quota.limit_bytes > 0 ? ` of ${formatBytes(quota.limit_bytes)}` : ' · unlimited'}
+                  {quota.max_count > 0 && ` · ${quota.count} of ${quota.max_count} kept`}
+                </span>
+              </div>
+              {quota.limit_bytes > 0 && (
+                <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all ${quota.used_bytes / quota.limit_bytes > 0.9 ? 'bg-red-500' : 'bg-blue-500'}`}
+                    style={{ width: `${Math.min(100, (quota.used_bytes / quota.limit_bytes) * 100)}%` }}
+                  />
+                </div>
+              )}
+              <p className="text-xs text-gray-500">
+                Backups are stored on the server, so you can download them from any device. When a
+                new export exceeds your limit, the oldest backups are automatically removed.
+              </p>
+            </div>
+          )}
+
           <div className="bg-white rounded-lg shadow p-6 space-y-4">
             <h2 className="font-semibold text-gray-800 flex items-center gap-2">
               <Database className="h-5 w-5 text-blue-600" /> Export Backup
