@@ -191,6 +191,7 @@ export const backupApi = {
     conflict: string,
     selectedIds?: string[],
     externalConflict?: string,
+    opId?: string,
   ): Promise<ImportResult> {
     const authorization = await getAuthHeader();
     const userId = getUserId();
@@ -198,6 +199,9 @@ export const backupApi = {
     formData.append('file', file);
     formData.append('conflict', conflict);
     formData.append('external_conflict', externalConflict || 'reject');
+    if (opId) {
+      formData.append('op_id', opId);
+    }
     if (selectedIds && selectedIds.length > 0) {
       formData.append('selected_ids', JSON.stringify(selectedIds));
     }

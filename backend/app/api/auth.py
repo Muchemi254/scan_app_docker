@@ -13,14 +13,16 @@ Signup is intentionally closed: accounts are created by an administrator
 
 import logging
 import asyncio
+import uuid
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from app.core.security import get_current_user_id
 from app.core.config import settings
-from app.services import auth_service
+from app.services import auth_service, ops_service
 from app.core import trusted_hosts
 from app.services import app_settings_service
 from app.services import admin_keys_service
@@ -199,7 +201,11 @@ async def admin_list_users(_admin_uid: str = Depends(require_admin)):
 
 
 @router.delete("/admin/users/{uid}", status_code=status.HTTP_204_NO_CONTENT)
-async def admin_delete_user(uid: str, admin_uid: str = Depends(require_admin)):
+async def admin_delete_user(
+    uid: str,
+    x_op_id: Optional[str] = Header(None, description="Client-generated operation id for polling /ops/{op_id} progress"),
+    admin_uid: str = Depends(require_admin),
+):
     """Delete a user (admin only). Guarded against deleting yourself or the last admin."""
     if uid == admin_uid:
         raise HTTPException(
@@ -217,6 +223,10 @@ async def admin_delete_user(uid: str, admin_uid: str = Depends(require_admin)):
             detail="Cannot delete the last admin account",
         )
 
+    op_ref = x_op_id or f"del_{uid[:8]}_{uuid.uuid4().hex[:8]}"
+    await ops_service.start_op(op_ref, "user_delete", owner=uid,
+                               message="Deleting account…")
+
     deleted = await auth_service.delete_user(uid)
     if not deleted["deleted"]:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
@@ -229,13 +239,15 @@ async def admin_delete_user(uid: str, admin_uid: str = Depends(require_admin)):
             from app.services import data_cleanup_service
             asyncio.create_task(
                 data_cleanup_service.force_user_cleanup(
-                    uid, backup_ids=deleted.get("backup_ids", [])
+                    uid, backup_ids=deleted.get("backup_ids", []), op_id=op_ref,
                 )
             )
         except Exception as e:
             logger.warning(f"Failed to schedule cleanup for deleted user {uid}: {e}")
+            await ops_service.update_op(op_ref, status="failed",
+                                        message="Cleanup could not be scheduled")
 
-    return None
+    return Response(status_code=status.HTTP_204_NO_CONTENT, headers={"X-Op-Id": op_ref})
 
 
 @router.get("/admin/settings/trusted-hosts", response_model=TrustedHostsResponse)

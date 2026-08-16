@@ -139,15 +139,19 @@ export async function adminCreateUser(
   return json;
 }
 
-export async function adminDeleteUser(uid: string): Promise<void> {
+export async function adminDeleteUser(uid: string, opId?: string): Promise<string> {
   const resp = await fetch(`${API_BASE_URL}/auth/admin/users/${encodeURIComponent(uid)}`, {
     method: 'DELETE',
-    headers: { Authorization: getAuthHeader() },
+    headers: {
+      Authorization: getAuthHeader(),
+      ...(opId ? { 'X-Op-Id': opId } : {}),
+    },
   });
   if (!resp.ok) {
     const json = await resp.json().catch(() => ({}));
     throw new Error(json.detail || 'Failed to delete user');
   }
+  return resp.headers.get('X-Op-Id') || opId || '';
 }
 
 // ── Admin: trusted hosts (dynamic Host-header whitelist) ───────────────────

@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import shutil
+import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -33,6 +34,7 @@ from app.services.backup_service import (
     parse_backup,
     ExternalConflictError,
 )
+from app.services import ops_service
 from app.services.app_settings_service import get_backup_limits
 from app.services.database_service import DatabaseService
 
@@ -322,6 +324,7 @@ async def import_backup(
     conflict: str = Form("skip"),
     selected_ids: Optional[str] = Form(None),
     external_conflict: str = Form("reject"),
+    op_id: Optional[str] = Form(None),
     current_user_id: str = Depends(get_current_user_id),
 ):
     """
@@ -332,6 +335,7 @@ async def import_backup(
     external_conflict: 'reject' | 'remap' — how to handle receipts whose IDs
         already belong to a *different* user. 'reject' (default) fails with
         409; 'remap' imports them as copies with fresh IDs.
+    op_id: client-generated operation id for polling /ops/{op_id} progress.
     """
     _verify_access(userId, current_user_id)
 
@@ -348,15 +352,25 @@ async def import_backup(
             raise HTTPException(status_code=400, detail="selected_ids must be valid JSON array")
 
     tmp_path = os.path.join(settings.BACKUP_STORAGE_DIR, f"_import_{userId[:8]}.tar.gz")
+    op_ref = op_id or f"import_{userId[:8]}_{uuid.uuid4().hex[:8]}"
+    await ops_service.start_op(
+        op_ref, "import", owner=userId, message="Upload complete — reading backup…"
+    )
     try:
         with open(tmp_path, "wb") as dst:
             shutil.copyfileobj(file.file, dst, 65536)
 
         stats = await import_user_data(
             userId, tmp_path, conflict=conflict, selected_ids=ids,
-            external_conflict=external_conflict,
+            external_conflict=external_conflict, op_id=op_ref,
+        )
+        await ops_service.update_op(
+            op_ref, stage="done", message="Import complete", status="completed", result=stats
         )
     except ExternalConflictError as e:
+        await ops_service.update_op(
+            op_ref, status="failed", message=str(e)
+        )
         raise HTTPException(
             status_code=409,
             detail={
@@ -368,6 +382,7 @@ async def import_backup(
         )
     except Exception as e:
         logger.error("Import failed: %s", e)
+        await ops_service.update_op(op_ref, status="failed", message=f"Import failed: {e}")
         raise HTTPException(status_code=500, detail=f"Import failed: {e}")
     finally:
         try:
@@ -375,7 +390,7 @@ async def import_backup(
         except OSError:
             pass
 
-    return {"status": "ok", "stats": stats}
+    return {"status": "ok", "op_id": op_ref, "stats": stats}
 
 
 # ── Delete ───────────────────────────────────────────────────────────────────

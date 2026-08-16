@@ -1,5 +1,5 @@
 // src/pages/AdminPage.tsx
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useAuthStore } from '../stores/authStore';
 import {
   adminCreateUser,
@@ -13,6 +13,7 @@ import {
   type AdminAIProvider,
   type AuthUser,
 } from '../services/auth';
+import { opsApi, type OpProgress } from '../services/opsApi';
 import { settingsApi, locationsApi } from '../services/api';
 import {
   ShieldAlert, Plus, Trash2, RefreshCw, User as UserIcon, Globe, X, Key,
@@ -45,6 +46,54 @@ const AdminPage = ({ userId }: Props) => {
   const [loadingUsers, setLoadingUsers] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+
+  // User deletions (background data purge — poll /ops for live progress)
+  const [deleting, setDeleting] = useState<Record<string, { opId: string; email: string; status: string; message: string; counts: Record<string, number> }>>({});
+  const deletePollers = useRef<Record<string, number>>({});
+
+  const stopDeletePoll = useCallback((uid: string) => {
+    const id = deletePollers.current[uid];
+    if (id !== undefined) {
+      clearInterval(id);
+      delete deletePollers.current[uid];
+    }
+  }, []);
+
+  const pollDeleteOp = useCallback((uid: string, opId: string, email: string) => {
+    const tick = async () => {
+      try {
+        const op = await opsApi.getOp(opId);
+        setDeleting(prev => ({ ...prev, [uid]: { opId, email, status: op.status, message: op.message, counts: op.counts } }));
+        if (op.status === 'completed' || op.status === 'failed') {
+          stopDeletePoll(uid);
+          if (op.status === 'completed') {
+            const c = op.counts;
+            setNotice(`Deleted ${email} — ${c.rows ?? 0} rows, ${c.images ?? 0} image files removed`);
+          } else {
+            setError(op.message || `Deletion of ${email} failed`);
+          }
+          setTimeout(() => setDeleting(prev => { const n = { ...prev }; delete n[uid]; return n; }), 400);
+          loadUsers();
+        }
+      } catch {
+        // op expired — drop the poller quietly
+        stopDeletePoll(uid);
+      }
+    };
+    tick();
+    deletePollers.current[uid] = window.setInterval(tick, 700);
+  }, [loadUsers, stopDeletePoll]);
+
+  // Resume tracking of in-flight deletions after a page refresh.
+  useEffect(() => {
+    opsApi.recent('user_delete').then(ops => {
+      ops.filter(o => o.status === 'running').forEach(o => {
+        setDeleting(prev => ({ ...prev, [o.owner]: { opId: o.op_id, email: o.message || 'deleted user', status: 'running', message: o.message, counts: o.counts } }));
+        pollDeleteOp(o.owner, o.op_id, o.message || 'deleted user');
+      });
+    }).catch(() => {});
+    return () => { Object.values(deletePollers.current).forEach(clearInterval); deletePollers.current = {}; };
+  }, [pollDeleteOp]);
 
   // Create form
   const [email, setEmail] = useState('');
@@ -216,10 +265,15 @@ const AdminPage = ({ userId }: Props) => {
     setError('');
     setNotice('');
     try {
-      await adminDeleteUser(user.uid);
-      setNotice(`Deleted ${user.email}`);
+      const opId = opsApi.newOpId();
+      setDeleting(prev => ({ ...prev, [user.uid]: { opId, email: user.email, status: 'running', message: 'Deleting account…', counts: {} } }));
+      await adminDeleteUser(user.uid, opId);
+      pollDeleteOp(user.uid, opId, user.email);
+      setNotice(`Deleting ${user.email}…`);
       await loadUsers();
     } catch (err: any) {
+      stopDeletePoll(user.uid);
+      setDeleting(prev => { const n = { ...prev }; delete n[user.uid]; return n; });
       setError(err?.message || 'Failed to delete user');
     }
   };
@@ -489,6 +543,25 @@ const AdminPage = ({ userId }: Props) => {
                       >
                         <Trash2 className="h-4 w-4" /> Delete
                       </button>
+                    </td>
+                  </tr>
+                ))}
+                {Object.values(deleting).map(d => (
+                  <tr key={d.opId} className="border-b last:border-0 bg-amber-50/50">
+                    <td className="px-6 py-3">
+                      <span className="flex items-center gap-2">
+                        <RefreshCw className={`h-4 w-4 text-amber-600 ${d.status === 'running' ? 'animate-spin' : ''}`} />
+                        <span className="font-medium text-gray-800">{d.email}</span>
+                      </span>
+                    </td>
+                    <td className="px-6 py-3">
+                      <span className="text-xs bg-amber-100 text-amber-700 rounded-full px-2 py-0.5">deleting</span>
+                    </td>
+                    <td className="px-6 py-3 text-gray-500">
+                      {(d.counts.rows ?? 0)} rows · {(d.counts.images ?? 0)} files
+                    </td>
+                    <td className="px-6 py-3 text-right text-amber-600 text-xs truncate max-w-40">
+                      {d.message}
                     </td>
                   </tr>
                 ))}

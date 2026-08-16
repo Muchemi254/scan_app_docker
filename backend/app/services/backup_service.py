@@ -25,6 +25,7 @@ from typing import Optional, List, Dict, Any
 
 from app.core.database import get_pool
 from app.core.config import settings
+from app.services import ops_service
 
 logger = logging.getLogger(__name__)
 
@@ -298,6 +299,7 @@ async def import_user_data(
     conflict: str = "skip",
     selected_ids: Optional[List[str]] = None,
     external_conflict: str = "reject",
+    op_id: Optional[str] = None,
 ) -> dict:
     """
     Restore data from a backup tar.gz file.
@@ -334,6 +336,33 @@ async def import_user_data(
 
     stats = {"receipts": 0, "items": 0, "tasks": 0, "settings": 0,
              "images": 0, "skipped": 0, "errors": 0, "remapped": 0}
+
+    # ── Progress reporting (fail-open, throttled) ──
+    pending = {"receipts": 0, "items": 0, "images": 0}
+
+    async def _report(force: bool = False) -> None:
+        if not op_id:
+            return
+        if force or pending["receipts"] >= 20 or pending["items"] >= 60 or pending["images"] >= 50:
+            await ops_service.update_op(
+                op_id,
+                counts=dict(pending),
+                message=f"Importing… {stats['receipts']} receipts · {stats['items']} items · {stats['images']} images",
+            )
+            for k in pending:
+                pending[k] = 0
+
+    if op_id:
+        await ops_service.update_op(
+            op_id,
+            stage="importing",
+            total={
+                "receipts": len(data.get("receipts", [])),
+                "items": len(data.get("line_items", [])),
+                "images": len(image_entries),
+            },
+            message="Reading backup…",
+        )
 
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -414,6 +443,8 @@ async def import_user_data(
                     _parse_datetime(r.get("updated_at")),
                 )
                 stats["receipts"] += 1
+                pending["receipts"] += 1
+                await _report()
 
             # ── Line items ──
             for li in data.get("line_items", []):
@@ -435,6 +466,8 @@ async def import_user_data(
                         Decimal(str(li.get("discount"))) if li.get("discount") else None,
                     )
                     stats["items"] += 1
+                    pending["items"] += 1
+                    await _report()
                 except Exception:
                     stats["errors"] += 1
 
@@ -569,6 +602,15 @@ async def import_user_data(
                         break
                     dst.write(chunk)
             stats["images"] += 1
+            pending["images"] += 1
+            await _report()
+
+    await _report(force=True)
+    if op_id:
+        await ops_service.update_op(
+            op_id, stage="done", message="Import complete",
+            status="completed", result=stats,
+        )
 
     logger.info("Backup imported: %s", stats)
     return stats

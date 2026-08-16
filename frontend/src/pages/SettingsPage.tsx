@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { backupApi, type BackupEntry, type BackupPreview, type BackupQuota, type ImportResult, ExternalConflictError } from '../services/backupApi';
+import { opsApi, type OpProgress } from '../services/opsApi';
 import { settingsApi } from '../services/api';
 import { useAuthStore } from '../stores/authStore';
 import {
@@ -18,6 +19,8 @@ import { exportReport, exportMultiSheetExcel, defaultPivotConfig, type ReportTyp
 import { FileText, BarChart3, TrendingUp, Building2, Receipt, Percent, Table2 } from 'lucide-react';
 
 type Tab = 'ai' | 'export' | 'backup' | 'tax';
+
+const OP_STORAGE_KEY = (userId: string) => `import_op_${userId}`;
 
 const CONFLICT_MODES = [
   { value: 'skip', label: 'Skip existing', desc: 'Import only new receipts, keep current data' },
@@ -96,6 +99,69 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
   const [importStep, setImportStep] = useState<string>('');
   const [error, setError] = useState('');
   const [showDetail, setShowDetail] = useState(false);
+  const [opProgress, setOpProgress] = useState<OpProgress | null>(null);
+  const [resumingImport, setResumingImport] = useState(false);
+  const pollRef = useRef<number | null>(null);
+
+  const importPct = opProgress && (opProgress.total.receipts || opProgress.total.images)
+    ? Math.min(100, Math.max(4, Math.round(
+        ((opProgress.counts.receipts || 0) + (opProgress.counts.images || 0))
+        / Math.max(1, (opProgress.total.receipts || 0) + (opProgress.total.images || 0))
+        * 100
+      )))
+    : null;
+
+  const stopPoll = useCallback(() => {
+    if (pollRef.current !== null) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+
+  const beginPoll = useCallback((opId: string, onFinish?: (op: OpProgress) => void) => {
+    stopPoll();
+    const tick = async () => {
+      try {
+        const op = await opsApi.getOp(opId);
+        setOpProgress(op);
+        if (onFinish && (op.status === 'completed' || op.status === 'failed')) {
+          stopPoll();
+          onFinish(op);
+        }
+      } catch {
+        // op expired or network hiccup — keep last known state
+      }
+    };
+    tick();
+    pollRef.current = window.setInterval(tick, 700);
+  }, [stopPoll]);
+
+  // Resume a backend import after a page refresh (the task keeps running
+  // server-side; we just re-attach to its live progress + final result).
+  useEffect(() => {
+    if (!userId) return;
+    const opId = sessionStorage.getItem(OP_STORAGE_KEY(userId));
+    if (opId) {
+      setResumingImport(true);
+      opsApi.getOp(opId).then(op => {
+        setOpProgress(op);
+        if (op.status === 'running') setImportStep('importing');
+      }).catch(() => {});
+      beginPoll(opId, (op) => {
+        setResumingImport(false);
+        if (op.status === 'completed' && op.result?.stats) {
+          setImportResult({ status: 'ok', stats: op.result.stats });
+          setImportStep('done');
+          setError('');
+        } else if (op.status === 'failed') {
+          setImportStep('');
+          setError(op.message || 'Import failed');
+        }
+        sessionStorage.removeItem(OP_STORAGE_KEY(userId));
+      });
+    }
+    return () => stopPoll();
+  }, [userId, beginPoll, stopPoll]);
 
   // ── Export state ──
   const { items: storeReceipts, load: loadStore } = useReceiptStore();
@@ -217,17 +283,26 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
 
   const doImport = async (externalConflict: string) => {
     const ids = selectedIds.size > 0 ? Array.from(selectedIds) : undefined;
-    return backupApi.importBackup(importFile!, conflictMode, ids, externalConflict);
+    const opId = opsApi.newOpId();
+    if (userId) sessionStorage.setItem(OP_STORAGE_KEY(userId), opId);
+    setOpProgress(null);
+    beginPoll(opId);
+    return backupApi.importBackup(importFile!, conflictMode, ids, externalConflict, opId);
   };
 
   const handleImport = async () => {
     if (!importFile) return;
     try {
-      setImporting(true); setImportStep('importing');
+      setImporting(true); setImportStep('importing'); setResumingImport(false);
       const result = await doImport('reject');
+      stopPoll();
+      if (userId) sessionStorage.removeItem(OP_STORAGE_KEY(userId));
       setImportResult(result); setImportStep('done'); setError('');
     } catch (e) {
       if (e instanceof ExternalConflictError) {
+        stopPoll();
+        if (userId) sessionStorage.removeItem(OP_STORAGE_KEY(userId));
+        setOpProgress(null);
         setImportStep('');
         const n = e.conflictCount;
         const proceed = window.confirm(
@@ -238,8 +313,10 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
         );
         if (proceed) {
           try {
-            setImporting(true); setImportStep('importing');
+            setImporting(true); setImportStep('importing'); setResumingImport(false);
             const result = await doImport('remap');
+            stopPoll();
+            if (userId) sessionStorage.removeItem(OP_STORAGE_KEY(userId));
             setImportResult(result); setImportStep('done'); setError('');
           } catch (e2) {
             setImportStep(''); setError(e2 instanceof Error ? e2.message : 'Import failed');
@@ -592,11 +669,32 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
                    <RefreshCw className="h-4 w-4 animate-spin text-amber-500" />}
                   <span className="text-gray-600">
                     {importStep === 'previewing' && 'Analyzing backup...'}
-                    {importStep === 'importing' && 'Importing...'}
+                    {importStep === 'importing' && (opProgress?.message || 'Importing...')}
                     {importStep === 'done' && 'Import complete!'}
                   </span>
                 </div>
-                {importStep === 'importing' && <div className="h-2 bg-gray-200 rounded-full overflow-hidden"><div className="h-full bg-green-500 rounded-full animate-pulse" style={{ width: '100%' }} /></div>}
+                {importStep === 'importing' && (
+                  <div>
+                    <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                      <div className={`h-full bg-green-500 rounded-full ${opProgress ? 'transition-all' : 'animate-pulse'}`}
+                        style={{ width: importPct ? `${importPct}%` : '100%' }} />
+                    </div>
+                    {opProgress && (
+                      <p className="text-xs text-gray-500 mt-1">
+                        {opProgress.counts.receipts || 0}/{opProgress.total.receipts || '?'} receipts ·
+                        {opProgress.counts.images || 0}/{opProgress.total.images || '?'} images
+                        {!!opProgress.errors && <span className="text-red-500"> · {opProgress.errors} errors</span>}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {resumingImport && opProgress && opProgress.status === 'running' && (
+              <div className="flex items-center gap-2 text-xs text-blue-700 bg-blue-50 border border-blue-200 rounded px-3 py-2">
+                <RefreshCw className="h-3 w-3 animate-spin" />
+                Resumed an in-progress import — {opProgress.message || 'still importing…'}
               </div>
             )}
 

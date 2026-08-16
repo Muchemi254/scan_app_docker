@@ -30,6 +30,7 @@ import shutil
 import time
 
 from app.core.config import settings
+from app.services import ops_service
 
 logger = logging.getLogger(__name__)
 
@@ -114,7 +115,7 @@ async def _fetch(sql: str, *args):
         return await conn.fetch(sql, *args)
 
 
-async def purge_user_data(user_id: str) -> dict:
+async def purge_user_data(user_id: str, op_id: str = None) -> dict:
     """Delete every row and on-disk file owned by ``user_id``."""
     from app.core.database import get_pool
 
@@ -122,6 +123,13 @@ async def purge_user_data(user_id: str) -> dict:
     tasks = await _fetch("SELECT id FROM tasks WHERE user_id = $1", user_id)
     sessions = await _fetch("SELECT id FROM scan_sessions WHERE user_id = $1", user_id)
     backups = await _fetch("SELECT id FROM backups WHERE user_id = $1", user_id)
+    total_rows = len(receipts) + len(tasks) + len(sessions) + len(backups)
+
+    if op_id:
+        await ops_service.update_op(
+            op_id, stage="purging", message="Removing account data…",
+            total={"rows": total_rows, "images": len(receipts) * 2},
+        )
 
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -132,12 +140,23 @@ async def purge_user_data(user_id: str) -> dict:
                     f"DELETE FROM {table} WHERE user_id = $1", user_id
                 )
                 deleted_rows += int(res.split()[-1])
+                if op_id and deleted_rows:
+                    await ops_service.update_op(
+                        op_id, stage="purging",
+                        counts={"rows": deleted_rows},
+                        message=f"Removing account data… {deleted_rows} rows",
+                    )
 
     removed_images = _remove_receipt_images([str(r["id"]) for r in receipts])
     removed_backups = _remove_backup_files([str(r["id"]) for r in backups])
     removed_dirs = _remove_temp_dirs(
         [str(r["id"]) for r in sessions], [str(r["id"]) for r in tasks]
     )
+    if op_id:
+        await ops_service.update_op(
+            op_id, stage="cleanup", message="Removing files…",
+            counts={"images": removed_images, "backups": removed_backups},
+        )
 
     stats = {
         "user_id": user_id,
@@ -232,19 +251,23 @@ async def _sweep_stale_temp_dirs() -> int:
 # ── Public entry points ───────────────────────────────────────────────────────
 
 
-async def force_user_cleanup(user_id: str, backup_ids: list[str] | None = None) -> dict:
+async def force_user_cleanup(user_id: str, backup_ids: list[str] | None = None,
+                             op_id: str = None) -> dict:
     """Purge one just-deleted user's data + file garbage. Fire-and-forget.
 
     ``backup_ids`` are the user's backup tarball ids captured *before* the
     user row was deleted (the FK CASCADE removed the `backups` rows, so they
     can't be re-discovered from the DB). Passing them lets us delete those
     files immediately instead of waiting out the orphan-file age guard.
+    ``op_id`` (optional) enables progress polling under /ops/{op_id}.
     """
     try:
-        stats = await purge_user_data(user_id)
+        stats = await purge_user_data(user_id, op_id=op_id)
     except Exception as e:
         stats = {"user_id": user_id, "error": str(e)}
         logger.warning("force_user_cleanup(%s) failed: %s", user_id, e)
+        if op_id:
+            await ops_service.update_op(op_id, status="failed", message=f"Cleanup failed: {e}")
     direct_backups = _remove_backup_files(list(backup_ids or []))
     stats["removed_backups"] = stats.get("removed_backups", 0) + direct_backups
     try:
@@ -255,6 +278,11 @@ async def force_user_cleanup(user_id: str, backup_ids: list[str] | None = None) 
         stats["stale_temp_dirs_removed"] = await _sweep_stale_temp_dirs()
     except Exception as e:
         logger.warning("temp dir sweep failed: %s", e)
+    if op_id:
+        await ops_service.update_op(
+            op_id, stage="done", message="Deletion complete",
+            status="completed", result=stats,
+        )
     return stats
 
 

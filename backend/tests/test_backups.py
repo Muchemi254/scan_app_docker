@@ -461,3 +461,87 @@ async def test_import_api_rejects_then_remaps(client):
         assert stats["receipts"] == 1 and stats["remapped"] == 1, stats
     finally:
         os.remove(exported["path"])
+
+
+async def test_import_api_records_pollable_progress_op(client):
+    """A synchronous import exposes a pollable /ops/{id} record (lightweight
+    Redis, fail-open) so the UI can show live progress and survive refreshes."""
+    import asyncio
+
+    from app.services import ops_service
+    from app.services.backup_service import export_user_data
+
+    admin_headers = await _admin(client)
+    uid_a = (await _user(client, admin_headers, "opImpA@pytest.local"))["uid"]
+    uid_b = (await _user(client, admin_headers, "opImpB@pytest.local"))["uid"]
+    uid_c = (await _user(client, admin_headers, "opImpC@pytest.local"))["uid"]
+    bh, _, _ = await login(client, "opImpB@pytest.local", "pass-123")
+    ch, _, _ = await login(client, "opImpC@pytest.local", "pass-123")
+
+    await _make_receipt_with_image(uid_a, "opprog_r1")
+    exported = await export_user_data(uid_a)
+    op_id = "test-import-op-1"
+    try:
+        with open(exported["path"], "rb") as f:
+            resp = await client.post(
+                f"/api/v1/users/{uid_b}/backup/import",
+                headers=bh,
+                files={"file": ("backup.tar.gz", f, "application/gzip")},
+                data={"conflict": "skip", "external_conflict": "remap", "op_id": op_id},
+            )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["op_id"] == op_id
+
+        # op is recorded completed with the result; progress is owner-scoped
+        op = await ops_service.get_op(op_id)
+        assert op and op["status"] == "completed", op
+        assert op["op_type"] == "import"
+        assert op["owner"] == uid_b
+        assert op["result"]["receipts"] == 1, op["result"]
+
+        # owner can poll it via the API; an unrelated user cannot
+        got = await client.get(f"/api/v1/ops/{op_id}", headers=bh)
+        assert got.status_code == 200
+        assert got.json()["op_id"] == op_id
+
+        denied = await client.get(f"/api/v1/ops/{op_id}", headers=ch)
+        assert denied.status_code == 404, denied.text
+
+        missing = await client.get(f"/api/v1/ops/does-not-exist", headers=bh)
+        assert missing.status_code == 404
+    finally:
+        os.remove(exported["path"])
+        try:
+            r = await ops_service._redis()
+            await r.delete("op:" + op_id)
+        except Exception:
+            await asyncio.sleep(0)
+
+
+async def test_admin_delete_user_records_pollable_progress_op(client):
+    """User deletion emits an op (via X-Op-Id) that admins can poll to watch
+    the background data purge; non-admins can't read the deleted user's op."""
+    from app.services import ops_service
+
+    admin_headers = await _admin(client)
+    victim = await _user(client, admin_headers, "opDel@pytest.local")
+    bystander = await _user(client, admin_headers, "opByst@pytest.local")
+    bh, _, _ = await login(client, "opByst@pytest.local", "pass-123")
+
+    op_id = "test-delete-op-1"
+    resp = await client.delete(
+        f"/api/v1/auth/admin/users/{victim['uid']}",
+        headers={**admin_headers, "X-Op-Id": op_id},
+    )
+    assert resp.status_code == 204, resp.text
+    assert resp.headers.get("x-op-id") == op_id
+
+    op = await ops_service.get_op(op_id)
+    assert op and op["op_type"] == "user_delete", op
+    assert op["owner"] == victim["uid"]
+
+    denied = await client.get(f"/api/v1/ops/{op_id}", headers=bh)
+    assert denied.status_code == 404, denied.text
+    admin_got = await client.get(f"/api/v1/ops/{op_id}", headers=admin_headers)
+    assert admin_got.status_code == 200, admin_got.text
+    assert admin_got.json()["status"] in ("running", "completed")
