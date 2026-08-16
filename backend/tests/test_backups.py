@@ -504,6 +504,11 @@ async def test_import_api_records_pollable_progress_op(client):
         assert got.status_code == 200
         assert got.json()["op_id"] == op_id
 
+        # recent list exposes the import op to its owner, but not to others
+        recents = await client.get("/api/v1/ops/recent?op_type=import", headers=bh)
+        assert recents.status_code == 200, recents.text
+        assert any(o["op_id"] == op_id and o["op_type"] == "import" for o in recents.json()), recents.text
+
         denied = await client.get(f"/api/v1/ops/{op_id}", headers=ch)
         assert denied.status_code == 404, denied.text
 
@@ -545,3 +550,10 @@ async def test_admin_delete_user_records_pollable_progress_op(client):
     admin_got = await client.get(f"/api/v1/ops/{op_id}", headers=admin_headers)
     assert admin_got.status_code == 200, admin_got.text
     assert admin_got.json()["status"] in ("running", "completed")
+
+    # user-delete ops are admin-only; non-admins can't even list them
+    denied_recent = await client.get("/api/v1/ops/recent?op_type=user_delete", headers=bh)
+    assert denied_recent.status_code == 403, denied_recent.text
+    admin_recent = await client.get("/api/v1/ops/recent?op_type=user_delete", headers=admin_headers)
+    assert admin_recent.status_code == 200, admin_recent.text
+    assert any(o["op_id"] == op_id for o in admin_recent.json()), admin_recent.text

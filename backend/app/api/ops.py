@@ -37,18 +37,6 @@ def _visible(user_id: str, is_admin: bool, op: Optional[dict]) -> bool:
     return op.get("owner") == user_id
 
 
-@router.get("/{op_id}")
-async def get_operation(op_id: str, current_user_id: str = Depends(get_current_user_id)):
-    """Return live progress for one operation."""
-    is_admin = await _is_admin(current_user_id)
-    op = await ops_service.get_op(op_id)
-    if not op:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Operation not found")
-    if not _visible(current_user_id, is_admin, op):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Operation not found")
-    return op
-
-
 @router.get("/recent")
 async def list_recent_operations(
     op_type: Optional[str] = Query(None),
@@ -59,3 +47,15 @@ async def list_recent_operations(
     if op_type == "user_delete" and not is_admin:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin only")
     return await ops_service.list_ops(current_user_id, op_type=op_type, limit=25)
+
+
+@router.get("/{op_id}")
+async def get_operation(op_id: str, current_user_id: str = Depends(get_current_user_id)):
+    """Return live progress for one operation."""
+    is_admin = await _is_admin(current_user_id)
+    op = await ops_service.get_op(op_id)
+    if not op:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Operation not found")
+    if not _visible(current_user_id, is_admin, op):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Operation not found")
+    return op

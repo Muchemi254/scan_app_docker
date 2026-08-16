@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 _OP_KEY = "op:%s"
 _IDX_KEY = "op:recent:%s"
+_GLOBAL_IDX_KEY = "op:recent:global:%s"
 _OP_TTL = 60 * 60 * 24       # 24h — completed ops stay viewable for a day
 _IDX_TTL = 60 * 60 * 24
 _MAX_RECENT = 50
@@ -63,6 +64,13 @@ async def start_op(op_id: str, op_type: str, owner: str,
         await r.lpush(_IDX_KEY % owner, op_id)
         await r.expire(_IDX_KEY % owner, _IDX_TTL)
         await r.ltrim(_IDX_KEY % owner, 0, _MAX_RECENT - 1)
+        # user-delete ops are indexed globally so admins can list them even
+        # though the op is owned by the (now deleted) target user.
+        if op_type == "user_delete":
+            gkey = _GLOBAL_IDX_KEY % op_type
+            await r.lpush(gkey, op_id)
+            await r.expire(gkey, _IDX_TTL)
+            await r.ltrim(gkey, 0, _MAX_RECENT - 1)
     except Exception as e:
         logger.warning("start_op(%s) Redis failure: %s", op_id, e)
     return op
@@ -124,10 +132,17 @@ async def get_op(op_id: str) -> Optional[dict]:
 
 async def list_ops(owner: str, op_type: Optional[str] = None,
                    limit: int = 20) -> List[dict]:
-    """Recent ops for ``owner`` (kept newest-first)."""
+    """Recent ops (kept newest-first).
+
+    Imports are indexed per-owner; user-delete ops live in a global index
+    that admins read regardless of the deleting admin who started them.
+    """
     try:
         r = await _redis()
-        ids = await r.lrange(_IDX_KEY % owner, 0, limit - 1)
+        if op_type == "user_delete":
+            ids = await r.lrange(_GLOBAL_IDX_KEY % op_type, 0, limit - 1)
+        else:
+            ids = await r.lrange(_IDX_KEY % owner, 0, limit - 1)
         ops = []
         for oid in ids:
             op = await get_op(oid)
