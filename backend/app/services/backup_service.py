@@ -159,6 +159,28 @@ async def export_user_data(user_id: str) -> dict:
     data_json = json.dumps(data, indent=2, default=str).encode("utf-8")
     data_hash = hashlib.sha256(data_json).hexdigest()
 
+    # ── Integrity: receipts that reference image files missing from disk ──
+    # A backup silently packing zero images is the classic data-loss symptom,
+    # so surface it instead of letting it pass unnoticed.
+    missing_image_receipts: list[str] = []
+    if os.path.isdir(settings.IMAGE_STORAGE_DIR):
+        for r in receipt_rows:
+            for col in ("image_filename", "thumbnail_filename"):
+                fn = r.get(col)
+                if not fn:
+                    continue
+                if not os.path.exists(os.path.join(settings.IMAGE_STORAGE_DIR, str(fn))):
+                    if r["id"] not in missing_image_receipts:
+                        missing_image_receipts.append(str(r["id"]))
+    if missing_image_receipts:
+        logger.warning(
+            "Backup integrity: %d receipt(s) reference image files missing from "
+            "%s (e.g. %s) — the archive will contain no image for them",
+            len(missing_image_receipts),
+            settings.IMAGE_STORAGE_DIR,
+            missing_image_receipts[:3],
+        )
+
     # ── Collect image filenames belonging to this user ──
     image_files = []
     if os.path.isdir(settings.IMAGE_STORAGE_DIR):
@@ -184,6 +206,7 @@ async def export_user_data(user_id: str) -> dict:
         },
         "data_sha256": data_hash,
         "image_count": len(image_files),
+        "missing_images": len(missing_image_receipts),
         "images_sha256": "none",
     }
 
@@ -233,6 +256,7 @@ async def export_user_data(user_id: str) -> dict:
         "size_bytes": size_bytes,
         "counts": manifest["counts"],
         "image_count": img_count,
+        "missing_images": len(missing_image_receipts),
     }
 
 

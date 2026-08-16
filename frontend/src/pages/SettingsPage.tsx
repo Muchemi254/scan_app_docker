@@ -648,6 +648,11 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium truncate">{b.filename}</p>
                       <p className="text-xs text-gray-400">{new Date(b.created_at).toLocaleString()} · {b.size_kb} KB</p>
+                      {!!b.missing_images && (
+                        <p className="text-xs text-amber-600 mt-0.5">
+                          ⚠ {b.missing_images} receipt image(s) missing from server — this backup was saved without them
+                        </p>
+                      )}
                     </div>
                     <div className="flex gap-1">
                       <button onClick={async () => { try { await backupApi.downloadBackup(b.id, b.filename); } catch(e) { setError(e instanceof Error ? e.message : 'Download failed'); } }} disabled={!b.available}

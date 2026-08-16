@@ -10,6 +10,8 @@ export interface BackupEntry {
   size_bytes: number;
   size_kb: number;
   available: boolean;
+  image_count?: number;
+  missing_images?: number;
 }
 
 export interface BackupPreview {

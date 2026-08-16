@@ -138,7 +138,17 @@ async def create_backup(
 
     await DatabaseService.create_backup_record(
         userId, backup_id, filename, result["size_bytes"], datetime.now(timezone.utc),
+        image_count=result.get("image_count", 0),
+        missing_images=result.get("missing_images", 0),
     )
+
+    if result.get("missing_images", 0) > 0:
+        logger.warning(
+            "Backup %s for user %s saved WITHOUT images for %d receipt(s) "
+            "(files missing from storage) — total %d images packed",
+            backup_id, userId[:12], result["missing_images"],
+            result.get("image_count", 0),
+        )
 
     # Enforce the per-user quota/retention — prunes this user's oldest archives.
     await _prune_backups(userId)

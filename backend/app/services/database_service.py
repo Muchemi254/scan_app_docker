@@ -936,16 +936,19 @@ class DatabaseService:
     async def create_backup_record(
         user_id: str, backup_id: str, filename: str, size_bytes: int,
         created_at: Optional[datetime] = None,
+        image_count: int = 0, missing_images: int = 0,
     ) -> Dict[str, Any]:
         pool = await get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                INSERT INTO backups (id, user_id, filename, created_at, size_bytes)
-                VALUES ($1, $2, $3, COALESCE($4, now()), $5)
+                INSERT INTO backups (id, user_id, filename, created_at, size_bytes,
+                    image_count, missing_images)
+                VALUES ($1, $2, $3, COALESCE($4, now()), $5, $6, $7)
                 RETURNING *
                 """,
                 backup_id, user_id, filename, created_at, size_bytes,
+                image_count, missing_images,
             )
             return dict(row) if row else {}
 
