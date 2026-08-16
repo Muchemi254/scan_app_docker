@@ -67,8 +67,10 @@ const AppContent = () => {
 
   // Pages operate on the active user scope: an admin who selected a different
   // user in the Layout scope selector works inside that user's workspace.
-  // For normal users this is their own uid.
-  const userId = (activeScopeUid ?? user?.uid) ?? null;
+  // For normal users this is their own uid. The scope applies only while a
+  // real session exists — an orphaned scope (e.g. after logout) must not
+  // keep a signed-out user inside a protected page.
+  const userId = user ? (activeScopeUid ?? user.uid) : null;
   const authLoading = status === 'loading';
 
   return (

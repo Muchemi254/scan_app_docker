@@ -42,6 +42,9 @@ interface ReceiptStoreActions {
   /** Mark the cache as stale. The next load() will re-fetch. */
   invalidate: () => void;
 
+  /** Drop the cache entirely (used on logout so data never outlives a session). */
+  reset: () => void;
+
   /** Add a new receipt to the top of the cache (after create). */
   add: (receipt: any) => void;
 
@@ -91,6 +94,8 @@ export const useReceiptStore = create<ReceiptStore>()((set, get) => ({
   },
 
   invalidate: () => set({ fetchedAt: null }),
+
+  reset: () => set({ items: [], fetchedAt: null, cachedUserId: null, loading: false, error: null }),
 
   add: (receipt: any) =>
     set(state => ({ items: [receipt, ...state.items] })),

@@ -65,6 +65,11 @@ function storeSession(resp: LoginResponse): void {
 export function clearSession(): void {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
+  // Also drop per-user state persisted by other stores (task progress,
+  // in-progress scanner drafts) so a later login never inherits the
+  // previous account's data.
+  localStorage.removeItem('scan-app-task-store');
+  localStorage.removeItem('scanner-context');
 }
 
 export async function login(email: string, password: string): Promise<AuthUser> {
