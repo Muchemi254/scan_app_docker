@@ -90,6 +90,8 @@ class AuditService:
                 changes = r["changes"]
                 if isinstance(changes, str):
                     changes = json.loads(changes) if changes else []
+                while isinstance(changes, str):
+                    changes = json.loads(changes) if changes else []
                 changes = changes or []
                 note = None
                 # Extract a human note (e.g. admin rejection reason) out of the

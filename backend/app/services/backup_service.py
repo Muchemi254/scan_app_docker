@@ -103,6 +103,28 @@ def _parse_datetime(value):
     return None
 
 
+def _to_json_text(value):
+    """Normalize a backup value into single-encoded JSON text.
+
+    data.json may store JSON columns either as native lists/dicts or as
+    pre-serialized strings (export keeps the DB's json/jsonb text as a str).
+    Re-dumping a str wraps it in an extra layer of quotes, which corrupts the
+    column (string-wrapped-JSON). Parse strings first so the stored value is
+    always single-encoded.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+        try:
+            value = json.loads(s)
+        except (ValueError, TypeError):
+            return json.dumps(value)
+    return json.dumps(value, default=str)
+
+
 def _parse_date(value):
     """Coerce a backup JSON value into a ``date`` (asyncpg requirement)."""
     if value is None:
@@ -491,7 +513,7 @@ async def import_user_data(
                         al.get("action", ""),
                         al.get("changed_by"),
                         _parse_datetime(al.get("timestamp")),
-                        json.dumps(al.get("changes")) if al.get("changes") is not None else None,
+                        _to_json_text(al.get("changes")),
                     )
                     stats["audit_logs"] = stats.get("audit_logs", 0) + 1
                 except Exception:
@@ -521,8 +543,8 @@ async def import_user_data(
                         t.get("percentage", 0),
                         t.get("message", ""),
                         t.get("error"),
-                        json.dumps(t.get("metadata", {})),
-                        json.dumps(t.get("results", {})),
+                        _to_json_text(t.get("metadata")),
+                        _to_json_text(t.get("results")),
                         _parse_datetime(t.get("created_at")),
                         _parse_datetime(t.get("updated_at")),
                         _parse_datetime(t.get("started_at")),
@@ -543,7 +565,7 @@ async def import_user_data(
                     """, user_id,
                         s.get("provider", "gemini"),
                         s.get("model_id", "gemini-3-flash-preview"),
-                        json.dumps(s.get("configs", {})),
+                        _to_json_text(s.get("configs")),
                     )
                     stats["settings"] += 1
                 except Exception:

@@ -314,6 +314,74 @@ async def _make_receipt_with_image(uid, rid, supplier="SUP A", total=10.0):
         await conn.close()
 
 
+async def test_import_preserves_single_encoded_audit_changes_json(client):
+    """Import must not double-encode JSON columns.
+
+    Regression test for the 500 on GET .../receipts/{id}/audit: re-dumping an
+    already-serialized `changes` string wraps the JSON array in another JSON
+    string, and the audit reader then iterates the characters → Pydantic
+    validation errors. Import must store single-encoded JSON text.
+    """
+    import json
+
+    import asyncpg
+
+    from app.services.backup_service import export_user_data, import_user_data
+    from tests.conftest import TEST_DATABASE_URL
+
+    admin_headers = await _admin(client)
+    uid = (await _user(client, admin_headers, "bkpAudit@pytest.local"))["uid"]
+
+    conn = await asyncpg.connect(TEST_DATABASE_URL)
+    try:
+        await conn.execute(
+            """
+            INSERT INTO receipts (id, user_id, supplier, total_amount, receipt_date,
+                created_at, updated_at, status)
+            VALUES ($1, $2, 'ACME', 10.0, CURRENT_DATE, NOW(), NOW(), 'processed')
+            """,
+            "auditjson_r1", uid,
+        )
+        await conn.execute(
+            """
+            INSERT INTO audit_logs (id, receipt_id, user_id, action, changed_by,
+                timestamp, changes)
+            VALUES ($1, $2, $3, 'created', 'system', NOW(), $4::jsonb)
+            """,
+            "auditjson_r1_audit", "auditjson_r1", uid,
+            json.dumps([{"field": "supplier", "new_value": "ACME", "old_value": None}]),
+        )
+    finally:
+        await conn.close()
+
+    exported = await export_user_data(uid)
+    try:
+        stats = await import_user_data(uid, exported["path"], conflict="overwrite")
+        assert stats["errors"] == 0, stats
+        assert stats["audit_logs"] == 1, stats
+
+        conn = await asyncpg.connect(TEST_DATABASE_URL)
+        try:
+            row = await conn.fetchrow(
+                "SELECT changes FROM audit_logs WHERE user_id = $1 AND receipt_id = $2",
+                uid, "auditjson_r1",
+            )
+            parsed = json.loads(row["changes"]) if isinstance(row["changes"], str) else row["changes"]
+            while isinstance(parsed, str):
+                parsed = json.loads(parsed)
+            assert isinstance(parsed, list), (
+                "audit changes must be a JSON array, got str (double-encoded)"
+            )
+            assert parsed[0]["field"] == "supplier"
+        finally:
+            await conn.close()
+    finally:
+        try:
+            os.remove(exported["path"])
+        except OSError:
+            pass
+
+
 async def test_import_into_other_user_rejects_external_conflict(client):
     """A backup whose receipt IDs belong to another user must be rejected by
     default (never silently clobber the original owner's rows)."""
