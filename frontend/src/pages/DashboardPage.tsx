@@ -241,22 +241,22 @@ const DashboardPage = ({ userId }: { userId: string | null }) => {
   }), [trends]);
 
   const categoryChart = useMemo(() => ({
-    labels: breakdown?.categories.map(c => c.category) ?? [],
+    labels: (breakdown?.categories ?? []).slice(0, 5).map(c => c.category),
     datasets: [{
       label: 'KES',
-      data: breakdown?.categories.map(c => c.total) ?? [],
-      backgroundColor: breakdown?.categories.map((_, i) => CHART_COLORS[i % CHART_COLORS.length]) ?? [],
+      data: (breakdown?.categories ?? []).slice(0, 5).map(c => c.total),
+      backgroundColor: (breakdown?.categories ?? []).slice(0, 5).map((_, i) => CHART_COLORS[i % CHART_COLORS.length]),
       borderRadius: 6,
       borderSkipped: false,
     }],
   }), [breakdown]);
 
   const supplierChart = useMemo(() => ({
-    labels: (breakdown?.suppliers ?? []).slice(0, 8).map(s => s.supplier),
+    labels: (breakdown?.suppliers ?? []).slice(0, 5).map(s => s.supplier),
     datasets: [{
       label: 'KES',
-      data: (breakdown?.suppliers ?? []).slice(0, 8).map(s => s.total),
-      backgroundColor: (breakdown?.suppliers ?? []).slice(0, 8).map((_, i) => CHART_COLORS[(i + 3) % CHART_COLORS.length]),
+      data: (breakdown?.suppliers ?? []).slice(0, 5).map(s => s.total),
+      backgroundColor: (breakdown?.suppliers ?? []).slice(0, 5).map((_, i) => CHART_COLORS[(i + 3) % CHART_COLORS.length]),
       borderRadius: 6,
       borderSkipped: false,
     }],
