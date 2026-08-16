@@ -38,6 +38,10 @@ os.environ.setdefault("IMAGE_STORAGE_DIR", "/tmp/scanapp_pytest_images")
 os.environ.setdefault("BACKUP_STORAGE_DIR", "/tmp/scanapp_pytest_backups")
 os.environ.setdefault("REVIEW_BATCH_DB_PATH", "/tmp/scanapp_pytest_review.db")
 os.environ.setdefault("ENABLE_DOCS", "false")
+# Keep user-data cleanup deterministic in tests: the delete endpoint must not
+# fire background purge tasks mid-suite. The cleanup service itself is tested
+# directly (tests/test_data_cleanup.py).
+os.environ.setdefault("SCHEDULE_DELETE_CLEANUP", "false")
 
 _test_db_name = TEST_DATABASE_URL.rsplit("/", 1)[-1]
 

@@ -83,6 +83,26 @@ class Settings(BaseSettings):
     BACKUP_STORAGE_DIR: str = os.getenv("BACKUP_STORAGE_DIR", "/app/backups")
     MAX_UPLOAD_SIZE: int = _env_int("MAX_UPLOAD_SIZE", 10 * 1024 * 1024)  # 10 MB
 
+    # Background cleanup of deleted users' data (rows + files). Runs on a
+    # timer in the app lifetime so deleting a user never blocks on I/O.
+    DATA_CLEANUP_INTERVAL_SECONDS: int = _env_int(
+        "DATA_CLEANUP_INTERVAL_SECONDS", 300
+    )  # 5 min
+    # Don't treat files younger than this as orphans (protects in-flight writes).
+    ORPHANED_FILE_MIN_AGE_SECONDS: float = _env_int(
+        "ORPHANED_FILE_MIN_AGE_SECONDS", 10 * 60
+    )  # 10 min
+    # `_scan_*` / `_batch_*` / `_import_*` / `_preview_*` temp dirs older than
+    # this are considered abandoned and removed.
+    TEMP_DIR_MAX_AGE_SECONDS: float = _env_int(
+        "TEMP_DIR_MAX_AGE_SECONDS", 6 * 60 * 60
+    )  # 6 h
+    # Fire the per-user background purge right after a delete (fire-and-forget,
+    # so the delete response never blocks). The periodic sweep is the fallback.
+    SCHEDULE_DELETE_CLEANUP: bool = (
+        os.getenv("SCHEDULE_DELETE_CLEANUP", "true").lower() in ("1", "true", "yes")
+    )
+
     # Backup storage limits — per-user quota + retention. These are the
     # fallback defaults; admins can override them at runtime via
     # app_settings (see backup API / Admin UI).

@@ -212,7 +212,7 @@ const AdminPage = ({ userId }: Props) => {
       setError('You cannot delete your own account');
       return;
     }
-    if (!window.confirm(`Delete ${user.email}? This removes their account and revokes their sessions.`)) return;
+    if (!window.confirm(`Delete ${user.email}? This permanently removes their account and ALL their data (receipts, sessions, backups, images).`)) return;
     setError('');
     setNotice('');
     try {

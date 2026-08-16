@@ -14,6 +14,7 @@ Architecture:
 """
 
 import logging
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -111,10 +112,40 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Redis connection failed (batch scanning will be unavailable): {e}")
 
+    # Background cleanup: purge deleted users' data (rows + files) on a timer
+    # so the admin delete endpoint stays fast. Idempotent + age-guarded.
+    cleanup_task: asyncio.Task = None
+
+    async def _cleanup_loop():
+        await asyncio.sleep(settings.DATA_CLEANUP_INTERVAL_SECONDS)
+        while True:
+            try:
+                from app.services import data_cleanup_service
+                stats = await data_cleanup_service.cleanup_orphaned_data()
+                if any(stats.values()):
+                    logger.info("Background cleanup finished: %s", stats)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(f"Background cleanup failed: {e}")
+            await asyncio.sleep(settings.DATA_CLEANUP_INTERVAL_SECONDS)
+
+    try:
+        cleanup_task = asyncio.create_task(_cleanup_loop())
+        logger.info("Background data cleanup started (every %ds)", settings.DATA_CLEANUP_INTERVAL_SECONDS)
+    except Exception as e:
+        logger.warning(f"Could not start background data cleanup: {e}")
+
     yield
 
     # Shutdown
     logger.info("Shutting down application")
+    if cleanup_task:
+        cleanup_task.cancel()
+        try:
+            await cleanup_task
+        except (asyncio.CancelledError, Exception):
+            pass
     try:
         from app.core.database import close_pool
         await close_pool()

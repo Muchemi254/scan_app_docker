@@ -12,6 +12,7 @@ Signup is intentionally closed: accounts are created by an administrator
 """
 
 import logging
+import asyncio
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -216,7 +217,24 @@ async def admin_delete_user(uid: str, admin_uid: str = Depends(require_admin)):
             detail="Cannot delete the last admin account",
         )
 
-    await auth_service.delete_user(uid)
+    deleted = await auth_service.delete_user(uid)
+    if not deleted["deleted"]:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    # Purge the user's remaining data (receipts, sessions, files, …) in the
+    # background — the delete response must not block on that I/O. A periodic
+    # sweep in the app lifecycle is the safety net if this task were to fail.
+    if settings.SCHEDULE_DELETE_CLEANUP:
+        try:
+            from app.services import data_cleanup_service
+            asyncio.create_task(
+                data_cleanup_service.force_user_cleanup(
+                    uid, backup_ids=deleted.get("backup_ids", [])
+                )
+            )
+        except Exception as e:
+            logger.warning(f"Failed to schedule cleanup for deleted user {uid}: {e}")
+
     return None
 
 

@@ -175,12 +175,25 @@ async def list_users() -> list[dict]:
         return [dict(r) for r in rows]
 
 
-async def delete_user(uid: str) -> bool:
+async def delete_user(uid: str) -> dict:
+    """Delete a user row (FK CASCADE removes backups + preferences rows).
+
+    Returns ``{"deleted": bool, "backup_ids": [...]}`` — the backup tarball
+    ids are captured *before* the cascade so the background file cleanup can
+    remove them right away (their rows are gone, so the orphan-file sweep
+    alone would wait out the age guard first).
+    """
     from app.core.database import get_pool
     pool = await get_pool()
     async with pool.acquire() as conn:
+        backup_ids = [
+            str(r["id"])
+            for r in await conn.fetch(
+                "SELECT id FROM backups WHERE user_id = $1", uid
+            )
+        ]
         result = await conn.execute("DELETE FROM users WHERE uid = $1", uid)
-        return result == "DELETE 1"
+        return {"deleted": result == "DELETE 1", "backup_ids": backup_ids}
 
 
 async def count_admin_users() -> int:
