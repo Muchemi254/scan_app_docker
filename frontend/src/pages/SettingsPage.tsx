@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { backupApi, type BackupEntry, type BackupPreview, type BackupQuota, type ImportResult } from '../services/backupApi';
+import { backupApi, type BackupEntry, type BackupPreview, type BackupQuota, type ImportResult, ExternalConflictError } from '../services/backupApi';
 import { settingsApi } from '../services/api';
 import { useAuthStore } from '../stores/authStore';
 import {
@@ -215,14 +215,46 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
     finally { setPreviewing(false); }
   };
 
+  const doImport = async (externalConflict: string) => {
+    const ids = selectedIds.size > 0 ? Array.from(selectedIds) : undefined;
+    return backupApi.importBackup(importFile!, conflictMode, ids, externalConflict);
+  };
+
   const handleImport = async () => {
     if (!importFile) return;
-    try { setImporting(true); setImportStep('importing');
-      const ids = selectedIds.size > 0 ? Array.from(selectedIds) : undefined;
-      const result = await backupApi.importBackup(importFile, conflictMode, ids);
-      setImportResult(result); setImportStep('done'); setError(''); }
-    catch (e) { setImportStep(''); setError(e instanceof Error ? e.message : 'Import failed'); }
-    finally { setImporting(false); }
+    try {
+      setImporting(true); setImportStep('importing');
+      const result = await doImport('reject');
+      setImportResult(result); setImportStep('done'); setError('');
+    } catch (e) {
+      if (e instanceof ExternalConflictError) {
+        setImportStep('');
+        const n = e.conflictCount;
+        const proceed = window.confirm(
+          `${n} receipt(s) in this backup already belong to another account.\n\n` +
+          'Choose how to proceed:\n' +
+          '• OK = Remap — import them as copies with new IDs (the other account is untouched)\n' +
+          '• Cancel = Reject — cancel the import entirely'
+        );
+        if (proceed) {
+          try {
+            setImporting(true); setImportStep('importing');
+            const result = await doImport('remap');
+            setImportResult(result); setImportStep('done'); setError('');
+          } catch (e2) {
+            setImportStep(''); setError(e2 instanceof Error ? e2.message : 'Import failed');
+          } finally {
+            setImporting(false);
+          }
+          return;
+        }
+        setError(`Import cancelled — ${n} receipt(s) belong to another account`);
+        return;
+      }
+      setImportStep(''); setError(e instanceof Error ? e.message : 'Import failed');
+    } finally {
+      setImporting(false);
+    }
   };
 
   const handleDeleteBackup = async (backupId: string) => {
@@ -593,6 +625,16 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
                   </div>
                 </div>
 
+                {!!preview.external_conflict_count && (
+                  <div className="flex items-center gap-2 text-amber-700 text-xs bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                    <AlertCircle className="h-4 w-4 shrink-0" />
+                    <span>
+                      {preview.external_conflict_count} receipt(s) in this backup already belong to another account.
+                      You'll be asked to <b>Reject</b> or import them as copies (<b>Remap</b>).
+                    </span>
+                  </div>
+                )}
+
                 <button onClick={() => setShowDetail(!showDetail)}
                   className="flex items-center gap-1 text-xs font-semibold text-gray-500 uppercase tracking-wider hover:text-gray-700">
                   {showDetail ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
@@ -631,6 +673,9 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
                   <div className="bg-white rounded p-2"><span className="font-bold text-blue-600">{importResult.stats.items}</span> items</div>
                   <div className="bg-white rounded p-2"><span className="font-bold text-purple-600">{importResult.stats.images}</span> images</div>
                   <div className="bg-white rounded p-2"><span className="font-bold text-amber-600">{importResult.stats.skipped}</span> skipped</div>
+                  {!!importResult.stats.remapped && (
+                    <div className="bg-white rounded p-2 col-span-full sm:col-span-1"><span className="font-bold text-orange-600">{importResult.stats.remapped}</span> copied (new IDs)</div>
+                  )}
                 </div>
               </div>
             )}

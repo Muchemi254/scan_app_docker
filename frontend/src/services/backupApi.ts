@@ -19,6 +19,7 @@ export interface BackupPreview {
   receipt_count: number;
   image_count: number;
   size_kb: number;
+  external_conflict_count?: number;
   receipts: Array<{
     id: string;
     supplier: string;
@@ -40,7 +41,18 @@ export interface ImportResult {
     images: number;
     skipped: number;
     errors: number;
+    remapped?: number;
   };
+}
+
+/** Raised when a backup contains receipt IDs already owned by another account. */
+export class ExternalConflictError extends Error {
+  conflictCount: number;
+  constructor(conflictCount: number, message: string) {
+    super(message);
+    this.name = 'ExternalConflictError';
+    this.conflictCount = conflictCount;
+  }
 }
 
 export interface BackupQuota {
@@ -178,12 +190,14 @@ export const backupApi = {
     file: File,
     conflict: string,
     selectedIds?: string[],
+    externalConflict?: string,
   ): Promise<ImportResult> {
     const authorization = await getAuthHeader();
     const userId = getUserId();
     const formData = new FormData();
     formData.append('file', file);
     formData.append('conflict', conflict);
+    formData.append('external_conflict', externalConflict || 'reject');
     if (selectedIds && selectedIds.length > 0) {
       formData.append('selected_ids', JSON.stringify(selectedIds));
     }
@@ -198,6 +212,12 @@ export const backupApi = {
     );
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
+      if (response.status === 409 && err.detail?.type === 'external_conflict') {
+        throw new ExternalConflictError(
+          err.detail.conflict_count || 0,
+          err.detail.message || 'Receipts belong to another account'
+        );
+      }
       throw new Error(err.detail || 'Import failed');
     }
     return response.json();

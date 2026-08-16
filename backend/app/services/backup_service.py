@@ -31,9 +31,37 @@ logger = logging.getLogger(__name__)
 MANIFEST_VERSION = 1
 
 
+class ExternalConflictError(Exception):
+    """Raised when a backup contains receipt IDs already owned by another user
+    and the caller chose ``reject`` instead of ``remap``."""
+
+    def __init__(self, conflicts, message=None):
+        self.conflicts = conflicts
+        self.message = message or (
+            f"{len(conflicts)} receipt(s) in this backup already belong to "
+            "another account."
+        )
+        super().__init__(self.message)
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Helpers
 # ═══════════════════════════════════════════════════════════════════════════
+
+def _remap_filename(fn, id_map):
+    """Rewrites ``{old_id}.jpg`` / ``{old_id}_thumb.jpg`` → ``{new_id}...``.
+
+    Used when importing a backup into a different user: the receipt gets a
+    fresh ID, so its image files must be stored under the fresh ID too.
+    """
+    if not fn or not id_map:
+        return fn
+    stem = fn[:-4] if fn.endswith(".jpg") else fn
+    base = stem[:-6] if stem.endswith("_thumb") else stem
+    if base in id_map:
+        suffix = "_thumb" if stem.endswith("_thumb") else ""
+        return f"{id_map[base]}{suffix}.jpg"
+    return fn
 
 def _serialize_row(row):
     if not row:
@@ -269,17 +297,26 @@ async def import_user_data(
     filepath: str,
     conflict: str = "skip",
     selected_ids: Optional[List[str]] = None,
+    external_conflict: str = "reject",
 ) -> dict:
     """
     Restore data from a backup tar.gz file.
 
     Streaming — processes entries one by one, never holds all images in RAM.
+
+    ``external_conflict`` governs receipts whose ID is already owned by a
+    *different* user (e.g. restoring someone else's backup into this account):
+      - "reject" (default): raise ExternalConflictError and import nothing.
+      - "remap": give those receipts fresh IDs and rewrite their line items,
+        audit entries, review items and image filenames, so this user gets a
+        full independent copy without touching the original owner's rows.
     """
     pool = await get_pool()
 
     data = None
     manifest = {}
     image_entries: Dict[str, bytes] = {}
+    id_map: Dict[str, str] = {}
 
     # ── Parse tar — stream through entries ──
     with tarfile.open(filepath, "r:gz") as tar:
@@ -296,25 +333,47 @@ async def import_user_data(
         raise ValueError("Invalid backup: no data.json found")
 
     stats = {"receipts": 0, "items": 0, "tasks": 0, "settings": 0,
-             "images": 0, "skipped": 0, "errors": 0}
+             "images": 0, "skipped": 0, "errors": 0, "remapped": 0}
 
     async with pool.acquire() as conn:
         async with conn.transaction():
+            # ── Detect receipt IDs owned by a different user ──
+            target_ids = [r["id"] for r in data.get("receipts", [])]
+            if selected_ids:
+                target_ids = [i for i in target_ids if i in selected_ids]
+            external_ids: List[str] = []
+            if target_ids:
+                rows = await conn.fetch(
+                    "SELECT id FROM receipts WHERE id = ANY($1) AND user_id <> $2",
+                    target_ids, user_id,
+                )
+                external_ids = [r["id"] for r in rows]
+
+            if external_ids and external_conflict == "reject":
+                raise ExternalConflictError(external_ids)
+            if external_ids and external_conflict == "remap":
+                id_map = {old: str(uuid.uuid4()) for old in external_ids}
+                stats["remapped"] = len(id_map)
+
             # ── Receipts ──
             for r in data.get("receipts", []):
                 rid = r["id"]
                 if selected_ids and rid not in selected_ids:
                     continue
+                new_rid = id_map.get(rid, rid)
 
                 existing = await conn.fetchrow(
                     "SELECT id FROM receipts WHERE id = $1 AND user_id = $2",
-                    rid, user_id,
+                    new_rid, user_id,
                 )
                 if existing and conflict == "skip":
                     stats["skipped"] += 1
                     continue
                 if existing and conflict == "overwrite":
-                    await conn.execute("DELETE FROM receipts WHERE id = $1", rid)
+                    await conn.execute("DELETE FROM receipts WHERE id = $1", new_rid)
+
+                img_fn = _remap_filename(r.get("image_filename"), id_map)
+                thumb_fn = _remap_filename(r.get("thumbnail_filename"), id_map)
 
                 await conn.execute("""
                     INSERT INTO receipts (id, user_id, status, supplier, total_amount,
@@ -336,7 +395,7 @@ async def import_user_data(
                         thumbnail_filename = EXCLUDED.thumbnail_filename,
                         legacy_image_url = EXCLUDED.legacy_image_url,
                         updated_at = NOW()
-                """, rid, user_id,
+                """, new_rid, user_id,
                     r.get("status", "processed"),
                     r.get("supplier", ""),
                     Decimal(str(r.get("total_amount", "0"))),
@@ -347,8 +406,8 @@ async def import_user_data(
                     r.get("kra_pin"),
                     r.get("cu_invoice"),
                     r.get("batch_title"),
-                    r.get("image_filename"),
-                    r.get("thumbnail_filename"),
+                    img_fn,
+                    thumb_fn,
                     r.get("legacy_image_url"),
                     _parse_datetime(r.get("scanned_at")),
                     _parse_datetime(r.get("created_at")),
@@ -358,8 +417,8 @@ async def import_user_data(
 
             # ── Line items ──
             for li in data.get("line_items", []):
-                rid = li.get("receipt_id")
-                if selected_ids and rid not in selected_ids:
+                rid = id_map.get(li.get("receipt_id"), li.get("receipt_id"))
+                if selected_ids and li.get("receipt_id") not in selected_ids:
                     continue
                 try:
                     await conn.execute("""
@@ -376,6 +435,26 @@ async def import_user_data(
                         Decimal(str(li.get("discount"))) if li.get("discount") else None,
                     )
                     stats["items"] += 1
+                except Exception:
+                    stats["errors"] += 1
+
+            # ── Audit logs ──
+            for al in data.get("audit_logs", []):
+                rid = id_map.get(al.get("receipt_id"), al.get("receipt_id"))
+                if selected_ids and al.get("receipt_id") not in selected_ids:
+                    continue
+                try:
+                    await conn.execute("""
+                        INSERT INTO audit_logs (id, receipt_id, user_id, action,
+                            changed_by, timestamp, changes)
+                        VALUES ($1,$2,$3,$4,$5,$6,$7)
+                        ON CONFLICT (id) DO NOTHING
+                    """, al.get("id") or str(uuid.uuid4()), rid, user_id,
+                        al.get("action", ""),
+                        al.get("changed_by"),
+                        _parse_datetime(al.get("timestamp")),
+                        json.dumps(al.get("changes")) if al.get("changes") is not None else None,
+                    )
                 except Exception:
                     stats["errors"] += 1
 
@@ -448,7 +527,7 @@ async def import_user_data(
                         INSERT INTO review_batch_items (batch_id, receipt_id, review_status, reviewer_notes, reviewed_at)
                         VALUES ($1,$2,$3,$4,$5)
                         ON CONFLICT (batch_id, receipt_id) DO NOTHING
-                    """, rbi.get("batch_id"), rbi.get("receipt_id"),
+                    """, rbi.get("batch_id"), id_map.get(rbi.get("receipt_id"), rbi.get("receipt_id")),
                         rbi.get("review_status", "pending_review"),
                         rbi.get("reviewer_notes"),
                         _parse_datetime(rbi.get("reviewed_at")))
@@ -465,6 +544,8 @@ async def import_user_data(
             rid = fn.replace("_thumb.jpg", "").replace(".jpg", "")
             if selected_ids and rid not in selected_ids:
                 continue
+            if id_map:
+                fn = fn.replace(rid, id_map[rid])
             fpath = os.path.join(settings.IMAGE_STORAGE_DIR, fn)
             if conflict == "skip" and os.path.exists(fpath):
                 continue

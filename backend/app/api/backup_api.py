@@ -27,7 +27,12 @@ from fastapi.responses import FileResponse, Response
 
 from app.core.config import settings
 from app.core.security import get_current_user_id, get_current_user_id_optional
-from app.services.backup_service import export_user_data, import_user_data, parse_backup
+from app.services.backup_service import (
+    export_user_data,
+    import_user_data,
+    parse_backup,
+    ExternalConflictError,
+)
 from app.services.app_settings_service import get_backup_limits
 from app.services.database_service import DatabaseService
 
@@ -283,6 +288,20 @@ async def preview_backup(
             shutil.copyfileobj(file.file, dst, 65536)
 
         preview = parse_backup(tmp_path)
+
+        # How many of these receipt IDs already belong to a *different* user?
+        # Surfaced so the UI can ask Reject-vs-Remap before importing.
+        preview["external_conflict_count"] = 0
+        rids = [r["id"] for r in preview.get("receipts", [])]
+        if rids:
+            from app.core.database import get_pool
+
+            pool = await get_pool()
+            async with pool.acquire() as conn:
+                preview["external_conflict_count"] = await conn.fetchval(
+                    "SELECT count(*) FROM receipts WHERE id = ANY($1) AND user_id <> $2",
+                    rids, userId,
+                )
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid backup file: {e}")
     finally:
@@ -302,6 +321,7 @@ async def import_backup(
     file: UploadFile = File(...),
     conflict: str = Form("skip"),
     selected_ids: Optional[str] = Form(None),
+    external_conflict: str = Form("reject"),
     current_user_id: str = Depends(get_current_user_id),
 ):
     """
@@ -309,11 +329,16 @@ async def import_backup(
 
     conflict: 'overwrite' | 'skip' | 'merge'
     selected_ids: JSON array of receipt IDs to import (null = import all)
+    external_conflict: 'reject' | 'remap' — how to handle receipts whose IDs
+        already belong to a *different* user. 'reject' (default) fails with
+        409; 'remap' imports them as copies with fresh IDs.
     """
     _verify_access(userId, current_user_id)
 
     if conflict not in ("overwrite", "skip", "merge"):
         raise HTTPException(status_code=400, detail="conflict must be: overwrite, skip, or merge")
+    if external_conflict not in ("reject", "remap"):
+        raise HTTPException(status_code=400, detail="external_conflict must be: reject or remap")
 
     ids = None
     if selected_ids:
@@ -327,7 +352,20 @@ async def import_backup(
         with open(tmp_path, "wb") as dst:
             shutil.copyfileobj(file.file, dst, 65536)
 
-        stats = await import_user_data(userId, tmp_path, conflict=conflict, selected_ids=ids)
+        stats = await import_user_data(
+            userId, tmp_path, conflict=conflict, selected_ids=ids,
+            external_conflict=external_conflict,
+        )
+    except ExternalConflictError as e:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "type": "external_conflict",
+                "conflict_count": len(e.conflicts),
+                "message": str(e),
+                "conflicts": e.conflicts[:200],
+            },
+        )
     except Exception as e:
         logger.error("Import failed: %s", e)
         raise HTTPException(status_code=500, detail=f"Import failed: {e}")

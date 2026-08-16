@@ -278,3 +278,170 @@ async def test_import_round_trips_receipts_with_datetimes(client):
             os.remove(exported["path"])
         except OSError:
             pass
+
+
+async def _make_receipt_with_image(uid, rid, supplier="SUP A", total=10.0):
+    """Insert a receipt + line item + a real image file into the test dirs."""
+    import os
+
+    import asyncpg
+
+    from app.core.config import settings
+    from tests.conftest import TEST_DATABASE_URL
+
+    img_path = os.path.join(settings.IMAGE_STORAGE_DIR, f"{rid}.jpg")
+    os.makedirs(settings.IMAGE_STORAGE_DIR, exist_ok=True)
+    with open(img_path, "wb") as f:
+        f.write(b"\xff\xd8\xff\xe0" + b"0" * 64)  # tiny fake jpeg
+
+    conn = await asyncpg.connect(TEST_DATABASE_URL)
+    try:
+        await conn.execute(
+            "INSERT INTO receipts (id, user_id, supplier, total_amount, receipt_date, status, image_filename) "
+            "VALUES ($1, $2, $3, $4, CURRENT_DATE, 'processed', $5)",
+            rid, uid, supplier, total, f"{rid}.jpg",
+        )
+        await conn.execute(
+            "INSERT INTO line_items (receipt_id, name, quantity, price) VALUES ($1, 'Milk', 2, $2)",
+            rid, total / 2,
+        )
+    finally:
+        await conn.close()
+
+
+async def test_import_into_other_user_rejects_external_conflict(client):
+    """A backup whose receipt IDs belong to another user must be rejected by
+    default (never silently clobber the original owner's rows)."""
+    import os
+
+    import asyncpg
+
+    from app.services.backup_service import (
+        export_user_data, import_user_data, ExternalConflictError,
+    )
+    from tests.conftest import TEST_DATABASE_URL
+
+    admin_headers = await _admin(client)
+    uid_a = (await _user(client, admin_headers, "extA@pytest.local"))["uid"]
+    uid_b = (await _user(client, admin_headers, "extB@pytest.local"))["uid"]
+
+    await _make_receipt_with_image(uid_a, "extrej_r1")
+    exported = await export_user_data(uid_a)
+    try:
+        try:
+            await import_user_data(uid_b, exported["path"], conflict="skip")
+            assert False, "expected ExternalConflictError"
+        except ExternalConflictError as e:
+            assert e.conflicts == ["extrej_r1"]
+
+        conn = await asyncpg.connect(TEST_DATABASE_URL)
+        try:
+            # original owner untouched; importing user got nothing
+            assert await conn.fetchval(
+                "SELECT count(*) FROM receipts WHERE user_id=$1", uid_a
+            ) == 1
+            assert await conn.fetchval(
+                "SELECT count(*) FROM receipts WHERE user_id=$1", uid_b
+            ) == 0
+            assert await conn.fetchval(
+                "SELECT supplier FROM receipts WHERE id='extrej_r1'"
+            ) == "SUP A"
+        finally:
+            await conn.close()
+    finally:
+        os.remove(exported["path"])
+
+
+async def test_import_into_other_user_remaps_copies(client):
+    """With external_conflict='remap', the importing user gets a full
+    independent copy under fresh IDs; the original owner is untouched."""
+    import os
+
+    import asyncpg
+
+    from app.core.config import settings
+    from app.services.backup_service import export_user_data, import_user_data
+    from tests.conftest import TEST_DATABASE_URL
+
+    admin_headers = await _admin(client)
+    uid_a = (await _user(client, admin_headers, "remA@pytest.local"))["uid"]
+    uid_b = (await _user(client, admin_headers, "remB@pytest.local"))["uid"]
+
+    await _make_receipt_with_image(uid_a, "remap_r1")
+    exported = await export_user_data(uid_a)
+    try:
+        stats = await import_user_data(
+            uid_b, exported["path"], conflict="skip", external_conflict="remap"
+        )
+        assert stats["receipts"] == 1, stats
+        assert stats["remapped"] == 1, stats
+        assert stats["items"] == 1, stats
+        assert stats["errors"] == 0, stats
+
+        conn = await asyncpg.connect(TEST_DATABASE_URL)
+        try:
+            assert await conn.fetchval(
+                "SELECT count(*) FROM receipts WHERE user_id=$1", uid_a
+            ) == 1
+            assert await conn.fetchval(
+                "SELECT count(*) FROM receipts WHERE id='remap_r1' AND user_id=$1", uid_a
+            ) == 1
+
+            row = await conn.fetchrow(
+                "SELECT id, image_filename FROM receipts WHERE user_id=$1", uid_b
+            )
+            assert row is not None
+            assert row["id"] != "remap_r1"
+            assert row["image_filename"] == f"{row['id']}.jpg"
+            assert await conn.fetchval(
+                "SELECT count(*) FROM line_items WHERE receipt_id=$1", row["id"]
+            ) == 1
+        finally:
+            await conn.close()
+
+        # image file was restored under the new id
+        row = row["id"]
+        assert os.path.exists(os.path.join(settings.IMAGE_STORAGE_DIR, f"{row}.jpg"))
+    finally:
+        os.remove(exported["path"])
+
+
+async def test_import_api_rejects_then_remaps(client):
+    """End-to-end: the endpoint returns 409 with a structured detail on reject,
+    and succeeds with fresh copies when external_conflict='remap' is sent."""
+    import os
+
+    from app.services.backup_service import export_user_data
+
+    admin_headers = await _admin(client)
+    uid_a = (await _user(client, admin_headers, "apiA@pytest.local"))["uid"]
+    uid_b = (await _user(client, admin_headers, "apiB@pytest.local"))["uid"]
+    bh, _, _ = await login(client, "apiB@pytest.local", "pass-123")
+
+    await _make_receipt_with_image(uid_a, "apirmap_r1")
+    exported = await export_user_data(uid_a)
+    try:
+        with open(exported["path"], "rb") as f:
+            resp = await client.post(
+                f"/api/v1/users/{uid_b}/backup/import",
+                headers=bh,
+                files={"file": ("backup.tar.gz", f, "application/gzip")},
+                data={"conflict": "skip"},
+            )
+        assert resp.status_code == 409, resp.text
+        detail = resp.json()["detail"]
+        assert detail["type"] == "external_conflict"
+        assert detail["conflict_count"] == 1
+
+        with open(exported["path"], "rb") as f:
+            resp = await client.post(
+                f"/api/v1/users/{uid_b}/backup/import",
+                headers=bh,
+                files={"file": ("backup.tar.gz", f, "application/gzip")},
+                data={"conflict": "skip", "external_conflict": "remap"},
+            )
+        assert resp.status_code == 200, resp.text
+        stats = resp.json()["stats"]
+        assert stats["receipts"] == 1 and stats["remapped"] == 1, stats
+    finally:
+        os.remove(exported["path"])
