@@ -444,23 +444,32 @@ async def import_user_data(
                 if selected_ids and al.get("receipt_id") not in selected_ids:
                     continue
                 try:
+                    # remap mode: fresh PK so copies can't collide with the
+                    # original owner's audit rows (which would silently drop them)
+                    al_id = al.get("id") or str(uuid.uuid4())
+                    if id_map:
+                        al_id = str(uuid.uuid4())
                     await conn.execute("""
                         INSERT INTO audit_logs (id, receipt_id, user_id, action,
                             changed_by, timestamp, changes)
                         VALUES ($1,$2,$3,$4,$5,$6,$7)
                         ON CONFLICT (id) DO NOTHING
-                    """, al.get("id") or str(uuid.uuid4()), rid, user_id,
+                    """, al_id, rid, user_id,
                         al.get("action", ""),
                         al.get("changed_by"),
                         _parse_datetime(al.get("timestamp")),
                         json.dumps(al.get("changes")) if al.get("changes") is not None else None,
                     )
+                    stats["audit_logs"] = stats.get("audit_logs", 0) + 1
                 except Exception:
                     stats["errors"] += 1
 
             # ── Tasks ──
             for t in data.get("tasks", []):
                 try:
+                    t_id = t["id"]
+                    if id_map:
+                        t_id = str(uuid.uuid4())
                     await conn.execute("""
                         INSERT INTO tasks (id, user_id, task_type, batch_title, status,
                             total_items, completed_items, current_step, total_steps,
@@ -468,7 +477,7 @@ async def import_user_data(
                             created_at, updated_at, started_at, completed_at)
                         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
                         ON CONFLICT (id) DO NOTHING
-                    """, t["id"], user_id,
+                    """, t_id, user_id,
                         t.get("task_type", "scan_batch"),
                         t.get("batch_title", ""),
                         t.get("status", "queued"),
@@ -508,16 +517,18 @@ async def import_user_data(
                     stats["errors"] += 1
 
             # ── Review batches ──
+            batch_id_map = {rb["id"]: str(uuid.uuid4()) for rb in data.get("review_batches", [])} if id_map else {}
             for rb in data.get("review_batches", []):
                 try:
                     await conn.execute("""
                         INSERT INTO review_batches (id, user_id, name, csv_filename, created_at, updated_at)
                         VALUES ($1,$2,$3,$4,$5,$6)
                         ON CONFLICT (id) DO NOTHING
-                    """, rb["id"], user_id, rb.get("name", ""),
+                    """, batch_id_map.get(rb["id"], rb["id"]), user_id, rb.get("name", ""),
                         rb.get("csv_filename"),
                         _parse_datetime(rb.get("created_at")),
                         _parse_datetime(rb.get("updated_at")))
+                    stats["review_batches"] = stats.get("review_batches", 0) + 1
                 except Exception:
                     stats["errors"] += 1
 
@@ -527,10 +538,12 @@ async def import_user_data(
                         INSERT INTO review_batch_items (batch_id, receipt_id, review_status, reviewer_notes, reviewed_at)
                         VALUES ($1,$2,$3,$4,$5)
                         ON CONFLICT (batch_id, receipt_id) DO NOTHING
-                    """, rbi.get("batch_id"), id_map.get(rbi.get("receipt_id"), rbi.get("receipt_id")),
+                    """, batch_id_map.get(rbi.get("batch_id"), rbi.get("batch_id")),
+                        id_map.get(rbi.get("receipt_id"), rbi.get("receipt_id")),
                         rbi.get("review_status", "pending_review"),
                         rbi.get("reviewer_notes"),
                         _parse_datetime(rbi.get("reviewed_at")))
+                    stats["review_batch_items"] = stats.get("review_batch_items", 0) + 1
                 except Exception:
                     stats["errors"] += 1
 

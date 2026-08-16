@@ -305,6 +305,11 @@ async def _make_receipt_with_image(uid, rid, supplier="SUP A", total=10.0):
             "INSERT INTO line_items (receipt_id, name, quantity, price) VALUES ($1, 'Milk', 2, $2)",
             rid, total / 2,
         )
+        await conn.execute(
+            "INSERT INTO audit_logs (id, receipt_id, user_id, action, changed_by, timestamp)"
+            " VALUES ($1, $2, $3, 'imported', 'system', 'now')",
+            f"{rid}_audit", rid, uid,
+        )
     finally:
         await conn.close()
 
@@ -376,6 +381,7 @@ async def test_import_into_other_user_remaps_copies(client):
         assert stats["receipts"] == 1, stats
         assert stats["remapped"] == 1, stats
         assert stats["items"] == 1, stats
+        assert stats["audit_logs"] == 1, stats
         assert stats["errors"] == 0, stats
 
         conn = await asyncpg.connect(TEST_DATABASE_URL)
@@ -396,6 +402,16 @@ async def test_import_into_other_user_remaps_copies(client):
             assert await conn.fetchval(
                 "SELECT count(*) FROM line_items WHERE receipt_id=$1", row["id"]
             ) == 1
+
+            # audit history follows the copy: fresh PK, remapped receipt_id,
+            # pointing at the NEW user — never a collision-dropped original
+            al = await conn.fetchrow(
+                "SELECT id, receipt_id, user_id FROM audit_logs WHERE user_id=$1", uid_b
+            )
+            assert al is not None
+            assert al["id"] != "remap_r1_audit"
+            assert al["receipt_id"] == row["id"]
+            assert al["user_id"] == uid_b
         finally:
             await conn.close()
 

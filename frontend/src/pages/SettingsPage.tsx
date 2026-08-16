@@ -671,6 +671,7 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm">
                   <div className="bg-white rounded p-2"><span className="font-bold text-green-600">{importResult.stats.receipts}</span> receipts</div>
                   <div className="bg-white rounded p-2"><span className="font-bold text-blue-600">{importResult.stats.items}</span> items</div>
+                  <div className="bg-white rounded p-2"><span className="font-bold text-slate-600">{importResult.stats.audit_logs ?? 0}</span> audit logs</div>
                   <div className="bg-white rounded p-2"><span className="font-bold text-purple-600">{importResult.stats.images}</span> images</div>
                   <div className="bg-white rounded p-2"><span className="font-bold text-amber-600">{importResult.stats.skipped}</span> skipped</div>
                   {!!importResult.stats.remapped && (
