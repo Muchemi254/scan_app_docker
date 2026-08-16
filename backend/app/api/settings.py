@@ -3,9 +3,12 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from app.core.security import get_current_user_id
 from app.core.encryption import encrypt_api_key, decrypt_api_key
-from app.schemas.settings import AISettings, AISettingsUpdate, AIModel, AIProvider, AITestRequest, AITestResponse
+from app.schemas.settings import AISettings, AISettingsUpdate, AIModel, AIProvider, AITestRequest, AITestResponse, TaxPreferenceOut, TaxPreferenceUpdate
 from app.services.data_adapter import DataService
 from app.services.gemini import test_api_key
+from app.services.model_registry import get_all_models
+from app.services.app_settings_service import get_setting, set_setting, KEY_DEFAULT_TAX_RATE
+from app.api.auth import require_admin
 
 logger = logging.getLogger(__name__)
 
@@ -169,10 +172,58 @@ async def test_ai_settings(
             logger.exception("Failed to persist API key test failure")
         return AITestResponse(success=False, message=error_detail or "Invalid API Key or connection error")
 
-from app.services.model_registry import get_all_models
+# ── Per-user default tax rate ─────────────────────────────────────────────
+# Used by the receipt editor to seed item-level tax calculations. Overridable
+# per receipt (receipts.tax_rate) and per line item (line_items.tax_rate).
 
-logger = logging.getLogger(__name__)
-...
+@user_router.get("/{userId}/settings/tax", response_model=TaxPreferenceOut)
+async def get_tax_preference(
+    userId: str,
+    current_user_id: str = Depends(get_current_user_id),
+):
+    verify_user_access(userId, current_user_id)
+    rate = await DataService.get_user_default_tax_rate(userId)
+    global_rate = 16.0
+    raw = await get_setting(KEY_DEFAULT_TAX_RATE)
+    if raw:
+        try:
+            global_rate = float(raw)
+        except (ValueError, TypeError):
+            pass
+    return TaxPreferenceOut(default_tax_rate=rate, global_default=global_rate)
+
+
+@user_router.put("/{userId}/settings/tax", response_model=TaxPreferenceOut)
+async def set_tax_preference(
+    userId: str,
+    body: TaxPreferenceUpdate,
+    current_user_id: str = Depends(get_current_user_id),
+):
+    verify_user_access(userId, current_user_id)
+    await DataService.set_user_default_tax_rate(userId, body.default_tax_rate)
+    return await get_tax_preference(userId, current_user_id)
+
+
+@global_router.get("/settings/global/tax-rate")
+async def get_global_tax_rate():
+    """Admin-managed global default tax rate (affects users with no personal default)."""
+    raw = await get_setting(KEY_DEFAULT_TAX_RATE)
+    try:
+        return {"default_tax_rate": float(raw)} if raw else {"default_tax_rate": 16.0}
+    except (ValueError, TypeError):
+        return {"default_tax_rate": 16.0}
+
+
+@global_router.put("/settings/global/tax-rate")
+async def set_global_tax_rate(
+    body: TaxPreferenceUpdate,
+    _admin: str = Depends(require_admin),
+):
+    """Set the admin-managed global default tax rate (percent)."""
+    await set_setting(KEY_DEFAULT_TAX_RATE, str(body.default_tax_rate))
+    return {"default_tax_rate": body.default_tax_rate}
+
+
 @global_router.get("/settings/models", response_model=List[AIModel])
 async def get_available_models():
     """List available AI models."""

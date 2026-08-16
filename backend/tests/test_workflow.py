@@ -36,11 +36,11 @@ async def _user(client, admin_headers, email, is_admin=False):
     )
 
 
-async def _create(client, headers, uid, status="needs_review"):
+async def _create(client, headers, uid, status="needs_review", **overrides):
     resp = await client.post(
         f"/api/v1/users/{uid}/receipts",
         headers=headers,
-        files={"receipt_data": (None, _create_payload(status=status))},
+        files={"receipt_data": (None, _create_payload(status=status, **overrides))},
     )
     assert resp.status_code == 201, resp.text
     return resp.json()
@@ -172,6 +172,8 @@ async def test_admin_cross_tenant_pending_list(client):
     assert data["total"] == 2
     uids = {i["owner_uid"] for i in data["items"]}
     assert uids == {alice["uid"], bob["uid"]}
+    # every pending row carries its (possibly empty) location snapshot
+    assert all("location" in i for i in data["items"])
 
 
 async def test_non_admin_cannot_edit_or_delete_processed(client):
@@ -216,3 +218,91 @@ async def test_double_approve_returns_conflict(client):
     # second approve on the now-processed receipt → guarded UPDATE misses → 409
     r2 = await _transition(client, admin_headers, uid, rec["id"], "approve")
     assert r2.status_code == 409, r2.text
+
+
+# ── Location required only for finalize-to-processed ─────────────────────────
+
+async def test_submit_without_location_is_allowed(client):
+    """No-location receipts may flow needs_review → pending_approval."""
+    admin_headers, _, _ = await login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+    alice = await _user(client, admin_headers, "alice@pytest.local")
+    ah, _, _ = await login(client, "alice@pytest.local", "pass-123")
+    uid = alice["uid"]
+
+    rec = await _create(client, ah, uid, status="needs_review", location=None)
+    assert rec["status"] == "needs_review"
+    assert rec.get("location") is None
+
+    r = await _transition(client, ah, uid, rec["id"], "submit")
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "pending_approval"
+
+
+async def test_approve_without_location_returns_422(client):
+    """Admin cannot finalize a receipt to processed without a location."""
+    admin_headers, _, _ = await login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+    alice = await _user(client, admin_headers, "alice@pytest.local")
+    ah, _, _ = await login(client, "alice@pytest.local", "pass-123")
+    uid = alice["uid"]
+
+    # reviewer did not fill a location
+    resp = await client.post(
+        f"/api/v1/users/{uid}/receipts",
+        headers=ah,
+        files={"receipt_data": (None, _create_payload(status="needs_review", location=None))},
+    )
+    assert resp.status_code == 201, resp.text
+    rec = resp.json()
+
+    await _transition(client, ah, uid, rec["id"], "submit")
+
+    # approving without a location → 422
+    r = await _transition(client, admin_headers, uid, rec["id"], "approve")
+    assert r.status_code == 422, r.text
+
+    # now the reviewer adds a location
+    up = await client.put(
+        f"/api/v1/users/{uid}/receipts/{rec['id']}",
+        headers=ah,
+        files={"receipt_data": (None, json.dumps({"location": "Nairobi HQ"}))},
+    )
+    assert up.status_code == 200, up.text
+
+    # approving now succeeds
+    r = await _transition(client, admin_headers, uid, rec["id"], "approve")
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "processed"
+    assert r.json()["location"] == "Nairobi HQ"
+
+
+async def test_admin_cannot_finalize_without_location(client):
+    """Admin create-as-processed and update-to-processed both need a location."""
+    admin_headers, admin, _ = await login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+    alice = await _user(client, admin_headers, "alice@pytest.local")
+    ah, _, _ = await login(client, "alice@pytest.local", "pass-123")
+    uid = alice["uid"]
+
+    # admin creates a processed receipt with a location → ok
+    resp_ok = await client.post(
+        f"/api/v1/users/{uid}/receipts",
+        headers=admin_headers,
+        files={"receipt_data": (None, _create_payload(status="processed", location="Nairobi HQ"))},
+    )
+    assert resp_ok.status_code == 201, resp_ok.text
+
+    # admin create-as-processed without location → 422
+    resp = await client.post(
+        f"/api/v1/users/{uid}/receipts",
+        headers=admin_headers,
+        files={"receipt_data": (None, _create_payload(status="processed", location=None))},
+    )
+    assert resp.status_code == 422, resp.text
+
+    # admin update-to-processed without location → 422
+    rec = await _create(client, ah, uid, location=None)
+    r = await client.put(
+        f"/api/v1/users/{uid}/receipts/{rec['id']}",
+        headers=admin_headers,
+        files={"receipt_data": (None, json.dumps({"status": "processed"}))},
+    )
+    assert r.status_code == 422, r.text

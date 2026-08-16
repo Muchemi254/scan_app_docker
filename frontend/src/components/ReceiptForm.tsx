@@ -10,12 +10,16 @@ const ReceiptForm = ({
   onImageChange,
   loading,
   isAdmin = false,
+  locations = [],
+  defaultTaxRate = 16,
 }: {
   initialData: any;
   onSubmit: (data: any) => void;
   onImageChange: (file: File | null) => void;
   loading: boolean;
   isAdmin?: boolean;
+  locations?: { id: string; name: string }[];
+  defaultTaxRate?: number;
 }) => {
   const [formData, setFormData] = useState(() => ({
     supplier: initialData?.supplier || '',
@@ -27,6 +31,8 @@ const ReceiptForm = ({
     kraPin: initialData?.kraPin || '',
     buyerKraPin: initialData?.buyerKraPin || '',
     cuInvoice: initialData?.cuInvoice || '',
+    location: initialData?.location || '',
+    taxRate: initialData?.taxRate || '',
     status: initialData?.status || 'needs_review',
     items: initialData?.items?.length
       ? initialData.items.map((item: any) => ({
@@ -37,6 +43,10 @@ const ReceiptForm = ({
         }))
       : [],
   }));
+
+  // Receipt-level default tax rate for bulk operations. Higher precedence:
+  // the receipt's own override > the user's default passed from Settings.
+  const activeTaxRate = Number(formData.taxRate) || defaultTaxRate || 16;
 
   const [taxAdded, setTaxAdded] = useState(false);
   const [taxSplit, setTaxSplit] = useState(false);
@@ -75,6 +85,8 @@ const ReceiptForm = ({
         kraPin: initialData.kraPin || '',
         buyerKraPin: initialData.buyerKraPin || '',
         cuInvoice: initialData.cuInvoice || '',
+        location: initialData.location || '',
+        taxRate: initialData.taxRate || '',
         status: initialData.status || 'needs_review',
         items: initialData.items?.length
           ? initialData.items.map((item: any) => ({
@@ -161,13 +173,14 @@ const ReceiptForm = ({
     const sanitizedData = {
       ...formData,
       status: statusOverride || formData.status,
-      items: formData.items.map(({ name, quantity, price, tax, discount, isZeroRated }) => ({
+      items: formData.items.map(({ name, quantity, price, tax, discount, isZeroRated, taxRate }) => ({
         name,
         quantity,
         price: new Decimal(parseCurrencyToNumber(price)).toDecimalPlaces(3).toString(),
         tax: tax ? new Decimal(parseCurrencyToNumber(tax)).toDecimalPlaces(3).toString() : '0',
         discount: discount || null,
-        isZeroRated
+        isZeroRated,
+        taxRate: taxRate || null,
       })),
     };
     onSubmit(sanitizedData);
@@ -198,7 +211,7 @@ const ReceiptForm = ({
       if (item.isZeroRated) return item;
 
       const price = parseFloat(item.price) || 0;
-      const tax = new Decimal(price).mul(DEFAULT_TAX_RATE).div(100).toDecimalPlaces(3).toNumber();
+      const tax = new Decimal(price).mul(activeTaxRate).div(100).toDecimalPlaces(3).toNumber();
       return { ...item, tax: tax.toString() };
     });
 
@@ -218,7 +231,7 @@ const ReceiptForm = ({
 
       const fullPrice = parseFloat(item.price) || 0;
       const fullPriceDecimal = new Decimal(fullPrice);
-      const priceWithoutTax = fullPriceDecimal.div(new Decimal(1).plus(DEFAULT_TAX_RATE / 100));
+      const priceWithoutTax = fullPriceDecimal.div(new Decimal(1).plus(activeTaxRate / 100));
       const tax = fullPriceDecimal.minus(priceWithoutTax);
 
       return {
@@ -284,7 +297,7 @@ const ReceiptForm = ({
     saveItemOriginalState(index);
 
     const price = parseCurrencyToNumber(item.price);
-    const tax = new Decimal(price).mul(DEFAULT_TAX_RATE).div(100).toDecimalPlaces(3).toNumber();
+    const tax = new Decimal(price).mul(activeTaxRate).div(100).toDecimalPlaces(3).toNumber();
 
     const newItems = [...formData.items];
     newItems[index] = { ...newItems[index], tax: tax.toString() };
@@ -301,7 +314,7 @@ const ReceiptForm = ({
 
     const fullPrice = parseCurrencyToNumber(item.price);
     const fullPriceDecimal = new Decimal(fullPrice);
-    const priceWithoutTax = fullPriceDecimal.div(new Decimal(1).plus(DEFAULT_TAX_RATE / 100));
+    const priceWithoutTax = fullPriceDecimal.div(new Decimal(1).plus(activeTaxRate / 100));
     const tax = fullPriceDecimal.minus(priceWithoutTax);
 
     const newItems = [...formData.items];
@@ -375,8 +388,8 @@ const ReceiptForm = ({
 
   const itemCount = formData.items.length;
 
-  // Grid: Name | Qty | Price | Tax | Disc% | Total | Actions
-  const gridCols = 'grid-cols-[1fr_52px_72px_64px_44px_72px_28px]';
+  // Grid: Name | Qty | Price | Tax | Disc% | Tax% | Total | Actions
+  const gridCols = 'grid-cols-[1fr_52px_72px_64px_44px_44px_72px_28px]';
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
@@ -395,6 +408,47 @@ const ReceiptForm = ({
             />
           </div>
         ))}
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-0.5">
+            Location
+            {formData.status === 'processed' && !(formData.location || '').trim() && (
+              <span className="ml-1 text-red-500">(required)</span>
+            )}
+          </label>
+          <input
+            list="receipt-location-options"
+            type="text"
+            name="location"
+            value={formData.location || ''}
+            onChange={handleChange}
+            className="w-full px-2 py-1 border rounded text-sm"
+            placeholder={locations.length ? 'Select or type a location' : 'Type a location'}
+          />
+          {locations.length > 0 && (
+            <datalist id="receipt-location-options">
+              {locations.map((loc) => (
+                <option key={loc.id} value={loc.name} />
+              ))}
+            </datalist>
+          )}
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-0.5">
+            Tax Rate %
+            {formData.taxRate === '' && <span className="text-gray-400 font-normal"> ({activeTaxRate}% default)</span>}
+          </label>
+          <input
+            type="number"
+            name="taxRate"
+            min="0"
+            max="100"
+            step="0.01"
+            value={formData.taxRate}
+            onChange={handleChange}
+            className="w-full px-2 py-1 border rounded text-sm"
+            placeholder={`${activeTaxRate}`}
+          />
+        </div>
         <div>
           <label className="block text-xs font-medium text-gray-600 mb-0.5">Receipt Image</label>
           <input
@@ -416,14 +470,14 @@ const ReceiptForm = ({
               onClick={handleAddTax}
               className={`text-xs px-2 py-0.5 rounded border ${taxAdded ? 'bg-blue-500 text-white border-blue-500' : 'bg-white border-gray-300 hover:bg-gray-100'}`}
             >
-              {taxAdded ? 'Undo Add Tax' : 'Bulk: Add Tax'}
+              {taxAdded ? 'Undo Add Tax' : `Bulk: Add Tax (${activeTaxRate}%)`}
             </button>
             <button
               type="button"
               onClick={handleSplitTax}
               className={`text-xs px-2 py-0.5 rounded border ${taxSplit ? 'bg-green-600 text-white border-green-600' : 'bg-white border-gray-300 hover:bg-gray-100'}`}
             >
-              {taxSplit ? 'Undo Split' : 'Bulk: Split Tax'}
+              {taxSplit ? 'Undo Split' : `Bulk: Split Tax (${activeTaxRate}%)`}
             </button>
             <button
               type="button"
@@ -450,6 +504,7 @@ const ReceiptForm = ({
             <span className="text-right">Price</span>
             <span className="text-right">Tax</span>
             <span className="text-right">Disc%</span>
+            <span className="text-right">Tax%</span>
             <span className="text-right">Total</span>
             <span></span>
           </div>
@@ -513,6 +568,17 @@ const ReceiptForm = ({
                 className={`w-full px-1 py-1 border-0 border-b rounded-none text-sm text-right focus:outline-none focus:border-pink-400 bg-transparent ${hasDiscount ? 'border-pink-200 text-pink-700 font-medium' : 'border-gray-200 text-gray-500'}`}
                 title="Discount percentage"
               />
+              <input
+                type="number"
+                min="0"
+                max="100"
+                step="0.01"
+                placeholder={String(activeTaxRate)}
+                value={item.taxRate || ''}
+                onChange={(e) => handleItemChange(index, 'taxRate', e.target.value)}
+                className={`w-full px-1 py-1 border-0 border-b rounded-none text-sm text-right focus:outline-none focus:border-blue-400 bg-transparent ${item.isZeroRated ? 'text-gray-400 italic' : 'text-gray-500'}`}
+                title="Per-item tax rate % (blank = receipt default)"
+              />
               <span className={`text-xs text-right font-mono tabular-nums px-1 ${hasDiscount ? 'text-pink-700 font-medium' : ''}`}>
                 {total.toFixed(2)}
               </span>
@@ -537,7 +603,7 @@ const ReceiptForm = ({
                           onClick={() => handleIndividualAddTax(index)}
                           className="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-blue-700"
                         >
-                          Add Tax (16%)
+                          Add Tax ({activeTaxRate}%)
                         </button>
                         <button
                           type="button"

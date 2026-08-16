@@ -13,10 +13,10 @@ import {
   type AdminAIProvider,
   type AuthUser,
 } from '../services/auth';
-import { settingsApi } from '../services/api';
+import { settingsApi, locationsApi } from '../services/api';
 import {
   ShieldAlert, Plus, Trash2, RefreshCw, User as UserIcon, Globe, X, Key,
-  Eye, EyeOff, CheckCircle, Shield, AlertCircle,
+  Eye, EyeOff, CheckCircle, Shield, AlertCircle, MapPin,
 } from 'lucide-react';
 
 interface Props {
@@ -65,6 +65,11 @@ const AdminPage = ({ userId }: Props) => {
   const [testingProvider, setTestingProvider] = useState<string | null>(null);
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
 
+  // Locations reference data
+  const [locations, setLocations] = useState<{ id: string; name: string; is_active: boolean }[]>([]);
+  const [locationInput, setLocationInput] = useState('');
+  const [savingLocations, setSavingLocations] = useState(false);
+
   const loadUsers = useCallback(async () => {
     setLoadingUsers(true);
     setError('');
@@ -103,12 +108,71 @@ const AdminPage = ({ userId }: Props) => {
     }
   }, []);
 
+  const loadLocations = useCallback(async () => {
+    setError('');
+    try {
+      setLocations((await locationsApi.list()).items);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to load locations');
+    }
+  }, []);
+
   useEffect(() => {
     loadUsers();
     loadHosts();
     loadAIProviders();
     loadModels();
-  }, [loadUsers, loadHosts, loadAIProviders, loadModels]);
+    loadLocations();
+  }, [loadUsers, loadHosts, loadAIProviders, loadModels, loadLocations]);
+
+  const addLocation = async () => {
+    const name = locationInput.trim();
+    if (!name) return;
+    setSavingLocations(true);
+    setError('');
+    setNotice('');
+    try {
+      await locationsApi.create(name);
+      setLocationInput('');
+      setNotice(`Added location "${name}"`);
+      await loadLocations();
+    } catch (err: any) {
+      setError(err?.message || 'Failed to add location');
+    } finally {
+      setSavingLocations(false);
+    }
+  };
+
+  const toggleLocation = async (loc: { id: string; name: string; is_active: boolean }) => {
+    setSavingLocations(true);
+    setError('');
+    setNotice('');
+    try {
+      await locationsApi.update(loc.id, { is_active: !loc.is_active });
+      setNotice(loc.is_active ? `Deactivated "${loc.name}"` : `Activated "${loc.name}"`);
+      await loadLocations();
+    } catch (err: any) {
+      setError(err?.message || 'Failed to update location');
+    } finally {
+      setSavingLocations(false);
+    }
+  };
+
+  const deleteLocation = async (loc: { id: string; name: string; is_active: boolean }) => {
+    if (!window.confirm(`Delete location "${loc.name}"? Receipts keep their stored location text.`)) return;
+    setSavingLocations(true);
+    setError('');
+    setNotice('');
+    try {
+      await locationsApi.remove(loc.id);
+      setNotice(`Deleted "${loc.name}"`);
+      await loadLocations();
+    } catch (err: any) {
+      setError(err?.message || 'Failed to delete location');
+    } finally {
+      setSavingLocations(false);
+    }
+  };
 
   // Admin-only guard
   if (!currentUser?.is_admin) {
@@ -433,6 +497,77 @@ const AdminPage = ({ userId }: Props) => {
               {savingHosts ? 'Saving...' : 'Save'}
             </button>
           </div>
+        </div>
+
+        {/* Locations reference data */}
+        <div className="bg-white rounded-xl shadow p-6 space-y-4">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
+              <MapPin className="h-5 w-5 text-blue-600" /> Locations
+            </h2>
+            <p className="text-sm text-gray-500 mt-1">
+              Shared list reviewers pick from when setting a receipt's location. A receipt must have
+              a location before it can be approved as fully processed. Deactivating hides the option;
+              receipts keep their stored text.
+            </p>
+          </div>
+
+          <div className="flex flex-col sm:flex-row gap-2">
+            <input
+              type="text"
+              value={locationInput}
+              onChange={e => setLocationInput(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  addLocation();
+                }
+              }}
+              className="flex-1 border border-gray-300 rounded-md p-2 text-sm"
+              placeholder="e.g. Nairobi HQ, Kampala Branch, Mombasa Store…"
+            />
+            <button
+              onClick={addLocation}
+              disabled={savingLocations || !locationInput.trim()}
+              className="px-4 py-2 rounded-lg bg-white border border-gray-300 text-gray-700 text-sm hover:bg-gray-100 transition-colors disabled:opacity-50"
+            >
+              <Plus className="h-4 w-4 inline -mt-0.5" /> Add
+            </button>
+          </div>
+
+          {locations.length === 0 ? (
+            <p className="text-sm text-gray-400">No locations yet — add the first one above.</p>
+          ) : (
+            <ul className="divide-y divide-gray-100 border border-gray-100 rounded-lg">
+              {locations.map(loc => (
+                <li key={loc.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                  <span className={`text-sm ${loc.is_active ? 'text-gray-800' : 'text-gray-400 line-through'}`}>
+                    {loc.name}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => toggleLocation(loc)}
+                      disabled={savingLocations}
+                      className={`text-xs px-2 py-1 rounded border transition-colors disabled:opacity-50 ${
+                        loc.is_active
+                          ? 'border-gray-300 text-gray-600 hover:bg-gray-50'
+                          : 'border-green-300 text-green-700 hover:bg-green-50'
+                      }`}
+                    >
+                      {loc.is_active ? 'Deactivate' : 'Activate'}
+                    </button>
+                    <button
+                      onClick={() => deleteLocation(loc)}
+                      disabled={savingLocations}
+                      className="text-xs px-2 py-1 rounded border border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
 
         {/* Shared AI provider keys */}

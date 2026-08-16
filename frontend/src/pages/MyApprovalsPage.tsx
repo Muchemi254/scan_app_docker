@@ -121,6 +121,7 @@ const MyApprovalsPage = () => {
                 <thead className="bg-gray-50 border-b text-left text-xs text-gray-500 uppercase tracking-wide">
                   <tr>
                     <th className="px-3 py-2">Supplier</th>
+                    <th className="px-3 py-2">Location</th>
                     <th className="px-3 py-2">Date</th>
                     <th className="px-3 py-2 text-right">Amount</th>
                     <th className="px-3 py-2">Status</th>
@@ -131,6 +132,7 @@ const MyApprovalsPage = () => {
                   {(tab === 'pending' ? items : approved).map((r: any) => (
                     <tr key={r.id} className="hover:bg-gray-50">
                       <td className="px-3 py-2">{r.supplier || '—'}</td>
+                      <td className="px-3 py-2">{r.location || '—'}</td>
                       <td className="px-3 py-2">{r.receiptDate || r.receipt_date || '—'}</td>
                       <td className="px-3 py-2 text-right font-medium">
                         KES {Number(r.totalAmount ?? r.total_amount ?? 0).toLocaleString()}

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { receiptApi } from '../services/api';
+import { receiptApi, locationsApi, settingsApi } from '../services/api';
 import { useReceiptStore } from '../stores/receiptStore';
 import ReceiptForm from './ReceiptForm';
 import AuditTrail from './AuditTrail';
@@ -31,6 +31,14 @@ const ReviewPanel = ({
   const [newImage, setNewImage] = useState<File | null>(null);
   const [showUnsavedModal, setShowUnsavedModal] = useState(false);
   const [pendingId, setPendingId] = useState<string | null>(null);
+  const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
+  const [defaultTaxRate, setDefaultTaxRate] = useState(16);
+
+  // Reference data + the user's personal tax default for the editor.
+  useEffect(() => {
+    locationsApi.list().then((r) => setLocations(r.items)).catch(() => {});
+    settingsApi.getTaxPreference().then((r) => setDefaultTaxRate(r.default_tax_rate)).catch(() => {});
+  }, []);
 
   // Reset editing state when the selected receipt changes
   useEffect(() => {
@@ -256,6 +264,8 @@ const ReviewPanel = ({
                 onImageChange={setNewImage}
                 loading={loading}
                 isAdmin={isAdmin}
+                locations={locations}
+                defaultTaxRate={defaultTaxRate}
               />
             </div>
           </div>
@@ -269,6 +279,10 @@ const ReviewPanel = ({
                 ['Tax', receipt.taxAmount],
                 ['Date', receipt.receiptDate],
                 ['Category', receipt.category],
+                ['Location', receipt.location],
+                ...(receipt.taxRate != null && receipt.taxRate !== ''
+                  ? [['Tax Rate', `${receipt.taxRate}%`] as [string, string]]
+                  : []),
                 ['Status', receiptStatusLabel(receipt.status)],
                 ['Invoice #', receipt.invoiceNumber],
                 ['KRA PIN', receipt.kraPin],

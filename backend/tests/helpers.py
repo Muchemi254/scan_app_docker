@@ -44,6 +44,7 @@ def sample_receipt(supplier="ACME Grocery", invoice="INV-1001"):
         "receiptDate": "08/14/2026",
         "category": "Groceries",
         "invoiceNumber": invoice,
+        "location": "Nairobi HQ",
         "items": [
             {"name": "Milk", "quantity": 2, "price": "50.00", "tax": "0.00", "isZeroRated": False, "discount": None},
             {"name": "Bread", "quantity": 1, "price": "23.45", "tax": "0.00", "isZeroRated": False, "discount": None},

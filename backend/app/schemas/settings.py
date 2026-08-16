@@ -45,3 +45,13 @@ class AITestRequest(BaseModel):
 class AITestResponse(BaseModel):
     success: bool
     message: str
+
+
+class TaxPreferenceOut(BaseModel):
+    """User's default tax rate with the global fallback shown alongside."""
+    default_tax_rate: float
+    global_default: float = 16.0
+
+
+class TaxPreferenceUpdate(BaseModel):
+    default_tax_rate: float = Field(..., ge=0, le=100, description="Default tax rate percent")

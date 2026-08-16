@@ -25,6 +25,7 @@ class ReceiptItemBase(BaseModel):
     tax: Optional[str] = Field(None, description="Tax on item")
     isZeroRated: Optional[bool] = Field(False, description="Is item zero-rated")
     discount: Optional[str] = Field(None, description="Discount percentage (e.g. '10' for 10% off)")
+    taxRate: Optional[str] = Field(None, description="Per-item tax rate override (falls back to receipt rate)")
 
 
 class ReceiptItemCreate(ReceiptItemBase):
@@ -49,6 +50,8 @@ class ReceiptBase(BaseModel):
     buyerKraPin: Optional[str] = Field(None, description="Buyer KRA PIN (your PIN)")
     cuInvoice: Optional[str] = Field(None, description="CU invoice number (KRA-issued)")
     batchTitle: Optional[str] = Field(None, description="Batch/transaction title")
+    location: Optional[str] = Field(None, description="Manual recipient location (from admin-managed list; not AI-extracted)")
+    taxRate: Optional[str] = Field(None, description="Receipt-level tax rate override (falls back to user default)")
     items: List[ReceiptItemCreate] = Field(default_factory=list, description="Receipt items")
 
 
@@ -72,6 +75,8 @@ class ReceiptUpdate(BaseModel):
     batchTitle: Optional[str] = None
     status: Optional[ReceiptStatus] = None
     items: Optional[List[ReceiptItemCreate]] = None
+    location: Optional[str] = None
+    taxRate: Optional[str] = None
 
 
 class Receipt(ReceiptBase):

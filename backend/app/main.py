@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from app.core.config import settings
-from app.api import health, receipts, tasks, images, batches, exports, cleaning, dashboard, review_batches, backup_api, scan_errors, settings as settings_api, auth as auth_api, admin_receipts
+from app.api import health, receipts, tasks, images, batches, exports, cleaning, dashboard, review_batches, backup_api, scan_errors, settings as settings_api, auth as auth_api, admin_receipts, locations
 
 # Configure logging
 logging.basicConfig(
@@ -222,6 +222,12 @@ def create_app() -> FastAPI:
             admin_receipts.router,
             prefix=settings.API_V1_STR,
         )
+
+    # Location reference data (authenticated list + admin write)
+    app.include_router(
+        locations.router,
+        prefix=settings.API_V1_STR,
+    )
 
     # Receipt API (main functionality)
     app.include_router(

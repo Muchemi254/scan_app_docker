@@ -11,6 +11,7 @@ from typing import List, Optional
 logger = logging.getLogger(__name__)
 
 KEY_TRUSTED_HOSTS = "trusted_hosts"
+KEY_DEFAULT_TAX_RATE = "default_tax_rate"
 
 
 async def get_setting(key: str) -> Optional[str]:

@@ -51,6 +51,8 @@ _TRUNCATE_TABLES = (
     "user_ai_settings",
     "app_settings",
     "scan_sessions",
+    "locations",
+    "user_preferences",
 )
 
 

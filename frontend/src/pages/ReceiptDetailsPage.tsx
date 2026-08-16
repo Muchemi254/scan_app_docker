@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
-import { receiptApi } from '../services/api';
+import { receiptApi, locationsApi, settingsApi } from '../services/api';
 import { useReceiptStore } from '../stores/receiptStore';
 import ReceiptForm from '../components/ReceiptForm';
 import AuditTrail from '../components/AuditTrail';
@@ -17,6 +17,8 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [newImage, setNewImage] = useState<File | null>(null);
+  const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
+  const [defaultTaxRate, setDefaultTaxRate] = useState(16);
 
   useEffect(() => {
     if (!userId || !id) return;
@@ -34,6 +36,13 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
     };
 
     fetchReceipt();
+
+    // Reference data + the user's personal tax default for the editor.
+    const fetchMeta = async () => {
+      try { setLocations((await locationsApi.list()).items); } catch { /* non-fatal */ }
+      try { setDefaultTaxRate((await settingsApi.getTaxPreference()).default_tax_rate); } catch { /* non-fatal */ }
+    };
+    fetchMeta();
   }, [userId, id, navigate]);
 
   const handleUpdate = async (updatedData: any) => {
@@ -143,6 +152,8 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
                 onSubmit={handleUpdate}
                 onImageChange={setNewImage}
                 loading={loading}
+                locations={locations}
+                defaultTaxRate={defaultTaxRate}
               />
             </div>
           </div>
@@ -153,6 +164,8 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
             <p><strong>Tax:</strong> {receipt.taxAmount}</p>
             <p><strong>Date:</strong> {receipt.receiptDate}</p>
             <p><strong>Category:</strong> {receipt.category}</p>
+            {receipt.location && <p><strong>Location:</strong> {receipt.location}</p>}
+            {receipt.taxRate != null && receipt.taxRate !== '' && <p><strong>Tax Rate:</strong> {receipt.taxRate}%</p>}
             {receipt.kraPin && <p><strong>Seller KRA PIN:</strong> {receipt.kraPin}</p>}
             {receipt.buyerKraPin && <p><strong>Buyer KRA PIN:</strong> {receipt.buyerKraPin}</p>}
             {receipt.cuInvoice && <p><strong>CU Invoice:</strong> {receipt.cuInvoice}</p>}

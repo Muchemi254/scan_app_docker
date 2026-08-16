@@ -81,16 +81,60 @@ async function apiRequest<T>(
 }
 
 /**
+ * Generic API request handler for endpoints that are NOT user-scoped
+ * (e.g. /admin/..., /locations, /settings/global/...). The caller supplies
+ * the full endpoint path after /api/v1.
+ */
+async function apiGlobalRequest<T>(
+  method: string,
+  endpoint: string,
+  data?: any
+): Promise<T> {
+  const authorization = await getAuthHeader();
+  const url = `${API_BASE_URL}${endpoint}`;
+
+  const options: RequestInit = {
+    method,
+    headers: {
+      'Authorization': authorization,
+      'Content-Type': 'application/json',
+    },
+  };
+
+  if (data) {
+    options.body = JSON.stringify(data);
+  }
+
+  const response = await fetch(url, options);
+
+  if (!response.ok) {
+    let detail = `API error: ${response.status}`;
+    try {
+      const error = await response.json();
+      detail = error.detail || detail;
+    } catch {}
+    throw new Error(detail);
+  }
+
+  if (response.status === 204) {
+    return undefined as any;
+  }
+
+  return response.json();
+}
+
+/**
  * File upload handler (multipart/form-data)
  */
 async function apiUpload<T>(
   method: string,
   endpoint: string,
   file?: File,
-  data?: any
+  data?: any,
+  ownerUid?: string
 ): Promise<T> {
   const authorization = await getAuthHeader();
-  const userId = getScopeUid();
+  const userId = ownerUid || getScopeUid();
   const url = `${API_BASE_URL}/users/${userId}${endpoint}`;
 
   const formData = new FormData();
@@ -233,8 +277,8 @@ export const receiptApi = {
    * Update receipt (partial update)
    * Optionally upload new image
    */
-  async update(receiptId: string, updates: any, file?: File): Promise<any> {
-    return apiUpload('PUT', `/receipts/${receiptId}`, file, updates);
+  async update(receiptId: string, updates: any, file?: File, ownerUid?: string): Promise<any> {
+    return apiUpload('PUT', `/receipts/${receiptId}`, file, updates, ownerUid);
   },
 
   /**
@@ -618,6 +662,52 @@ export const settingsApi = {
     }
 
     return response.json();
+  },
+
+  /** Get the user's personal default tax rate (with the global fallback). */
+  async getTaxPreference(): Promise<{ default_tax_rate: number; global_default: number }> {
+    return apiRequest('GET', '/settings/tax');
+  },
+
+  /** Set the user's personal default tax rate (percent). */
+  async setTaxPreference(default_tax_rate: number): Promise<{ default_tax_rate: number; global_default: number }> {
+    return apiRequest('PUT', '/settings/tax', { default_tax_rate });
+  },
+
+  /** Get the admin-managed global default tax rate (percent). */
+  async getGlobalTaxRate(): Promise<{ default_tax_rate: number }> {
+    return apiGlobalRequest('GET', '/settings/global/tax-rate');
+  },
+
+  /** Set the admin-managed global default tax rate (percent). */
+  async setGlobalTaxRate(default_tax_rate: number): Promise<{ default_tax_rate: number }> {
+    return apiGlobalRequest('PUT', '/settings/global/tax-rate', { default_tax_rate });
+  },
+};
+
+// ============================================================================
+// Locations API - admin-managed reference data for receipt locations
+// ============================================================================
+
+export const locationsApi = {
+  /** List active locations (any authenticated user). */
+  async list(): Promise<{ total: number; items: { id: string; name: string; is_active: boolean }[] }> {
+    return apiGlobalRequest('GET', '/locations');
+  },
+
+  /** Create a location (admin only). */
+  async create(name: string): Promise<{ id: string; name: string; is_active: boolean }> {
+    return apiGlobalRequest('POST', '/locations', { name });
+  },
+
+  /** Update a location (admin only). */
+  async update(id: string, body: { name?: string; is_active?: boolean }): Promise<{ id: string; name: string; is_active: boolean }> {
+    return apiGlobalRequest('PUT', `/locations/${id}`, body);
+  },
+
+  /** Delete a location (admin only). */
+  async remove(id: string): Promise<void> {
+    return apiGlobalRequest('DELETE', `/locations/${id}`);
   },
 };
 

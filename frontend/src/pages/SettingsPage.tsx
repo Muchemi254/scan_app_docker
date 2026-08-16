@@ -1,10 +1,12 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { backupApi, type BackupEntry, type BackupPreview, type ImportResult } from '../services/backupApi';
+import { settingsApi } from '../services/api';
+import { useAuthStore } from '../stores/authStore';
 import {
   Download, Upload, Trash2, RefreshCw, FileArchive,
   CheckCircle, AlertCircle, Clock, Database, Image as ImageIcon, Shield,
-  ChevronDown, ChevronRight, X, Sparkles, FileSpreadsheet,
+  ChevronDown, ChevronRight, X, Sparkles, FileSpreadsheet, Save,
 } from 'lucide-react';
 import AiScanningEnginePage from './AiScanningEnginePage';
 import { useIsImpersonating } from '../utils/scope';
@@ -54,6 +56,7 @@ const RECEIPT_FIELDS = [
   { key: 'kraPin', label: 'Seller PIN' },
   { key: 'buyerKraPin', label: 'Buyer PIN' },
   { key: 'cuInvoice', label: 'CU Invoice' },
+  { key: 'location', label: 'Location' },
   { key: 'batchTitle', label: 'Batch' },
   { key: 'status', label: 'Status' },
 ];
@@ -96,6 +99,50 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [selectedColumns, setSelectedColumns] = useState<Set<string>>(new Set(RECEIPT_FIELDS.map(f => f.key)));
+
+  // ── Tax default state ──
+  const authUser = useAuthStore(s => s.user);
+  const [personalTax, setPersonalTax] = useState('');
+  const [globalTax, setGlobalTax] = useState('');
+  const [taxSaving, setTaxSaving] = useState(false);
+  const [taxNotice, setTaxNotice] = useState('');
+  const [taxError, setTaxError] = useState('');
+
+  const loadTaxDefaults = useCallback(async () => {
+    try {
+      const pref = await settingsApi.getTaxPreference();
+      setPersonalTax(String(pref.default_tax_rate));
+    } catch (e: any) { setTaxError(e.message || 'Failed to load tax settings'); }
+    try {
+      const glob = await settingsApi.getGlobalTaxRate();
+      setGlobalTax(String(glob.default_tax_rate));
+    } catch (e: any) { /* global is admin-only; ignore */ }
+  }, []);
+
+  useEffect(() => { if (userId) loadTaxDefaults(); }, [userId, loadTaxDefaults]);
+
+  const savePersonalTax = async () => {
+    const rate = Number(personalTax);
+    if (isNaN(rate) || rate < 0 || rate > 100) { setTaxError('Enter a tax rate between 0 and 100'); return; }
+    setTaxSaving(true); setTaxError(''); setTaxNotice('');
+    try {
+      const pref = await settingsApi.setTaxPreference(rate);
+      setPersonalTax(String(pref.default_tax_rate));
+      setTaxNotice('Default tax rate saved');
+    } catch (e: any) { setTaxError(e.message || 'Failed to save tax rate'); }
+    finally { setTaxSaving(false); }
+  };
+
+  const saveGlobalTax = async () => {
+    const rate = Number(globalTax);
+    if (isNaN(rate) || rate < 0 || rate > 100) { setTaxError('Enter a tax rate between 0 and 100'); return; }
+    setTaxSaving(true); setTaxError(''); setTaxNotice('');
+    try {
+      await settingsApi.setGlobalTaxRate(rate);
+      setTaxNotice('Global default tax rate saved');
+    } catch (e: any) { setTaxError(e.message || 'Failed to save global tax rate'); }
+    finally { setTaxSaving(false); }
+  };
 
   useEffect(() => { if (userId) loadStore(userId); }, [userId, loadStore]);
 
@@ -210,6 +257,79 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
   return (
     <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
       <h1 className="text-2xl font-bold text-gray-900">Settings</h1>
+
+      {/* Tax Defaults card */}
+      <div className="bg-white rounded-lg shadow p-6 space-y-4">
+        <h2 className="font-semibold text-gray-800 flex items-center gap-2">
+          <Percent className="h-5 w-5 text-blue-600" /> Tax Rate
+        </h2>
+        {taxNotice && (
+          <div className="flex items-center gap-2 text-green-700 text-sm bg-green-50 px-3 py-2 rounded"><CheckCircle className="h-4 w-4" />{taxNotice}</div>
+        )}
+        {taxError && (
+          <div className="flex items-center gap-2 text-red-600 text-sm bg-red-50 px-3 py-2 rounded"><AlertCircle className="h-4 w-4" />{taxError}</div>
+        )}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+              My Default Tax Rate (%) {taxError === '' ? '' : ''}
+            </label>
+            <p className="text-xs text-gray-400 mb-2">
+              Used as the starting tax rate on new receipts. Overridable per receipt and per item.
+            </p>
+            <div className="flex gap-2">
+              <input
+                type="number"
+                min="0"
+                max="100"
+                step="0.01"
+                value={personalTax}
+                onChange={e => setPersonalTax(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                placeholder="16"
+              />
+              <button
+                onClick={savePersonalTax}
+                disabled={taxSaving}
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 whitespace-nowrap"
+              >
+                <Save className="h-4 w-4" />{taxSaving ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          </div>
+
+          {authUser?.is_admin && (
+            <div className="sm:border-l sm:border-gray-200 sm:pl-4">
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                Global Default Tax Rate (%) — all users
+              </label>
+              <p className="text-xs text-gray-400 mb-2">
+                Fallback for users who haven't set their own default. Change applies to new receipts
+                immediately.
+              </p>
+              <div className="flex gap-2">
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.01"
+                  value={globalTax}
+                  onChange={e => setGlobalTax(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                  placeholder="16"
+                />
+                <button
+                  onClick={saveGlobalTax}
+                  disabled={taxSaving}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50 whitespace-nowrap"
+                >
+                  <Save className="h-4 w-4" />{taxSaving ? 'Saving...' : 'Save Global'}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
 
       {/* Tabs */}
       <div className="flex gap-1 border-b overflow-x-auto">

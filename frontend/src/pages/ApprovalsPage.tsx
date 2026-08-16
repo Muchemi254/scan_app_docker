@@ -1,7 +1,7 @@
 // src/pages/ApprovalsPage.tsx
 import { useState, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { receiptApi } from '../services/api';
+import { receiptApi, locationsApi } from '../services/api';
 import { useAuthStore } from '../stores/authStore';
 import { useScopeStore } from '../stores/scopeStore';
 import {
@@ -27,6 +27,13 @@ const ApprovalsPage = () => {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [editLocId, setEditLocId] = useState<string | null>(null);
+  const [locDraft, setLocDraft] = useState('');
+  const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
+
+  useEffect(() => {
+    locationsApi.list().then((r) => setLocations(r.items)).catch(() => {});
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -58,6 +65,11 @@ const ApprovalsPage = () => {
   }
 
   const approve = async (row: any) => {
+    if (!(row.location || '').trim()) {
+      alert('A location is required before approving. Add one below, then approve.');
+      startEditLoc(row);
+      return;
+    }
     setBusyId(row.id);
     try {
       await receiptApi.approve(row.owner_uid, row.id);
@@ -88,6 +100,24 @@ const ApprovalsPage = () => {
     navigate('/receipts');
   };
 
+  const startEditLoc = (row: any) => {
+    setEditLocId(row.id);
+    setLocDraft(row.location || '');
+  };
+
+  const saveLocation = async (row: any) => {
+    setBusyId(row.id);
+    try {
+      await receiptApi.update(row.id, { location: locDraft.trim() }, undefined, row.owner_uid);
+      await load();
+    } catch (e: any) {
+      alert(e.message || 'Failed to save location');
+    } finally {
+      setBusyId(null);
+      setEditLocId(null);
+    }
+  };
+
   return (
     <div className="p-4 sm:p-6 w-full">
       <div className="flex items-center justify-between mb-4">
@@ -107,11 +137,19 @@ const ApprovalsPage = () => {
         </div>
       ) : (
         <div className="bg-white rounded-lg shadow overflow-hidden">
+          {locations.length > 0 && (
+            <datalist id="approval-location-options">
+              {locations.map((loc) => (
+                <option key={loc.id} value={loc.name} />
+              ))}
+            </datalist>
+          )}
           <table className="w-full text-sm">
             <thead className="bg-gray-50 border-b text-left text-xs text-gray-500 uppercase tracking-wide">
               <tr>
                 <th className="px-3 py-2">Owner</th>
                 <th className="px-3 py-2">Supplier</th>
+                <th className="px-3 py-2">Location</th>
                 <th className="px-3 py-2">Date</th>
                 <th className="px-3 py-2 text-right">Amount</th>
                 <th className="px-3 py-2">Status</th>
@@ -125,6 +163,46 @@ const ApprovalsPage = () => {
                     <span className="font-medium">{row.owner_display_name || row.owner_email || row.owner_uid}</span>
                   </td>
                   <td className="px-3 py-2">{row.supplier || '—'}</td>
+                  <td className="px-3 py-2">
+                    {editLocId === row.id ? (
+                      <div className="flex items-center gap-1">
+                        <input
+                          list="approval-location-options"
+                          type="text"
+                          value={locDraft}
+                          onChange={(e) => setLocDraft(e.target.value)}
+                          className="px-1.5 py-0.5 border rounded text-xs w-32"
+                          placeholder="Location"
+                        />
+                        <button
+                          onClick={() => saveLocation(row)}
+                          disabled={busyId === row.id}
+                          className="px-1.5 py-0.5 text-xs rounded bg-blue-600 text-white disabled:opacity-50"
+                        >
+                          Save
+                        </button>
+                        <button
+                          onClick={() => setEditLocId(null)}
+                          className="px-1.5 py-0.5 text-xs rounded border text-gray-600"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1">
+                        <span className={row.location ? '' : 'text-gray-400 italic'}>
+                          {row.location || '—'}
+                        </span>
+                        <button
+                          onClick={() => startEditLoc(row)}
+                          className="text-xs text-blue-600 hover:underline"
+                          title="Set location (required to approve)"
+                        >
+                          ✎
+                        </button>
+                      </div>
+                    )}
+                  </td>
                   <td className="px-3 py-2">{row.receipt_date || '—'}</td>
                   <td className="px-3 py-2 text-right font-medium">
                     KES {Number(row.total_amount || 0).toLocaleString()}

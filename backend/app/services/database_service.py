@@ -113,6 +113,10 @@ def _receipt_row_to_dict(
     if isinstance(receipt_date, date):
         receipt_date = _format_date_mmddyyyy(receipt_date)
 
+    tax_rate = row.get("tax_rate")
+    if tax_rate is not None and not isinstance(tax_rate, str):
+        tax_rate = format(Decimal(str(tax_rate)), "g")
+
     return {
         "id": rid,
         "userId": row["user_id"],
@@ -127,6 +131,8 @@ def _receipt_row_to_dict(
         "buyerKraPin": row.get("buyer_kra_pin"),
         "cuInvoice": row.get("cu_invoice"),
         "batchTitle": row.get("batch_title"),
+        "location": row.get("location"),
+        "taxRate": tax_rate,
         "imageUrl": image_url,
         "thumbnailUrl": thumbnail_url,
         "items": items or [],
@@ -140,7 +146,7 @@ async def _fetch_items(conn, receipt_id: str) -> List[dict]:
     """Fetch line_items for a receipt, return as list of dicts (API shape)."""
     rows = await conn.fetch(
         """
-        SELECT sort_order, name, quantity, price, tax, is_zero_rated, discount
+        SELECT sort_order, name, quantity, price, tax, is_zero_rated, discount, tax_rate
         FROM line_items
         WHERE receipt_id = $1
         ORDER BY sort_order
@@ -158,6 +164,8 @@ async def _fetch_items(conn, receipt_id: str) -> List[dict]:
         tax_str = _num_str(r["tax"])
         discount_val = r["discount"]
         discount_str = _num_str(discount_val, nullable=True)
+        tax_rate = r["tax_rate"]
+        tax_rate_str = format(Decimal(str(tax_rate)), "g") if tax_rate is not None else None
         items.append({
             "name": r["name"],
             "quantity": float(r["quantity"]),
@@ -165,6 +173,7 @@ async def _fetch_items(conn, receipt_id: str) -> List[dict]:
             "tax": tax_str,
             "isZeroRated": r["is_zero_rated"],
             "discount": discount_str,
+            "taxRate": tax_rate_str,
         })
     return items
 
@@ -240,8 +249,8 @@ class DatabaseService:
                     """
                     INSERT INTO receipts (id, user_id, status, supplier, total_amount, tax_amount,
                         receipt_date, category, invoice_number, kra_pin, buyer_kra_pin, cu_invoice,
-                        batch_title, image_filename, image_sha256, scanned_at, created_at, updated_at)
-                    VALUES (COALESCE($18, gen_random_uuid()), $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+                        batch_title, location, tax_rate, image_filename, image_sha256, scanned_at, created_at, updated_at)
+                    VALUES (COALESCE($20, gen_random_uuid()), $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
                     RETURNING id
                     """,
                     user_id,
@@ -256,6 +265,8 @@ class DatabaseService:
                     receipt_data.get("buyerKraPin"),
                     receipt_data.get("cuInvoice"),
                     receipt_data.get("batchTitle"),
+                    receipt_data.get("location"),
+                    _to_numeric(receipt_data.get("taxRate")),
                     image_filename,
                     image_sha256,
                     now,
@@ -269,8 +280,8 @@ class DatabaseService:
                     await conn.executemany(
                         """
                         INSERT INTO line_items (receipt_id, sort_order, name, quantity,
-                            price, tax, is_zero_rated, discount)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                            price, tax, is_zero_rated, discount, tax_rate)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                             ON CONFLICT (receipt_id, sort_order) DO NOTHING
                         """,
                         [
@@ -283,6 +294,7 @@ class DatabaseService:
                                 sanitize_numeric(item.get("tax", "0")),
                                 item.get("isZeroRated", False),
                                 _to_numeric(item.get("discount")),
+                                item.get("taxRate"),
                             )
                             for i, item in enumerate(items)
                         ],
@@ -374,7 +386,7 @@ class DatabaseService:
             if receipt_ids:
                 item_rows = await conn.fetch(
                     """
-                    SELECT receipt_id, sort_order, name, quantity, price, tax, is_zero_rated, discount
+                    SELECT receipt_id, sort_order, name, quantity, price, tax, is_zero_rated, discount, tax_rate
                     FROM line_items
                     WHERE receipt_id = ANY($1::text[])
                     ORDER BY receipt_id, sort_order
@@ -385,6 +397,7 @@ class DatabaseService:
                     rid = ir["receipt_id"]
                     if rid not in items_map:
                         items_map[rid] = []
+                    tax_rate = ir["tax_rate"]
                     items_map[rid].append({
                         "name": ir["name"],
                         "quantity": float(ir["quantity"]),
@@ -392,6 +405,7 @@ class DatabaseService:
                         "tax": format(Decimal(str(ir["tax"] or 0)), ".2f"),
                         "isZeroRated": ir["is_zero_rated"],
                         "discount": format(Decimal(str(ir["discount"])), ".2f") if ir["discount"] else None,
+                        "taxRate": format(Decimal(str(tax_rate)), "g") if tax_rate is not None else None,
                     })
 
             receipts = [_receipt_row_to_dict(r, items_map.get(r["id"], [])) for r in rows]
@@ -469,6 +483,15 @@ class DatabaseService:
             set_parts.append(f"batch_title = ${p_idx}")
             params.append(receipt_data["batchTitle"])
             p_idx += 1
+        # location is a manual attribute — allow clearing it back to NULL/empty
+        if "location" in receipt_data:
+            set_parts.append(f"location = ${p_idx}")
+            params.append(receipt_data["location"] or None)
+            p_idx += 1
+        if "taxRate" in receipt_data:
+            set_parts.append(f"tax_rate = ${p_idx}")
+            params.append(_to_numeric(receipt_data["taxRate"]))
+            p_idx += 1
         if receipt_data.get("image_filename") is not None:
             set_parts.append(f"image_filename = ${p_idx}")
             params.append(receipt_data["image_filename"])
@@ -497,8 +520,8 @@ class DatabaseService:
                         await conn.executemany(
                             """
                             INSERT INTO line_items (receipt_id, sort_order, name, quantity,
-                                price, tax, is_zero_rated, discount)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                                price, tax, is_zero_rated, discount, tax_rate)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                             ON CONFLICT (receipt_id, sort_order) DO NOTHING
                             """,
                             [
@@ -511,6 +534,7 @@ class DatabaseService:
                                     sanitize_numeric(item.get("tax", "0")),
                                     item.get("isZeroRated", False),
                                     _to_numeric(item.get("discount")),
+                                    item.get("taxRate"),
                                 )
                                 for i, item in enumerate(items)
                             ],
@@ -783,6 +807,128 @@ class DatabaseService:
                     "firstSupplier": r["firstSupplier"],
                 })
             return groups
+
+    # ── Locations (admin-managed reference data) ────────────────────────────
+
+    @staticmethod
+    async def list_locations(active_only: bool = False) -> List[Dict[str, Any]]:
+        """List global locations, optionally only active (= pickable) ones."""
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            if active_only:
+                rows = await conn.fetch(
+                    """
+                    SELECT * FROM locations
+                    WHERE is_active = TRUE
+                    ORDER BY name ASC
+                    """
+                )
+            else:
+                rows = await conn.fetch(
+                    "SELECT * FROM locations ORDER BY name ASC"
+                )
+            return [dict(r) for r in rows]
+
+    @staticmethod
+    async def get_location(location_id: str) -> Optional[Dict[str, Any]]:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM locations WHERE id = $1", location_id
+            )
+            return dict(row) if row else None
+
+    @staticmethod
+    async def create_location(name: str, created_by: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Create a location. Returns the row, or None when the name already exists."""
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            try:
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO locations (name, created_by)
+                    VALUES ($1, $2)
+                    RETURNING *
+                    """,
+                    name.strip(), created_by,
+                )
+            except Exception:
+                return None  # unique violation on name
+            return dict(row) if row else None
+
+    @staticmethod
+    async def update_location(location_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Update a location (name / is_active). Returns updated row or None."""
+        set_parts = ["updated_at = now()"]
+        params = []
+        p_idx = 1
+        if "name" in data and data["name"] is not None:
+            set_parts.append(f"name = ${p_idx}")
+            params.append(str(data["name"]).strip())
+            p_idx += 1
+        if "is_active" in data and data["is_active"] is not None:
+            set_parts.append(f"is_active = ${p_idx}")
+            params.append(bool(data["is_active"]))
+            p_idx += 1
+        if not params:
+            return await DatabaseService.get_location(location_id)
+        set_clause = ", ".join(set_parts)
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            try:
+                row = await conn.fetchrow(
+                    f"UPDATE locations SET {set_clause} WHERE id = ${p_idx} RETURNING *",
+                    *params, location_id,
+                )
+            except Exception:
+                return None  # unique violation on name
+            return dict(row) if row else None
+
+    @staticmethod
+    async def delete_location(location_id: str) -> bool:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                "DELETE FROM locations WHERE id = $1", location_id
+            )
+            return result == "DELETE 1"
+
+    # ── User preferences (per-user defaults) ───────────────────────────────
+
+    @staticmethod
+    async def get_user_default_tax_rate(user_id: str) -> float:
+        """Return the user's default tax rate (percent). Falls back to 16."""
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT default_tax_rate FROM user_preferences WHERE user_id = $1",
+                user_id,
+            )
+            if row and row["default_tax_rate"] is not None:
+                return float(row["default_tax_rate"])
+        # Admin-managed global default, then 16.
+        from app.services.app_settings_service import get_setting, KEY_DEFAULT_TAX_RATE
+        raw = await get_setting(KEY_DEFAULT_TAX_RATE)
+        if raw:
+            try:
+                return float(raw)
+            except (ValueError, TypeError):
+                pass
+        return 16.0
+
+    @staticmethod
+    async def set_user_default_tax_rate(user_id: str, rate: float) -> None:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO user_preferences (user_id, default_tax_rate, updated_at)
+                VALUES ($1, $2, now())
+                ON CONFLICT (user_id)
+                DO UPDATE SET default_tax_rate = $2, updated_at = now()
+                """,
+                user_id, rate,
+            )
 
 
 # ═══════════════════════════════════════════════════════════════════════════

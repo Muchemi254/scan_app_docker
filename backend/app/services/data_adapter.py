@@ -100,6 +100,43 @@ class DataService:
         db, _ = cls._backend()
         return await db.get_receipt_groups(user_id)
 
+    # ── Locations (admin-managed reference data) ──────────────────────────
+
+    @classmethod
+    async def list_locations(cls, active_only: bool = False) -> List[Dict[str, Any]]:
+        db, _ = cls._backend()
+        if hasattr(db, "list_locations"):
+            return await db.list_locations(active_only=active_only)
+        return []
+
+    @classmethod
+    async def get_location(cls, location_id: str) -> Optional[Dict[str, Any]]:
+        db, _ = cls._backend()
+        if hasattr(db, "get_location"):
+            return await db.get_location(location_id)
+        return None
+
+    @classmethod
+    async def create_location(cls, name: str, created_by: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        db, _ = cls._backend()
+        if hasattr(db, "create_location"):
+            return await db.create_location(name, created_by)
+        return None
+
+    @classmethod
+    async def update_location(cls, location_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        db, _ = cls._backend()
+        if hasattr(db, "update_location"):
+            return await db.update_location(location_id, data)
+        return None
+
+    @classmethod
+    async def delete_location(cls, location_id: str) -> bool:
+        db, _ = cls._backend()
+        if hasattr(db, "delete_location"):
+            return await db.delete_location(location_id)
+        return False
+
     @classmethod
     async def find_receipts_by_image_hashes(
         cls, user_id: str, hashes: List[str]
@@ -121,6 +158,21 @@ class DataService:
     async def update_user_settings(cls, user_id: str, settings_key: str, data: Dict[str, Any]) -> bool:
         db, _ = cls._backend()
         return await db.update_user_settings(user_id, settings_key, data)
+
+    # ── User preferences (per-user defaults) ──────────────────────────────
+
+    @classmethod
+    async def get_user_default_tax_rate(cls, user_id: str) -> float:
+        db, _ = cls._backend()
+        if hasattr(db, "get_user_default_tax_rate"):
+            return await db.get_user_default_tax_rate(user_id)
+        return 16.0
+
+    @classmethod
+    async def set_user_default_tax_rate(cls, user_id: str, rate: float) -> None:
+        db, _ = cls._backend()
+        if hasattr(db, "set_user_default_tax_rate"):
+            await db.set_user_default_tax_rate(user_id, rate)
 
 
 # ── Image helpers (local only, fall back gracefully) ─────────────────────

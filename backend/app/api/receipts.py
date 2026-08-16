@@ -226,6 +226,10 @@ async def create_receipt(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only admins may finalize a receipt without approval",
             )
+        # Any path into 'processed' requires a location (manual attribute).
+        if not (parsed.location or "").strip():
+            from app.services.receipt_workflow_service import location_required_for_processed
+            raise location_required_for_processed()
 
     try:
         # Pre-generate receipt ID
@@ -471,6 +475,24 @@ async def update_receipt(
             await assert_status_transition(
                 current.get("status"), updates.status.value, current_user_id, userId
             )
+
+        # Any path into 'processed' requires a location — including an admin
+        # "Save as Processed" from a needs_review receipt. The location may be
+        # supplied in this update or already present on the receipt.
+        target_status = (
+            updates.status.value
+            if "status" in updates.model_fields_set and updates.status is not None
+            else current.get("status")
+        )
+        if target_status == ReceiptStatus.PROCESSED.value:
+            from app.services.receipt_workflow_service import location_required_for_processed
+            location = (
+                updates.location
+                if "location" in updates.model_fields_set
+                else current.get("location")
+            )
+            if not (location or "").strip():
+                raise location_required_for_processed()
 
         # Upload new image if provided
         image_url = current.get("imageUrl")

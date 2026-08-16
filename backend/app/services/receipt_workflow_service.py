@@ -24,6 +24,8 @@ from typing import Optional
 
 import logging
 
+from fastapi import HTTPException
+
 from app.core.database import get_pool
 from app.schemas.receipt import (
     ReceiptStatus,
@@ -166,13 +168,30 @@ async def recall(owner_uid: str, receipt_id: str, actor_uid: str) -> dict:
     )
 
 
+async def _location_present(receipt: dict) -> bool:
+    """True when a receipt carries a usable location (non-blank manual value)."""
+    return bool((receipt.get("location") or "").strip())
+
+
+def location_required_for_processed() -> HTTPException:
+    """The HTTPException raised when a receipt is finalized without a location."""
+    return HTTPException(
+        status_code=422,
+        detail="A location is required before a receipt can be confirmed as fully processed",
+    )
+
+
 async def approve(owner_uid: str, receipt_id: str, actor_uid: str) -> dict:
     """pending_approval → processed (admin only)."""
     if not await _is_admin(actor_uid):
-        from fastapi import HTTPException
         raise HTTPException(
             status_code=403, detail="Admin privileges required to approve receipts"
         )
+    current = await DataService.get_receipt(owner_uid, receipt_id)
+    if not current:
+        raise HTTPException(status_code=404, detail="Receipt not found")
+    if not await _location_present(current):
+        raise location_required_for_processed()
     return await _transition(
         owner_uid, receipt_id, ReceiptStatus.PROCESSED,
         ReceiptStatus.PENDING_APPROVAL,
@@ -211,6 +230,7 @@ async def list_pending_for_admin() -> list:
                    u.email                                 AS owner_email,
                    u.display_name                          AS owner_display_name,
                    r.supplier                              AS supplier,
+                   r.location                              AS location,
                    r.receipt_date                          AS receipt_date,
                    r.total_amount                          AS total_amount,
                    r.status                                AS status,
@@ -236,6 +256,7 @@ async def list_pending_for_admin() -> list:
                     "owner_email": d["owner_email"],
                     "owner_display_name": d["owner_display_name"],
                     "supplier": d["supplier"],
+                    "location": d["location"],
                     "receipt_date": d["receipt_date"],
                     "total_amount": d["total_amount"],
                     "status": d["status"],

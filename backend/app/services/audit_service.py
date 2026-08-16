@@ -31,7 +31,7 @@ class AuditService:
         tracked_fields = {
             "supplier", "totalAmount", "taxAmount", "receiptDate",
             "category", "invoiceNumber", "kraPin", "buyerKraPin", "cuInvoice",
-            "batchTitle", "status", "imageUrl", "items",
+            "batchTitle", "status", "imageUrl", "items", "location", "taxRate",
         }
         for field in tracked_fields:
             old_val = old.get(field)

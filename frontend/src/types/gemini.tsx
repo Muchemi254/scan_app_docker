@@ -28,6 +28,8 @@ export interface ReceiptData {
   invoiceNumber?: string;
   items: ReceiptItem[];
   category?: string;
+  location?: string;
+  taxRate?: string | null;
   imageUrl?: string;
   thumbnailUrl?: string;
   scannedAt?: string;
@@ -39,6 +41,7 @@ export interface ReceiptItem {
   name: string;
   quantity: number;
   price: string;
+  taxRate?: string | null;
 }
 
 export interface GeminiResponse {
