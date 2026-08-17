@@ -36,7 +36,11 @@ export const opsApi = {
     const resp = await fetch(`${API_BASE_URL}/ops/${encodeURIComponent(opId)}`, {
       headers: { Authorization: getAuthHeader() },
     });
-    if (!resp.ok) throw new Error('Failed to load operation progress');
+    if (!resp.ok) {
+      const err = new Error(`Failed to load operation progress (${resp.status})`);
+      (err as Error & { status?: number }).status = resp.status;
+      throw err;
+    }
     return resp.json();
   },
 

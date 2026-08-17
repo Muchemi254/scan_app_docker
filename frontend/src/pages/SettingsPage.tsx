@@ -119,6 +119,17 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
     }
   }, []);
 
+  // A tracked op lives for 24h in Redis. Once it is pruned (or never
+  // existed) the poll would 404 forever — detect that and give up
+  // cleanly instead of hammering the endpoint.
+  const abandonStaleOp = useCallback(() => {
+    stopPoll();
+    if (userId) sessionStorage.removeItem(OP_STORAGE_KEY(userId));
+    setResumingImport(false);
+    setOpProgress(null);
+    setImportStep('');
+  }, [userId, stopPoll]);
+
   const beginPoll = useCallback((opId: string, onFinish?: (op: OpProgress) => void) => {
     stopPoll();
     const tick = async () => {
@@ -129,13 +140,18 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
           stopPoll();
           onFinish(op);
         }
-      } catch {
-        // op expired or network hiccup — keep last known state
+      } catch (e) {
+        if ((e as { status?: number })?.status === 404) {
+          // Op expired or was never persisted — drop the session.
+          abandonStaleOp();
+          return;
+        }
+        // transient network hiccup — keep last known state
       }
     };
     tick();
     pollRef.current = window.setInterval(tick, 700);
-  }, [stopPoll]);
+  }, [stopPoll, abandonStaleOp]);
 
   // Resume a backend import after a page refresh (the task keeps running
   // server-side; we just re-attach to its live progress + final result).
@@ -147,7 +163,14 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
       opsApi.getOp(opId).then(op => {
         setOpProgress(op);
         if (op.status === 'running') setImportStep('importing');
-      }).catch(() => {});
+      }).catch(e => {
+        if ((e as { status?: number })?.status === 404) {
+          // Op expired while we were away — nothing to resume.
+          abandonStaleOp();
+        } else {
+          setResumingImport(false);
+        }
+      });
       beginPoll(opId, (op) => {
         setResumingImport(false);
         if (op.status === 'completed' && op.result?.stats) {
@@ -162,7 +185,7 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
       });
     }
     return () => stopPoll();
-  }, [userId, beginPoll, stopPoll]);
+  }, [userId, beginPoll, stopPoll, abandonStaleOp]);
 
   // ── Export state ──
   const { items: storeReceipts, load: loadStore } = useReceiptStore();
