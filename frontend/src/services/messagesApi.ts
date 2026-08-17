@@ -99,7 +99,8 @@ export const messagesApi = {
 
   /** Who the caller may start a conversation with. */
   async peers(): Promise<Peer[]> {
-    return api('GET', '/peers');
+    const res: { peers: Peer[] } = await api('GET', '/peers');
+    return res.peers;
   },
 
   /** Send a message. Returns the created message. */
