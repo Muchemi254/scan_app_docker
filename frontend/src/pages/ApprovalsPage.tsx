@@ -4,6 +4,7 @@ import { receiptApi } from '../services/api';
 import { useAuthStore } from '../stores/authStore';
 import { receiptStatusLabel, receiptStatusClass } from '../utils/receiptStatus';
 import ReviewPanel from '../components/ReviewPanel';
+import SearchBar from '../components/SearchBar';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 const PAGE_SIZE = 25;
@@ -24,6 +25,11 @@ const ApprovalsPage = () => {
   const [items, setItems] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+
+  // Search (reuses the indexed search) + client-side filters
+  const [searchResults, setSearchResults] = useState<any[] | null>(null);
+  const [searchTotal, setSearchTotal] = useState(0);
+  const [filters, setFilters] = useState({ category: '', batch: '' });
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedReceipt, setSelectedReceipt] = useState<any | null>(null);
@@ -48,6 +54,19 @@ const ApprovalsPage = () => {
   useEffect(() => {
     if (isAdmin) load();
   }, [isAdmin, load]);
+
+  const onSearchResults = (results: any[], t: number) => {
+    setSearchResults(results);
+    setSearchTotal(t);
+    setPage(1);
+  };
+
+  const onSearchClear = () => {
+    setSearchResults(null);
+    setSearchTotal(0);
+    setPage(1);
+    load();
+  };
 
   // Collapse sidebar when editing; restore on desktop when done
   useEffect(() => {
@@ -160,9 +179,33 @@ const ApprovalsPage = () => {
     );
   }
 
-  const totalPages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+  const sourceRows = searchResults !== null ? searchResults : items;
+  const displayTotal = searchResults !== null ? searchTotal : items.length;
+
+  const uniqueCategories = useMemo(
+    () => [...new Set(sourceRows.map((r: any) => r.category).filter(Boolean))].sort(),
+    [sourceRows],
+  );
+  const uniqueBatches = useMemo(
+    () => [...new Set(sourceRows.map((r: any) => r.batch_title).filter(Boolean))].sort(),
+    [sourceRows],
+  );
+
+  const filteredRows = useMemo(
+    () =>
+      sourceRows.filter((r: any) => {
+        const catMatch = filters.category ? r.category === filters.category : true;
+        const batchMatch = filters.batch ? (r.batch_title || '') === filters.batch : true;
+        return catMatch && batchMatch;
+      }),
+    [sourceRows, filters],
+  );
+
+  useEffect(() => { setPage(1); }, [filters, searchResults]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
   const clampedPage = Math.min(page, totalPages);
-  const pageItems = items.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);
+  const pageItems = filteredRows.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);
 
   /* ── Sidebar contents (shared between desktop inline & mobile overlay) ── */
   const SidebarBody = (
@@ -171,7 +214,7 @@ const ApprovalsPage = () => {
       <div className="flex-shrink-0 flex items-center justify-between gap-2 px-3 py-2 border-b bg-gray-50">
         <span className="text-sm font-semibold text-gray-700 truncate">
           Pending Approvals
-          <span className="ml-1.5 text-xs font-normal text-gray-400">{items.length}</span>
+          <span className="ml-1.5 text-xs font-normal text-gray-400">{displayTotal}</span>
         </span>
         <button
           onClick={() => setSidebarOpen(false)}
@@ -182,8 +225,37 @@ const ApprovalsPage = () => {
         </button>
       </div>
 
+      {/* Indexed search + filters */}
+      <div className="flex-shrink-0 px-3 py-2 border-b bg-white space-y-2">
+        <SearchBar
+          searchFn={receiptApi.listPendingApproval}
+          placeholder="Search pending approvals…"
+          onResults={onSearchResults}
+          onClear={onSearchClear}
+        />
+        <div className="flex gap-2">
+          <select value={filters.category} onChange={e => setFilters(f => ({ ...f, category: e.target.value }))} className="px-2 py-1 text-xs border rounded bg-white flex-1 min-w-0">
+            <option value="">All Categories</option>
+            {uniqueCategories.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <select value={filters.batch} onChange={e => setFilters(f => ({ ...f, batch: e.target.value }))} className="px-2 py-1 text-xs border rounded bg-white flex-1 min-w-0">
+            <option value="">All Batches</option>
+            {uniqueBatches.map(b => <option key={b} value={b}>{b}</option>)}
+          </select>
+          {(Object.values(filters).some(Boolean) || searchResults !== null) && (
+            <button
+              onClick={() => { setFilters({ category: '', batch: '' }); onSearchClear(); }}
+              className="px-2 py-1 text-xs text-red-600 border border-red-200 rounded hover:bg-red-50 flex-shrink-0"
+            >Clear</button>
+          )}
+        </div>
+      </div>
+
       {/* List */}
       <div className="flex-1 overflow-y-auto divide-y">
+        {pageItems.length === 0 && (
+          <p className="p-4 text-sm text-gray-400">No receipts match.</p>
+        )}
         {pageItems.map((row: any) => (
           <div
             key={row.id}
@@ -224,8 +296,8 @@ const ApprovalsPage = () => {
       {/* Pagination */}
       <div className="flex-shrink-0 border-t px-3 py-2 flex items-center justify-between text-xs text-gray-500 bg-gray-50">
         <span>
-          {`${(clampedPage - 1) * PAGE_SIZE + 1}–${Math.min(clampedPage * PAGE_SIZE, items.length)}`}
-          {' '}/ {items.length}
+          {`${(clampedPage - 1) * PAGE_SIZE + 1}–${Math.min(clampedPage * PAGE_SIZE, filteredRows.length)}`}
+          {' '}/ {filteredRows.length}
         </span>
         <div className="flex gap-1">
           <button
@@ -257,7 +329,7 @@ const ApprovalsPage = () => {
           {sidebarOpen ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
         </button>
         <h1 className="font-semibold text-sm text-gray-700">Pending Approvals</h1>
-        <span className="text-xs text-gray-400">{total} across all users</span>
+        <span className="text-xs text-gray-400">{displayTotal} across all users</span>
       </div>
 
       {/* ── Main body: sidebar + detail ── */}

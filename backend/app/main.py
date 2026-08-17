@@ -21,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from app.core.config import settings
-from app.api import health, receipts, tasks, images, batches, exports, cleaning, dashboard, review_batches, backup_api, scan_errors, settings as settings_api, auth as auth_api, admin_receipts, locations, ops
+from app.api import health, receipts, tasks, images, batches, exports, cleaning, dashboard, review_batches, backup_api, scan_errors, settings as settings_api, auth as auth_api, admin_receipts, locations, ops, messages as messages_api
 
 # Configure logging
 logging.basicConfig(
@@ -255,6 +255,12 @@ def create_app() -> FastAPI:
 
     # Health checks
     app.include_router(health.router)
+
+    # User <-> admin messaging (chat + SSE)
+    app.include_router(
+        messages_api.router,
+        prefix=settings.API_V1_STR,
+    )
 
     # Local authentication (login / me / admin user management)
     if settings.AUTH_MODE == "local":

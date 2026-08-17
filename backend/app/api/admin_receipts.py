@@ -6,7 +6,8 @@ These operate across every user's tenant. Access is gated by require_admin
 frontend consumes these to review all pending-approval receipts across users.
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
+from typing import Optional
 
 from app.api.auth import require_admin
 from app.services.receipt_workflow_service import list_pending_for_admin
@@ -15,7 +16,10 @@ router = APIRouter(prefix="/admin", tags=["admin-receipts"])
 
 
 @router.get("/receipts/pending-approval")
-async def list_pending_approval(_: str = Depends(require_admin)):
+async def list_pending_approval(
+    q: Optional[str] = Query(None, description="Full-text search within pending approvals"),
+    _: str = Depends(require_admin),
+):
     """List every pending_approval receipt across all users (admin only)."""
-    items = await list_pending_for_admin()
+    items = await list_pending_for_admin(q)
     return {"items": items, "total": len(items)}

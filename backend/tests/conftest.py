@@ -58,6 +58,8 @@ _TRUNCATE_TABLES = (
     "locations",
     "user_preferences",
     "backups",
+    "conversations",
+    "messages",
 )
 
 

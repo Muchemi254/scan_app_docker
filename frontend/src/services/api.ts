@@ -335,9 +335,10 @@ export const receiptApi = {
   },
 
   /** Cross-tenant list of every pending-approval receipt (admin only). */
-  async listPendingApproval(): Promise<any[]> {
+  async listPendingApproval(q?: string): Promise<any[]> {
     const authorization = await getAuthHeader();
-    const response = await fetch(`${API_BASE_URL}/admin/receipts/pending-approval`, {
+    const url = `${API_BASE_URL}/admin/receipts/pending-approval${q && q.trim() ? `?q=${encodeURIComponent(q.trim())}` : ''}`;
+    const response = await fetch(url, {
       method: 'GET',
       headers: { 'Authorization': authorization, 'Content-Type': 'application/json' },
     });

@@ -208,55 +208,152 @@ async def reject(
         raise HTTPException(
             status_code=403, detail="Admin privileges required to reject receipts"
         )
-    return await _transition(
+    updated = await _transition(
         owner_uid, receipt_id, ReceiptStatus.NEEDS_REVIEW,
         ReceiptStatus.PENDING_APPROVAL,
         AuditAction.REJECTED, actor_uid, note=note,
     )
+    await _notify_rejection(owner_uid, receipt_id, actor_uid, note, updated)
+    return updated
 
 
-async def list_pending_for_admin() -> list:
+async def _notify_rejection(
+    owner_uid: str,
+    receipt_id: str,
+    actor_uid: str,
+    note: Optional[str],
+    receipt: dict,
+) -> None:
+    """Auto-message the owner inside their chat thread for this receipt.
+
+    Best-effort: a messaging failure must never undo a successful rejection.
+    """
+    try:
+        from app.services import messages_service
+
+        body = (
+            "Your receipt was rejected. "
+            f"{note.strip()}  Please review the details and fix what's needed."
+            if note and note.strip()
+            else "Your receipt was rejected. Please review the details and resubmit when fixed."
+        )
+        await messages_service.send_message(
+            actor_uid,
+            owner_uid,
+            body,
+            kind="reject",
+            payload={
+                "receipt_id": str(receipt_id),
+                "supplier": receipt.get("supplier"),
+                "total_amount": receipt.get("totalAmount") or receipt.get("total_amount"),
+                "receipt_date": receipt.get("receiptDate") or receipt.get("receipt_date"),
+                "invoice_number": receipt.get("invoiceNumber") or receipt.get("invoice_number"),
+                "note": note,
+            },
+            receipt_id=str(receipt_id),
+        )
+    except Exception:
+        logger.exception("Failed to auto-message rejection for receipt %s", receipt_id)
+
+
+_PENDING_SELECT = """
+    SELECT r.id,
+           r.user_id                               AS owner_uid,
+           (SELECT u.email FROM users u
+             WHERE u.uid = r.user_id)              AS owner_email,
+           (SELECT u.display_name FROM users u
+             WHERE u.uid = r.user_id)              AS owner_display_name,
+           r.supplier                              AS supplier,
+           r.location                              AS location,
+           r.category                              AS category,
+           r.receipt_date                          AS receipt_date,
+           r.total_amount                          AS total_amount,
+           r.tax_amount                            AS tax_amount,
+           r.tax_rate                              AS tax_rate,
+           r.invoice_number                        AS invoice_number,
+           r.kra_pin                               AS kra_pin,
+           r.buyer_kra_pin                         AS buyer_kra_pin,
+           r.cu_invoice                            AS cu_invoice,
+           r.batch_title                           AS batch_title,
+           r.status                                AS status,
+           r.scanned_at                            AS scanned_at,
+           r.updated_at                            AS updated_at,
+           r.created_at                            AS created_at,
+           (SELECT count(*) FROM line_items li
+             WHERE li.receipt_id = r.id)           AS item_count,
+           (r.image_filename IS NOT NULL)          AS has_image
+    FROM receipts r
+"""
+
+
+def _search_vector() -> str:
+    """The tsvector expression searched for a pending-approval query."""
+    return f"""
+        to_tsvector('simple',
+            COALESCE(r.supplier,'') || ' ' ||
+            COALESCE(r.category,'') || ' ' ||
+            COALESCE(r.invoice_number,'') || ' ' ||
+            COALESCE(r.kra_pin,'') || ' ' ||
+            COALESCE(r.buyer_kra_pin,'') || ' ' ||
+            COALESCE(r.cu_invoice,'') || ' ' ||
+            COALESCE(r.batch_title,'') || ' ' ||
+            COALESCE(r.receipt_date::text,'') || ' ' ||
+            COALESCE(r.location,'') || ' ' ||
+            COALESCE(r.total_amount::text,'') || ' ' ||
+            COALESCE(li.name,'')
+        ) @@ websearch_to_tsquery('simple', $2)
+    """
+
+
+async def list_pending_for_admin(q: Optional[str] = None) -> list:
     """Cross-tenant list of every pending-approval receipt (admin only).
 
     Carries the scalar fields an approver needs to decide at a glance
     (supplier, location, category, amounts, identifiers, timestamps and the
     item count) plus owner identity and an image flag — but never the full
     item payload.
+
+    With `q`, reuses the same full-text matching used by the user-facing
+    receipt search, scoped to pending approvals across all users.
     """
+    query = (q or "").strip()
     pool = await get_pool()
     async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT r.id,
-                   r.user_id                               AS owner_uid,
-                   u.email                                 AS owner_email,
-                   u.display_name                          AS owner_display_name,
-                   r.supplier                              AS supplier,
-                   r.location                              AS location,
-                   r.category                              AS category,
-                   r.receipt_date                          AS receipt_date,
-                   r.total_amount                          AS total_amount,
-                   r.tax_amount                            AS tax_amount,
-                   r.tax_rate                              AS tax_rate,
-                   r.invoice_number                        AS invoice_number,
-                   r.kra_pin                               AS kra_pin,
-                   r.buyer_kra_pin                         AS buyer_kra_pin,
-                   r.cu_invoice                            AS cu_invoice,
-                   r.batch_title                           AS batch_title,
-                   r.status                                AS status,
-                   r.scanned_at                            AS scanned_at,
-                   r.updated_at                            AS updated_at,
-                   r.created_at                            AS created_at,
-                   (SELECT count(*) FROM line_items li
-                     WHERE li.receipt_id = r.id)           AS item_count,
-                   (r.image_filename IS NOT NULL)          AS has_image
-            FROM receipts r
-            LEFT JOIN users u ON u.uid = r.user_id
+        if query:
+            rows = await conn.fetch(
+                _PENDING_SELECT.replace("    FROM receipts r\n", "    FROM receipts r\n") + f"""
+            LEFT JOIN line_items li ON li.receipt_id = r.id
+            WHERE r.status = $1
+              AND (
+                {_search_vector()}
+                OR r.supplier ILIKE '%' || $2 || '%'
+                OR r.category ILIKE '%' || $2 || '%'
+                OR r.invoice_number ILIKE '%' || $2 || '%'
+                OR r.kra_pin ILIKE '%' || $2 || '%'
+                OR r.buyer_kra_pin ILIKE '%' || $2 || '%'
+                OR r.cu_invoice ILIKE '%' || $2 || '%'
+                OR r.batch_title ILIKE '%' || $2 || '%'
+                OR r.location ILIKE '%' || $2 || '%'
+                OR r.receipt_date::text ILIKE '%' || $2 || '%'
+                OR r.total_amount::text ILIKE '%' || $2 || '%'
+                OR (SELECT u.email FROM users u WHERE u.uid = r.user_id) ILIKE '%' || $2 || '%'
+                OR (SELECT u.display_name FROM users u WHERE u.uid = r.user_id) ILIKE '%' || $2 || '%'
+                OR li.name ILIKE '%' || $2 || '%'
+              )
+            GROUP BY r.id
+            ORDER BY r.updated_at DESC
+            """,
+                ReceiptStatus.PENDING_APPROVAL.value,
+                query,
+            )
+        else:
+            rows = await conn.fetch(
+                _PENDING_SELECT + """
             WHERE r.status = $1
             ORDER BY r.updated_at DESC
             """,
-            ReceiptStatus.PENDING_APPROVAL.value,
-        )
+                ReceiptStatus.PENDING_APPROVAL.value,
+            )
         out = []
         for r in rows:
             d = dict(r)

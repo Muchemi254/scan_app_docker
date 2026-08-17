@@ -8,6 +8,9 @@ interface SearchBarProps {
   onResults: (results: any[], total: number) => void;
   onClear: () => void;
   onQueryChange?: (query: string) => void;
+  /** Override the search backend (defaults to the user-scoped receipt search).
+   *  Used e.g. by the admin approval center to search a cross-tenant list. */
+  searchFn?: (q: string, limit: number, offset: number) => Promise<any>;
 }
 
 const SearchBar = ({
@@ -16,6 +19,7 @@ const SearchBar = ({
   onResults,
   onClear,
   onQueryChange,
+  searchFn,
 }: SearchBarProps) => {
   const [inputValue, setInputValue] = useState('');
   const [isSearching, setIsSearching] = useState(false);
@@ -36,8 +40,8 @@ const SearchBar = ({
     setIsSearching(true);
     searchTimer.current = setTimeout(async () => {
       try {
-        const r = await receiptApi.search(q.trim(), pageSize, 0);
-        onResults(r.results || [], r.total || 0);
+        const r = await (searchFn || receiptApi.search)(q.trim(), pageSize, 0);
+        onResults(r.results || r.items || [], r.total || 0);
         setTotal(r.total || 0);
         setIsSearching(false);
       } catch (_) {

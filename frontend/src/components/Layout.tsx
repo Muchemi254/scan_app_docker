@@ -7,10 +7,14 @@ import {
   Home, Camera, FileText, ClipboardCheck, Download,
   LogOut, Menu, X, ChevronDown, User, Settings,
   Images, Sparkles, Search, ListChecks, Bell,
-  Shield, PlusCircle, CheckCheck, Users,
+  Shield, PlusCircle, CheckCheck, Users, MessageCircle,
 } from 'lucide-react';
 import { scanErrorApi } from '../services/api';
+import { messagesApi } from '../services/messagesApi';
 import { isAllowedWhileImpersonating } from '../utils/scope';
+import { toast } from '../stores/toastStore';
+import MessageCenter from './MessageCenter';
+import { useMessageStream } from '../hooks/useMessageStream';
 
 const Layout = () => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -56,6 +60,34 @@ const Layout = () => {
   useEffect(() => {
     if (location.pathname === '/notifications') refreshUnread();
   }, [location.pathname, refreshUnread]);
+
+  // ── Messages ────────────────────────────────────────────────────────────
+  const [msgOpen, setMsgOpen] = useState(false);
+  const [msgUnread, setMsgUnread] = useState(0);
+  const refreshMsgUnread = useCallback(async () => {
+    if (!currentUid || impersonating) return;
+    try {
+      const { unread } = await messagesApi.unreadCount();
+      setMsgUnread(unread ?? 0);
+    } catch {
+      /* badge is best-effort */
+    }
+  }, [currentUid, impersonating]);
+
+  useEffect(() => {
+    refreshMsgUnread();
+    const timer = setInterval(refreshMsgUnread, 30000);
+    return () => clearInterval(timer);
+  }, [refreshMsgUnread]);
+
+  // Instant badge update when a message arrives while the drawer is closed.
+  useMessageStream((ev) => {
+    if (ev.type !== 'message' || impersonating) return;
+    setMsgUnread(n => n + 1);
+    if (!msgOpen) {
+      toast('info', 'New message', 'You have a new message', { duration: 4000 });
+    }
+  });
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -237,8 +269,23 @@ const Layout = () => {
               </div>
             </div>
 
-            {/* Right: Notifications bell + Profile Dropdown */}
+            {/* Right: Messages + Notifications bell + Profile Dropdown */}
             <div className="flex items-center gap-2">
+              {!impersonating && (
+                <button
+                  onClick={() => setMsgOpen(true)}
+                  className="relative p-2 rounded-lg text-gray-600 hover:bg-gray-100 transition"
+                  aria-label="Messages"
+                >
+                  <MessageCircle className="h-5 w-5" />
+                  {msgUnread > 0 && (
+                    <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-blue-500 text-white text-[10px] font-semibold flex items-center justify-center">
+                      {msgUnread > 99 ? '99+' : msgUnread}
+                    </span>
+                  )}
+                </button>
+              )}
+
               {!impersonating && (
                 <Link
                   to="/notifications"
@@ -372,6 +419,13 @@ const Layout = () => {
       <main className="w-full">
         <Outlet />
       </main>
+
+      {/* Message center drawer */}
+      <MessageCenter
+        open={msgOpen && !impersonating}
+        onClose={() => setMsgOpen(false)}
+        onUnreadChange={(n) => setMsgUnread(n)}
+      />
     </div>
   );
 };
