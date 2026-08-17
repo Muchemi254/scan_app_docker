@@ -767,12 +767,15 @@ async def generate_summary(
             for m, tot in sorted(monthly_totals.items())
         ]
 
-        # Generate AI summary
-        summary_input = "\n".join(
-            f"{r.get('receiptDate','')}|{r.get('supplier','')}|{r.get('totalAmount',0)}|{r.get('category','Other')}"
-            for r in filtered[:200]
-        )
-        ai_summary = await generate_ai_summary(summary_input)
+        # Generate AI summary (respects the admin global switch, off by default)
+        ai_summary = None
+        from app.services.app_settings_service import get_ai_summary_enabled
+        if await get_ai_summary_enabled():
+            summary_input = "\n".join(
+                f"{r.get('receiptDate','')}|{r.get('supplier','')}|{r.get('totalAmount',0)}|{r.get('category','Other')}"
+                for r in filtered[:200]
+            )
+            ai_summary = await generate_ai_summary(summary_input)
 
         return SpendingSummaryResponse(
             total_spent=round(total_spent, 2),

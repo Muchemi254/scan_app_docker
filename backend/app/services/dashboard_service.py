@@ -391,17 +391,19 @@ class DashboardService:
                 "importance": "low",
             })
 
-        # ── AI summary (best-effort) ──────────────────────────────────────
+        # ── AI summary (best-effort, disabled by default) ─────────────────
 
         ai_summary = None
         if n >= 3:
-            try:
-                summary_input = "\n".join(
-                    f"{r.get('receiptDate','')}|{r.get('supplier','')}|{r.get('totalAmount',0)}|{r.get('category','Other')}"
-                    for r in receipts[:200]
-                )
-                ai_summary = await generate_ai_summary(summary_input)
-            except Exception:
-                logger.warning("AI summary generation failed", exc_info=True)
+            from app.services.app_settings_service import get_ai_summary_enabled
+            if await get_ai_summary_enabled():
+                try:
+                    summary_input = "\n".join(
+                        f"{r.get('receiptDate','')}|{r.get('supplier','')}|{r.get('totalAmount',0)}|{r.get('category','Other')}"
+                        for r in receipts[:200]
+                    )
+                    ai_summary = await generate_ai_summary(summary_input)
+                except Exception:
+                    logger.warning("AI summary generation failed", exc_info=True)
 
         return {"insights": insights, "ai_summary": ai_summary}

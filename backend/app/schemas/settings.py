@@ -57,6 +57,11 @@ class TaxPreferenceUpdate(BaseModel):
     default_tax_rate: float = Field(..., ge=0, le=100, description="Default tax rate percent")
 
 
+class AISummaryToggle(BaseModel):
+    """Global master switch for the AI summary feature (disabled by default)."""
+    enabled: bool
+
+
 class BackupLimitsOut(BaseModel):
     """Admin-managed per-user backup quota + retention (bytes kept, count kept)."""
     max_backup_bytes_per_user: int

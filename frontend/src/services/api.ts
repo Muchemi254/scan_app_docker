@@ -684,6 +684,16 @@ export const settingsApi = {
     return apiGlobalRequest('PUT', '/settings/global/tax-rate', { default_tax_rate });
   },
 
+  /** Whether the AI summary feature is enabled (admin, disabled by default). */
+  async getGlobalAiSummaryEnabled(): Promise<{ enabled: boolean }> {
+    return apiGlobalRequest('GET', '/settings/global/ai-summary');
+  },
+
+  /** Enable/disable the AI summary feature for all users (admin only). */
+  async setGlobalAiSummaryEnabled(enabled: boolean): Promise<{ enabled: boolean }> {
+    return apiGlobalRequest('PUT', '/settings/global/ai-summary', { enabled });
+  },
+
   /** Get the admin-managed per-user backup quota + retention. */
   async getBackupLimits(): Promise<{ max_backup_bytes_per_user: number; max_backups_per_user: number }> {
     return apiGlobalRequest('GET', '/settings/global/backup-limits');

@@ -14,6 +14,7 @@ KEY_TRUSTED_HOSTS = "trusted_hosts"
 KEY_DEFAULT_TAX_RATE = "default_tax_rate"
 KEY_BACKUP_MAX_BYTES = "max_backup_bytes_per_user"
 KEY_BACKUP_MAX_COUNT = "max_backups_per_user"
+KEY_AI_SUMMARY_ENABLED = "ai_summary_enabled"
 
 
 async def get_setting(key: str) -> Optional[str]:
@@ -86,3 +87,15 @@ async def set_backup_limits(max_backup_bytes_per_user: int, max_backups_per_user
     await set_setting(KEY_BACKUP_MAX_BYTES, str(int(max_backup_bytes_per_user)))
     await set_setting(KEY_BACKUP_MAX_COUNT, str(int(max_backups_per_user)))
     return await get_backup_limits()
+
+
+async def get_ai_summary_enabled() -> bool:
+    """Global AI-summary switch. Disabled by default to avoid surprise LLM spend."""
+    raw = await get_setting(KEY_AI_SUMMARY_ENABLED)
+    if raw is None:
+        return False
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+async def set_ai_summary_enabled(enabled: bool) -> None:
+    await set_setting(KEY_AI_SUMMARY_ENABLED, "1" if enabled else "0")

@@ -358,6 +358,11 @@ const ExportPage = ({ userId, customReceipts, onClose }: ExportPageProps) => {
                     {summary.ai_summary}
                   </div>
                 )}
+                {!summary.ai_summary && (
+                  <div className="text-xs text-gray-400 italic">
+                    AI narrative is disabled by the administrator.
+                  </div>
+                )}
               </div>
             )}
           </div>
