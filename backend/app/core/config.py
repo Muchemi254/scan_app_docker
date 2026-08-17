@@ -97,6 +97,13 @@ class Settings(BaseSettings):
     TEMP_DIR_MAX_AGE_SECONDS: float = _env_int(
         "TEMP_DIR_MAX_AGE_SECONDS", 6 * 60 * 60
     )  # 6 h
+    # Orphan receipt-image file removal is destructive and has historically
+    # mis-classified live files as orphans. It is OFF by default: the sweep
+    # still reports candidates but never unlinks them. Turn on only after the
+    # reference model is known-good. (`ENABLE_ORPHAN_IMAGE_FILE_DELETE=true`)
+    ENABLE_ORPHAN_IMAGE_FILE_DELETE: bool = (
+        os.getenv("ENABLE_ORPHAN_IMAGE_FILE_DELETE", "false").strip().lower() == "true"
+    )
     # Fire the per-user background purge right after a delete (fire-and-forget,
     # so the delete response never blocks). The periodic sweep is the fallback.
     SCHEDULE_DELETE_CLEANUP: bool = (

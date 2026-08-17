@@ -224,6 +224,10 @@ async def test_sweep_keeps_live_users_files_and_removes_only_orphans(client):
     open(orphan_bk, "wb").write(b"tar"); _age(orphan_bk)
 
     from app.services.data_cleanup_service import cleanup_orphaned_data
+    # deletion is gated behind ENABLE_ORPHAN_IMAGE_FILE_DELETE; this controlled
+    # fixture explicitly opts in so it exercises the real cleanup path
+    import app.core.config as cfg
+    cfg.settings.ENABLE_ORPHAN_IMAGE_FILE_DELETE = True
     stats = await cleanup_orphaned_data()
 
     # live user untouched

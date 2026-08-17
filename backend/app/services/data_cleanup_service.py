@@ -194,6 +194,11 @@ async def _sweep_orphan_image_files() -> int:
     dir (per-receipt images) are considered; filename-prefixed temp dirs are
     handled separately. Files referenced by any live receipt or session item
     are never touched.
+
+    Mass-deletion guard: if the DB reference model comes back empty (e.g. an
+    RLS/context quirk hides every row) or we'd remove far more files than the
+    DB references, the sweep aborts instead of destroying live data. Restored
+    image sets are exactly matched, so legit orphans are still collected.
     """
     referenced = set()
     for r in await _fetch(
@@ -209,7 +214,7 @@ async def _sweep_orphan_image_files() -> int:
         referenced.add(r["image_filename"])
 
     age_guard = settings.ORPHANED_FILE_MIN_AGE_SECONDS
-    removed = 0
+    candidates = []
     entry: str
     for entry in os.listdir(settings.IMAGE_STORAGE_DIR):
         path = os.path.join(settings.IMAGE_STORAGE_DIR, entry)
@@ -221,6 +226,38 @@ async def _sweep_orphan_image_files() -> int:
             continue
         if _path_age_seconds(path) < age_guard:
             continue
+        candidates.append(path)
+
+    if not candidates:
+        return 0
+    if not referenced:
+        # Reference query returned zero rows — treat as a broken context,
+        # never trust it enough to delete files.
+        logger.error(
+            "Orphan image sweep aborted: DB reference query returned no rows, "
+            "%d image file(s) would be deleted. Refusing to touch them.",
+            len(candidates),
+        )
+        return 0
+    if len(candidates) > max(50, len(referenced)):
+        logger.error(
+            "Orphan image sweep aborted: %d orphan file(s) vs %d DB references "
+            "(>10x / non-trivial set). Refusing to mass-delete.",
+            len(candidates), len(referenced),
+        )
+        return 0
+    if not settings.ENABLE_ORPHAN_IMAGE_FILE_DELETE:
+        logger.warning(
+            "Orphan image sweep skipped: %d candidate file(s) would be deleted, "
+            "but ENABLE_ORPHAN_IMAGE_FILE_DELETE is off (report-only).",
+            len(candidates),
+        )
+        return 0
+    logger.warning(
+        "Orphan image sweep deleting %d unreferenced file(s)", len(candidates)
+    )
+    removed = 0
+    for path in candidates:
         removed += _unlink(path)
     return removed
 
