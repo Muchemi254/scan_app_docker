@@ -676,6 +676,46 @@ async def test_template_send_lands_on_receipt_thread_and_injects_receipt_id(clie
     assert all(m["kind"] != "receipt_missing_info" for m in handshake_msgs)
 
 
+async def test_scan_error_mirrors_into_receipt_thread(client):
+    """A receipt-scoped scan error lands in the receipt's chat as a senderless
+    system message when a thread exists; without a thread it's skipped."""
+    from app.services.scan_error_service import log_error
+
+    admin_headers = await _admin(client)
+    alice = await _user(client, admin_headers, "alice@pytest.local")
+    ah, _ = await _login(client, "alice@pytest.local")
+    uid = alice["uid"]
+
+    # no thread yet -> best-effort no-op, error still persisted
+    rec = await _create(client, ah, uid)
+    eid = await log_error(
+        uid, receipt_id=rec["id"], kind="batch", code="UNKNOWN",
+        message="no thread yet", title="No thread"
+    )
+    assert eid is not None
+    assert await _conversations(ah) == []
+
+    # create the thread (lock-in + submit) -> mirror appears in it
+    await _send(admin_headers, uid, "hello")
+    r = await _transition(client, ah, uid, rec["id"], "submit")
+    assert r.status_code == 200, r.text
+    eid = await log_error(
+        uid, receipt_id=rec["id"], kind="batch", code="GEMINI_TIMEOUT",
+        message="Provider took too long", title="Extraction timeout"
+    )
+    assert eid is not None
+
+    convs = await _conversations(ah)
+    rec_conv = next(c for c in convs if c["receipt_id"] == rec["id"])
+    msgs = await _messages(ah, rec_conv["id"])
+    last = msgs[-1]
+    assert last["kind"] == "system"
+    assert last["sender_id"] is None
+    assert last["body"] == "Extraction timeout"
+    assert last["payload"]["code"] == "GEMINI_TIMEOUT"
+    assert last["payload"]["scan_error_kind"] == "batch"
+
+
 # ── Redis pub/sub delivery ─────────────────────────────────────────────────
 
 async def test_pubsub_event_published_on_send(client):
