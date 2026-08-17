@@ -30,7 +30,21 @@ from app.services.batch_service import get_redis
 logger = logging.getLogger(__name__)
 
 MAX_BODY_LENGTH = 4000
-ALLOWED_KINDS = {"message", "system", "reject"}
+ALLOWED_KINDS = {
+    "message",
+    "system",
+    "reject",  # legacy auto-rejection (pre-template); new code sends receipt_rejection
+    # Receipt workflow auto-messages (sent by the workflow service)
+    "receipt_submit",
+    "receipt_recall",
+    "receipt_approval",
+    "receipt_rejection",
+    # Predefined admin template kinds (composed via the template catalog)
+    "receipt_question",
+    "receipt_duplicate",
+    "receipt_missing_info",
+    "receipt_payment",
+}
 
 
 def _ts(value) -> Optional[float]:
@@ -215,7 +229,7 @@ async def send_message(
     recipient_uid: str,
     body: str,
     *,
-    kind: str = "message",
+    kind: Optional[str] = "message",
     payload: Optional[Dict[str, Any]] = None,
     receipt_id: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -229,6 +243,8 @@ async def send_message(
         raise HTTPException(
             status_code=400, detail=f"Message exceeds {MAX_BODY_LENGTH} characters"
         )
+    if kind is None:
+        kind = "message"
     if kind not in ALLOWED_KINDS:
         raise HTTPException(status_code=400, detail=f"Unknown message kind: {kind}")
 
@@ -271,6 +287,70 @@ async def send_message(
     return message
 
 
+async def send_system_message(
+    uid: str,
+    receipt_id: str,
+    body: str,
+    *,
+    payload: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Post a senderless `system` message into a receipt's existing thread.
+
+    Used to merge non-chat events (e.g. scan errors that carry a receipt_id)
+    into the chat thread for that receipt. Best-effort: returns None when the
+    receipt has no chat thread yet (the bell notification remains the source
+    of truth) or on any failure.
+    """
+    text = (body or "").strip()
+    if not text:
+        return None
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        conv = await conn.fetchrow(
+            """
+            SELECT c.id FROM conversations c
+            JOIN receipts r ON r.id = c.receipt_id::text
+            WHERE c.receipt_id = $1 AND r.user_id = $2
+            ORDER BY c.created_at ASC
+            LIMIT 1
+            """,
+            str(receipt_id), uid,
+        )
+        if not conv:
+            return None
+        message_id = str(uuid.uuid4())
+        try:
+            await conn.execute(
+                """
+                INSERT INTO messages (id, conversation_id, sender_id, recipient_id,
+                                      body, kind, payload)
+                VALUES ($1, $2, NULL, $3, $4, 'system', $5::jsonb)
+                """,
+                message_id, str(conv["id"]), uid,
+                text, json.dumps(payload or {}, default=str),
+            )
+            await conn.execute(
+                "UPDATE conversations SET last_message_at = now() WHERE id = $1",
+                str(conv["id"]),
+            )
+            row = await conn.fetchrow(
+                """
+                SELECT id, conversation_id, sender_id, recipient_id, body, kind,
+                       payload, read_at, created_at
+                FROM messages WHERE id = $1
+                """,
+                message_id,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to post system message for receipt %s", receipt_id
+            )
+            return None
+    message = _message_to_dict(row)
+    await _publish(uid, message)
+    return message
+
+
 async def list_conversations(uid: str, limit: int = 100) -> List[Dict[str, Any]]:
     """All conversations the user participates in, newest first."""
     pool = await get_pool()
@@ -289,6 +369,13 @@ async def list_conversations(uid: str, limit: int = 100) -> List[Dict[str, Any]]
                      WHERE u.uid = other_user.uid) AS other_display_name,
                    (SELECT u.is_admin FROM users u
                      WHERE u.uid = other_user.uid) AS other_is_admin,
+                   r.status                               AS receipt_status,
+                   r.supplier                             AS receipt_supplier,
+                   r.total_amount                         AS receipt_total,
+                   r.receipt_date                         AS receipt_date,
+                   (SELECT count(*) FROM line_items li
+                     WHERE li.receipt_id = c.receipt_id::text)  AS receipt_item_count,
+                   (r.image_filename IS NOT NULL)         AS receipt_has_image,
                    (SELECT m.body FROM messages m
                      WHERE m.conversation_id = c.id
                      ORDER BY m.created_at DESC LIMIT 1) AS last_body,
@@ -302,6 +389,7 @@ async def list_conversations(uid: str, limit: int = 100) -> List[Dict[str, Any]]
             CROSS JOIN LATERAL (
                 SELECT CASE WHEN c.user_a = $1 THEN c.user_b ELSE c.user_a END AS uid
             ) AS other_user
+            LEFT JOIN receipts r ON r.id = c.receipt_id::text
             WHERE c.user_a = $1 OR c.user_b = $1
             ORDER BY c.last_message_at DESC
             LIMIT $2
@@ -313,6 +401,12 @@ async def list_conversations(uid: str, limit: int = 100) -> List[Dict[str, Any]]
                 "id": str(r["conv_id"]),
                 "receipt_id": str(r["receipt_id"]) if r["receipt_id"] else None,
                 "kind": r["kind"],
+                "receipt_status": r["receipt_status"],
+                "receipt_supplier": r["receipt_supplier"],
+                "receipt_total": r["receipt_total"],
+                "receipt_date": r["receipt_date"],
+                "receipt_item_count": int(r["receipt_item_count"] or 0),
+                "receipt_has_image": bool(r["receipt_has_image"]),
                 "last_message_at": _ts(r["last_message_at"]),
                 "created_at": _ts(r["created_at"]),
                 "other_user": {

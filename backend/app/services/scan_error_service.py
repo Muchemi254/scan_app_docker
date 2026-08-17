@@ -81,10 +81,42 @@ async def log_error(
                 receipt_id,
                 json.dumps(data or {}, default=str),
             )
+        if receipt_id:
+            await _mirror_into_chat(user_id, receipt_id, kind, code, message, title)
         return error_id
     except Exception:
         logger.exception("Failed to persist scan_error for user %s", user_id)
         return None
+
+
+async def _mirror_into_chat(
+    user_id: str,
+    receipt_id: str,
+    kind: str,
+    code: str,
+    message: str,
+    title: Optional[str],
+) -> None:
+    """Mirror a receipt-scoped scan error into the receipt's chat thread as a
+    senderless `system` message (best-effort). No thread yet → skip; the bell
+    notification remains the primary surface."""
+    try:
+        from app.services import messages_service
+
+        await messages_service.send_system_message(
+            user_id,
+            receipt_id,
+            body=(title or message)[:400] or "Receipt scan issue",
+            payload={
+                "receipt_id": str(receipt_id),
+                "code": code,
+                "scan_error_kind": kind,
+            },
+        )
+    except Exception:
+        logger.debug(
+            "Failed to mirror scan_error into chat (user=%s receipt=%s)", user_id, receipt_id
+        )
 
 
 async def list_errors(user_id: str, limit: int = 100) -> List[Dict[str, Any]]:

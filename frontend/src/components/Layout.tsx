@@ -89,7 +89,7 @@ const Layout = () => {
     if (ev.type !== 'message' || impersonating) return;
     setMsgUnread(n => n + 1);
     if (!msgOpen) {
-      toast('info', 'New message', 'You have a new message', { duration: 4000 });
+      toast.info('New message', 'You have a new message', { duration: 4000 });
     }
   });
 

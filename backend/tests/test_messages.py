@@ -292,11 +292,12 @@ async def test_reject_sends_auto_message_with_note(client):
     msgs = await _messages(ah, conv["id"])
     assert len(msgs) == 1
     msg = msgs[0]
-    assert msg["kind"] == "reject"
+    assert msg["kind"] == "receipt_rejection"
     assert "Duplicate of INV-1001" in msg["body"]
     assert msg["payload"]["note"] == "Duplicate of INV-1001"
     assert msg["payload"]["receipt_id"] == rec["id"]
     assert msg["payload"]["supplier"]
+    assert msg["payload"]["line_items_count"] >= 1
 
     # admin side: thread exists, no unread
     convs_admin = await _conversations(admin_headers)
@@ -318,7 +319,7 @@ async def test_reject_without_note_still_messages(client):
     convs = await _conversations(ah)
     assert len(convs) == 1
     msgs = await _messages(ah, convs[0]["id"])
-    assert msgs[0]["kind"] == "reject"
+    assert msgs[0]["kind"] == "receipt_rejection"
     assert msgs[0]["payload"]["note"] is None
 
 
@@ -489,6 +490,149 @@ async def test_user_messaging_toggle_controls_user_to_user(client):
     assert resp.status_code == 403, resp.text
     resp = await client.get("/api/v1/settings/global/user-messaging", headers=admin_headers)
     assert resp.json()["enabled"] is False
+
+
+# ── Workflow auto-messages (submit / recall / approve) ─────────────────────
+
+async def test_approve_sends_auto_message(client):
+    admin_headers = await _admin(client)
+    alice = await _user(client, admin_headers, "alice@pytest.local")
+    ah, _ = await _login(client, "alice@pytest.local")
+    uid = alice["uid"]
+
+    rec = await _create(client, ah, uid)
+    await _transition(client, ah, uid, rec["id"], "submit")
+
+    r = await _transition(
+        client, admin_headers, uid, rec["id"], "approve", location="Nairobi HQ"
+    )
+    assert r.status_code == 200, r.text
+
+    convs = await _conversations(ah)
+    assert len(convs) == 1
+    msgs = await _messages(ah, convs[0]["id"])
+    assert msgs[-1]["kind"] == "receipt_approval"
+    assert "approved" in msgs[-1]["body"].lower()
+    assert msgs[-1]["payload"]["receipt_id"] == rec["id"]
+    assert msgs[-1]["payload"]["status"] == "processed"
+    assert msgs[-1]["payload"]["total_amount"] is not None
+
+
+async def test_submit_notifies_locked_admin_only(client):
+    admin_headers = await _admin(client)
+    admin_a = await _user(client, admin_headers, "boss@pytest.local", is_admin=True)
+    admin_b = await _user(client, admin_headers, "carol@pytest.local", is_admin=True)
+    alice = await _user(client, admin_headers, "alice@pytest.local")
+    ah, _ = await _login(client, "alice@pytest.local")
+    ah_a, _ = await _login(client, "boss@pytest.local")
+    uid = alice["uid"]
+
+    # boss contacts alice first -> locked-in admin
+    await _send(ah_a, alice["uid"], "hello from boss")
+
+    rec = await _create(client, ah, uid)
+    r = await _transition(client, ah, uid, rec["id"], "submit")
+    assert r.status_code == 200, r.text
+
+    # boss received the submit notification, carol did not
+    convs_boss = await _conversations(ah_a)
+    assert any(c["receipt_id"] == rec["id"] for c in convs_boss)
+    got = []
+    for c in convs_boss:
+        if c["receipt_id"] == rec["id"]:
+            got = await _messages(ah_a, c["id"])
+    assert any(m["kind"] == "receipt_submit" for m in got)
+    ah_b, _, _ = await login(client, "carol@pytest.local", "pass-123")
+    convs_carol = await _conversations(ah_b)
+    assert not any(c["receipt_id"] == rec["id"] for c in convs_carol)
+
+
+async def test_submit_without_admin_contact_sends_nothing(client):
+    admin_headers = await _admin(client)
+    alice = await _user(client, admin_headers, "alice@pytest.local")
+    ah, _ = await _login(client, "alice@pytest.local")
+    uid = alice["uid"]
+
+    rec = await _create(client, ah, uid)
+    r = await _transition(client, ah, uid, rec["id"], "submit")
+    assert r.status_code == 200, r.text
+    assert await _conversations(ah) == []
+
+
+async def test_recall_sends_auto_message(client):
+    admin_headers = await _admin(client)
+    admin_a = await _user(client, admin_headers, "boss@pytest.local", is_admin=True)
+    alice = await _user(client, admin_headers, "alice@pytest.local")
+    ah, _ = await _login(client, "alice@pytest.local")
+    ah_a, _ = await _login(client, "boss@pytest.local")
+    uid = alice["uid"]
+
+    rec = await _create(client, ah, uid)
+    await _transition(client, ah, uid, rec["id"], "submit")
+    r = await _transition(client, ah, uid, rec["id"], "recall")
+    assert r.status_code == 200, r.text
+
+    # recall to the admin happens only when an admin contact is locked in
+    assert await _conversations(ah_a) == []
+
+    await _send(ah_a, alice["uid"], "hello from boss")
+    await _transition(client, ah, uid, rec["id"], "submit")
+    r = await _transition(client, ah, uid, rec["id"], "recall")
+    assert r.status_code == 200, r.text
+    convs = await _conversations(ah_a)
+    assert any(c["receipt_id"] == rec["id"] for c in convs)
+
+
+# ── Predefined templates ───────────────────────────────────────────────────
+
+async def test_templates_catalog(client):
+    admin_headers = await _admin(client)
+    resp = await client.get("/api/v1/messages/templates", headers=admin_headers)
+    assert resp.status_code == 200, resp.text
+    templates = resp.json()["templates"]
+    keys = {t["key"] for t in templates}
+    assert "approval_confirmed" in keys
+    assert "rejection_reason" in keys
+    assert "missing_info" in keys
+    assert "payment_notice" in keys
+    for t in templates:
+        assert t["kind"] in {
+            "message", "system", "reject", "receipt_submit", "receipt_recall",
+            "receipt_approval", "receipt_rejection", "receipt_question",
+            "receipt_duplicate", "receipt_missing_info", "receipt_payment",
+        }
+        assert "{" in t["body"]  # variable placeholders documented
+
+
+async def test_send_template_renders_server_side(client):
+    admin_headers = await _admin(client)
+    alice = await _user(client, admin_headers, "alice@pytest.local")
+    ah, _ = await _login(client, "alice@pytest.local")
+
+    resp = await client.post(
+        "/api/v1/messages/send",
+        headers=admin_headers,
+        json={
+            "recipient_uid": alice["uid"],
+            "template_key": "missing_info",
+            "variables": {"field": "invoice number", "supplier": "Acme Ltd"},
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["kind"] == "receipt_missing_info"
+    assert "invoice number" in body["body"]
+    assert body["body"].index("invoice number") < body["body"].index("receipt")
+    assert body["payload"]["template_key"] == "missing_info"
+    assert body["payload"]["field"] == "invoice number"
+
+    # unknown template -> 400
+    resp = await client.post(
+        "/api/v1/messages/send",
+        headers=admin_headers,
+        json={"recipient_uid": alice["uid"], "template_key": "nope"},
+    )
+    assert resp.status_code == 400, resp.text
 
 
 # ── Redis pub/sub delivery ─────────────────────────────────────────────────

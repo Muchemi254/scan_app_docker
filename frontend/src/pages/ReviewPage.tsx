@@ -1,5 +1,6 @@
 // src/pages/ReviewPage.tsx
 import { useEffect, useState, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useReceiptStore } from '../stores/receiptStore';
 import { useAuthStore } from '../stores/authStore';
 import { receiptApi } from '../services/api';
@@ -63,6 +64,15 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
       setSelectedId(receipts[0].id);
     }
   }, [receipts, selectedId]);
+
+  // Deep link from the message center: ?receipt=<id> selects that receipt.
+  const [searchParams] = useSearchParams();
+  const deepLinkId = searchParams.get('receipt');
+  useEffect(() => {
+    if (deepLinkId && selectedId !== deepLinkId && receipts.some(r => r.id === deepLinkId)) {
+      setSelectedId(deepLinkId);
+    }
+  }, [deepLinkId, receipts, selectedId]);
 
   const handleSelect = (newId: string) => {
     if (isEditing) {

@@ -21,6 +21,12 @@ export interface Conversation {
   id: string;
   receipt_id: string | null;
   kind: 'pair' | 'receipt';
+  receipt_status: 'needs_review' | 'pending_approval' | 'processed' | null;
+  receipt_supplier: string | null;
+  receipt_total: string | null;
+  receipt_date: string | null;
+  receipt_item_count: number;
+  receipt_has_image: boolean;
   last_message_at: number | null;
   created_at: number | null;
   other_user: ConversationOtherUser;
@@ -28,16 +34,38 @@ export interface Conversation {
   unread_count: number;
 }
 
+export type MessageKind =
+  | 'message'
+  | 'system'
+  | 'reject'
+  | 'receipt_submit'
+  | 'receipt_recall'
+  | 'receipt_approval'
+  | 'receipt_rejection'
+  | 'receipt_question'
+  | 'receipt_duplicate'
+  | 'receipt_missing_info'
+  | 'receipt_payment';
+
 export interface Message {
   id: string;
   conversation_id: string;
-  sender_id: string;
+  sender_id: string | null;
   recipient_id: string;
   body: string;
-  kind: 'message' | 'system' | 'reject';
+  kind: MessageKind;
   payload: Record<string, any>;
   read: boolean;
   created_at: number | null;
+}
+
+export interface MessageTemplate {
+  key: string;
+  kind: MessageKind;
+  title: string;
+  description: string;
+  body: string;
+  variables: string[];
 }
 
 export interface Peer {
@@ -106,5 +134,26 @@ export const messagesApi = {
   /** Send a message. Returns the created message. */
   async send(recipientUid: string, body: string): Promise<Message> {
     return api('POST', '/send', { recipient_uid: recipientUid, body });
+  },
+
+  /** The predefined receipt message templates (server-side catalog). */
+  async templates(): Promise<MessageTemplate[]> {
+    const res: { templates: MessageTemplate[] } = await api('GET', '/templates');
+    return res.templates;
+  },
+
+  /** Send a predefined template; the server renders body + kind canonically. */
+  async sendTemplate(
+    recipientUid: string,
+    templateKey: string,
+    variables: Record<string, string>,
+    receiptId?: string,
+  ): Promise<Message> {
+    return api('POST', '/send', {
+      recipient_uid: recipientUid,
+      template_key: templateKey,
+      variables,
+      ...(receiptId ? { receipt_id: receiptId } : {}),
+    });
   },
 };

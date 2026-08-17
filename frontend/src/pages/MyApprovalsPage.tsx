@@ -1,5 +1,6 @@
 // src/pages/MyApprovalsPage.tsx
 import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { receiptApi } from '../services/api';
 import { useAuthStore } from '../stores/authStore';
 import { useScopeStore } from '../stores/scopeStore';
@@ -76,6 +77,15 @@ const MyApprovalsPage = () => {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Deep link from the message center: ?receipt=<id> opens that receipt's modal.
+  const [searchParams] = useSearchParams();
+  const deepLinkId = searchParams.get('receipt');
+  useEffect(() => {
+    if (!deepLinkId || viewTarget) return;
+    const found = [...items, ...approved].find(r => r.id === deepLinkId);
+    if (found) setViewTarget(found);
+  }, [deepLinkId, items, approved, viewTarget]);
 
   // Reset search when switching user scope (search is tenant-scoped)
   useEffect(() => {

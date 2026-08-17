@@ -157,10 +157,26 @@ async def list_peers(
     return {"peers": await messages_service.peers(user_id)}
 
 
+@router.get("/templates")
+async def list_templates(
+    _user_id: str = Depends(get_current_user_id),
+):
+    """The predefined receipt message templates for the compose box.
+
+    The catalog is server-side: sending with template_key renders the body
+    canonically from these templates (never from client-supplied text).
+    """
+    from app.services.message_templates import list_templates
+
+    return {"templates": list_templates()}
+
+
 class _SendRequest(BaseModel):
     recipient_uid: str
-    body: str
+    body: str = ""
     receipt_id: Optional[str] = None
+    template_key: Optional[str] = None
+    variables: Optional[dict] = None
 
 
 @router.post("/send")
@@ -168,10 +184,30 @@ async def send_message(
     req: _SendRequest,
     user_id: str = Depends(get_current_user_id),
 ):
+    """Send a message or send one of the predefined receipt templates.
+
+    With `template_key` set, `body`/`kind` are ignored and the message is
+    rendered server-side from the template + `variables` (single source of
+    truth; the bubble payload is built from the same variables).
+    """
+    kind: Optional[str] = None
+    payload: Optional[dict] = None
+    if req.template_key:
+        from app.services.message_templates import render_template
+
+        try:
+            kind, body, payload = render_template(req.template_key, req.variables)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+    else:
+        body = req.body
+
     message = await messages_service.send_message(
         user_id,
         req.recipient_uid,
-        req.body,
+        body,
+        kind=kind,
+        payload=payload,
         receipt_id=req.receipt_id,
     )
     return message

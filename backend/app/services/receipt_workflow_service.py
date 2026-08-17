@@ -152,20 +152,30 @@ async def _transition(
 
 async def submit(owner_uid: str, receipt_id: str, actor_uid: str) -> dict:
     """needs_review → pending_approval (owner or admin)."""
-    return await _transition(
+    updated = await _transition(
         owner_uid, receipt_id, ReceiptStatus.PENDING_APPROVAL,
         ReceiptStatus.NEEDS_REVIEW,
         AuditAction.SUBMITTED, actor_uid,
     )
+    await _notify_workflow(
+        actor_uid, owner_uid, receipt_id, updated, "receipt_submit",
+        submitted=True,
+    )
+    return updated
 
 
 async def recall(owner_uid: str, receipt_id: str, actor_uid: str) -> dict:
     """pending_approval → needs_review (owner or admin)."""
-    return await _transition(
+    updated = await _transition(
         owner_uid, receipt_id, ReceiptStatus.NEEDS_REVIEW,
         ReceiptStatus.PENDING_APPROVAL,
         AuditAction.RECALLED, actor_uid,
     )
+    await _notify_workflow(
+        actor_uid, owner_uid, receipt_id, updated, "receipt_recall",
+        submitted=False,
+    )
+    return updated
 
 
 async def _location_present(receipt: dict) -> bool:
@@ -192,11 +202,16 @@ async def approve(owner_uid: str, receipt_id: str, actor_uid: str) -> dict:
         raise HTTPException(status_code=404, detail="Receipt not found")
     if not await _location_present(current):
         raise location_required_for_processed()
-    return await _transition(
+    updated = await _transition(
         owner_uid, receipt_id, ReceiptStatus.PROCESSED,
         ReceiptStatus.PENDING_APPROVAL,
         AuditAction.APPROVED, actor_uid,
     )
+    await _notify_workflow(
+        actor_uid, owner_uid, receipt_id, updated, "receipt_approval",
+        submitted=True,
+    )
+    return updated
 
 
 async def reject(
@@ -213,47 +228,111 @@ async def reject(
         ReceiptStatus.PENDING_APPROVAL,
         AuditAction.REJECTED, actor_uid, note=note,
     )
-    await _notify_rejection(owner_uid, receipt_id, actor_uid, note, updated)
+    await _notify_workflow(
+        actor_uid, owner_uid, receipt_id, updated, "receipt_rejection",
+        submitted=False, note=note,
+    )
     return updated
 
 
-async def _notify_rejection(
+def _receipt_notify_payload(receipt_id: str, receipt: dict, **extra) -> dict:
+    """The rich payload attached to every receipt workflow message."""
+    payload = {
+        "receipt_id": str(receipt_id),
+        "supplier": receipt.get("supplier"),
+        "total_amount": receipt.get("totalAmount") or receipt.get("total_amount"),
+        "receipt_date": receipt.get("receiptDate") or receipt.get("receipt_date"),
+        "invoice_number": receipt.get("invoiceNumber") or receipt.get("invoice_number"),
+        "status": receipt.get("status"),
+        "line_items_count": len(receipt.get("items") or []),
+        "thumbnail_url": receipt.get("thumbnailUrl")
+        or (f"/receipt-images/{receipt_id}?thumb=1" if receipt.get("imageUrl") else None),
+    }
+    payload.update(extra)
+    return payload
+
+
+async def _notify_workflow(
+    actor_uid: str,
     owner_uid: str,
     receipt_id: str,
-    actor_uid: str,
-    note: Optional[str],
     receipt: dict,
+    kind: str,
+    *,
+    submitted: bool,
+    note: Optional[str] = None,
 ) -> None:
-    """Auto-message the owner inside their chat thread for this receipt.
+    """Auto-message the workflow event (submit / recall / approve / reject).
 
-    Best-effort: a messaging failure must never undo a successful rejection.
+    Audience:
+    - reject / approve: always the admin → owner.
+    - submit / recall by the OWNER: the owner's single locked-in admin (if any
+      — with no admin contact there is no one to notify yet).
+    - submit / recall by an ADMIN: the admin → owner.
+
+    Best-effort: a messaging failure must never undo a successful transition.
     """
     try:
         from app.services import messages_service
 
-        body = (
-            "Your receipt was rejected. "
-            f"{note.strip()}  Please review the details and fix what's needed."
-            if note and note.strip()
-            else "Your receipt was rejected. Please review the details and resubmit when fixed."
-        )
+        supplier = receipt.get("supplier") or "receipt"
+        total = receipt.get("totalAmount") or receipt.get("total_amount")
+        total_txt = f"KES {total}" if total is not None else "KES 0.00"
+
+        if kind == "receipt_approval":
+            recipient = owner_uid
+            body = (
+                f"Your receipt from {supplier} ({total_txt}) was approved "
+                "and is now fully processed."
+            )
+        elif kind == "receipt_rejection":
+            recipient = owner_uid
+            body = (
+                "Your receipt was rejected. "
+                f"{note.strip()}  Please review the details and fix what's needed."
+                if note and note.strip()
+                else "Your receipt was rejected. Please review the details and resubmit when fixed."
+            )
+        else:
+            # submit / recall — the recipient depends on the actor.
+            if await _is_admin(actor_uid):
+                recipient = owner_uid
+                if kind == "receipt_submit":
+                    body = (
+                        f"Your receipt from {supplier} ({total_txt}) was "
+                        "submitted for approval."
+                    )
+                else:
+                    body = (
+                        f"Your receipt from {supplier} ({total_txt}) was recalled."
+                    )
+            else:
+                locked = await messages_service._locked_admin_for(owner_uid)
+                if not locked:
+                    return  # no admin contact yet — nothing to notify
+                recipient = locked
+                if kind == "receipt_submit":
+                    body = (
+                        f"Receipt from {supplier} ({total_txt}) was submitted "
+                        "for approval."
+                    )
+                else:
+                    body = f"Receipt from {supplier} ({total_txt}) was recalled."
+
+        payload = _receipt_notify_payload(receipt_id, receipt)
+        payload["note"] = note
         await messages_service.send_message(
             actor_uid,
-            owner_uid,
+            recipient,
             body,
-            kind="reject",
-            payload={
-                "receipt_id": str(receipt_id),
-                "supplier": receipt.get("supplier"),
-                "total_amount": receipt.get("totalAmount") or receipt.get("total_amount"),
-                "receipt_date": receipt.get("receiptDate") or receipt.get("receipt_date"),
-                "invoice_number": receipt.get("invoiceNumber") or receipt.get("invoice_number"),
-                "note": note,
-            },
+            kind=kind,
+            payload=payload,
             receipt_id=str(receipt_id),
         )
     except Exception:
-        logger.exception("Failed to auto-message rejection for receipt %s", receipt_id)
+        logger.exception(
+            "Failed to auto-message %s for receipt %s", kind, receipt_id
+        )
 
 
 _PENDING_SELECT = """

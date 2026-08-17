@@ -1,5 +1,6 @@
 // src/pages/ApprovalsPage.tsx
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { receiptApi } from '../services/api';
 import { useAuthStore } from '../stores/authStore';
 import { receiptStatusLabel, receiptStatusClass } from '../utils/receiptStatus';
@@ -83,6 +84,15 @@ const ApprovalsPage = () => {
       setSelectedId(items[0].id);
     }
   }, [items, selectedId]);
+
+  // Deep link from the message center: ?receipt=<id> selects that receipt.
+  const [searchParams] = useSearchParams();
+  const deepLinkId = searchParams.get('receipt');
+  useEffect(() => {
+    if (deepLinkId && selectedId !== deepLinkId && items.some(r => r.id === deepLinkId)) {
+      setSelectedId(deepLinkId);
+    }
+  }, [deepLinkId, items, selectedId]);
 
   const selectedRow = items.find((r: any) => r.id === selectedId) || null;
 
