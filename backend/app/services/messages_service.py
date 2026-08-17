@@ -126,17 +126,88 @@ async def _ensure_conversation(
         return conv_id, kind, rec
 
 
-async def _peer_rule_allowed(sender_uid: str, recipient_uid: str) -> None:
-    """Users <-> Admins only: at least one side must be an admin."""
+async def _conversation_exists(a: str, b: str) -> bool:
+    """Whether any conversation already exists between this exact pair."""
+    a, b = sorted([a, b])
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return bool(
+            await conn.fetchval(
+                """
+                SELECT 1 FROM conversations
+                WHERE user_a = $1 AND user_b = $2
+                LIMIT 1
+                """,
+                a, b,
+            )
+        )
+
+
+async def _locked_admin_for(uid: str) -> Optional[str]:
+    """The single admin contact for a non-admin user: the admin they have the
+    earliest conversation with (admin → many, user → one-to-one). Triggered by
+    any admin message (including rejection auto-messages). None when the user
+    has never been messaged by an admin."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT admin.uid FROM (
+                SELECT CASE WHEN c.user_a = $1 THEN c.user_b ELSE c.user_a END AS other_uid,
+                       c.created_at
+                FROM conversations c
+                WHERE c.user_a = $1 OR c.user_b = $1
+            ) sides
+            JOIN users admin ON admin.uid = sides.other_uid
+            WHERE admin.is_admin = true
+            ORDER BY sides.created_at ASC
+            LIMIT 1
+            """,
+            uid,
+        )
+        return str(row["uid"]) if row else None
+
+
+async def _peer_rule_allowed(
+    sender_uid: str, recipient_uid: str, *, existing: bool = False
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    """Who may talk to whom; returns the (sender, recipient) user dicts.
+
+    - admins may message anyone (admin → many)
+    - a non-admin user may only message their single locked-in admin contact,
+      established by whichever admin first messaged them (user → one-to-one).
+      The lock-in does NOT apply when `existing` — replying inside an already
+      open thread (e.g. a rejection auto-thread) is always allowed.
+    - users may message other users only when the admin toggle
+      `user_messaging_enabled` is ON (default OFF)
+    """
     sender = await auth_service.get_user_by_uid(sender_uid)
     recipient = await auth_service.get_user_by_uid(recipient_uid)
     if not sender or not recipient:
         raise HTTPException(status_code=404, detail="Sender or recipient not found")
-    if not (sender["is_admin"] or recipient["is_admin"]):
-        raise HTTPException(
-            status_code=403,
-            detail="Messages are only allowed between users and admins",
-        )
+
+    if sender["is_admin"] or recipient["is_admin"]:
+        # Non-admin → admin: only the user's single locked-in admin contact,
+        # unless no admin has contacted them yet (first one locks in), or the
+        # thread already exists (reply).
+        if not sender["is_admin"] and recipient["is_admin"] and not existing:
+            locked = await _locked_admin_for(sender_uid)
+            if locked and recipient_uid != locked:
+                raise HTTPException(
+                    status_code=403,
+                    detail="You can only message your assigned admin contact",
+                )
+        return sender, recipient
+
+    # Both non-admins: only when the admin enabled user-to-user messaging.
+    from app.services.app_settings_service import get_user_messaging_enabled
+
+    if await get_user_messaging_enabled():
+        return sender, recipient
+    raise HTTPException(
+        status_code=403,
+        detail="Messages are only allowed between users and admins",
+    )
 
 
 async def send_message(
@@ -161,7 +232,12 @@ async def send_message(
     if kind not in ALLOWED_KINDS:
         raise HTTPException(status_code=400, detail=f"Unknown message kind: {kind}")
 
-    await _peer_rule_allowed(uid, recipient_uid)
+    # Peer rule + single-admin lock-in (throws 403/404 as appropriate).
+    # The lock-in may be bypassed when a conversation already exists between
+    # the pair — replying inside an existing thread (e.g. a rejection auto
+    # thread started by another admin) must always work.
+    existing = await _conversation_exists(uid, recipient_uid)
+    _sender, _recipient = await _peer_rule_allowed(uid, recipient_uid, existing=existing)
     conversation_id, _kind, _rec = await _ensure_conversation(
         uid, recipient_uid, receipt_id
     )
@@ -357,8 +433,14 @@ async def unread_count(uid: str) -> int:
 
 
 async def peers(uid: str) -> List[Dict[str, Any]]:
-    """Who can the current user message? Admins see all other users; regular
-    users see all admins."""
+    """Who can the current user message?
+    - admins see every other user (admin → many)
+    - a user sees ONLY their locked-in admin contact (the first admin who ever
+      messaged them); before any admin has contacted them they may pick any
+      admin, which locks the contact in
+    - when the admin toggle `user_messaging_enabled` is ON, users also see
+      other non-admin users
+    """
     pool = await get_pool()
     async with pool.acquire() as conn:
         current = await conn.fetchrow(
@@ -369,25 +451,35 @@ async def peers(uid: str) -> List[Dict[str, Any]]:
         if current["is_admin"]:
             rows = await conn.fetch(
                 """
-                SELECT uid, email, display_name FROM users
+                SELECT uid, email, display_name, is_admin FROM users
                 WHERE uid <> $1 ORDER BY email
                 """,
                 uid,
             )
         else:
+            from app.services.app_settings_service import get_user_messaging_enabled
+
+            locked = await _locked_admin_for(uid)
+            extra = ""
+            if await get_user_messaging_enabled():
+                extra = " OR is_admin = false"
             rows = await conn.fetch(
-                """
-                SELECT uid, email, display_name FROM users
-                WHERE is_admin = true AND uid <> $1 ORDER BY email
+                f"""
+                SELECT uid, email, display_name, is_admin FROM users
+                WHERE uid <> $1
+                  AND (is_admin = true{extra})
+                ORDER BY email
                 """,
                 uid,
             )
+            if locked:
+                rows = [r for r in rows if r["uid"] == locked]
     peers_list = [
         {
             "uid": r["uid"],
             "email": r["email"],
             "display_name": r["display_name"],
-            "is_admin": bool(current["is_admin"]),
+            "is_admin": bool(r["is_admin"]),
         }
         for r in rows
     ]

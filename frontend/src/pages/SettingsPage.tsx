@@ -8,6 +8,7 @@ import {
   Download, Upload, Trash2, RefreshCw, FileArchive,
   CheckCircle, AlertCircle, Clock, Database, Image as ImageIcon, Shield,
   ChevronDown, ChevronRight, X, Sparkles, FileSpreadsheet, Save,
+  MessageCircle,
 } from 'lucide-react';
 import AiScanningEnginePage from './AiScanningEnginePage';
 import { useIsImpersonating } from '../utils/scope';
@@ -204,6 +205,30 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
       setAiSummaryNotice(r.enabled ? 'AI Summary enabled for all users.' : 'AI Summary disabled — no LLM tokens will be spent.');
     } catch (e: any) { setAiSummaryNotice(e.message || 'Failed to save AI summary setting'); }
     finally { setAiSummarySaving(false); }
+  };
+
+  // ── User-to-user messaging switch (admin-only, default OFF) ──
+  const [userMessagingEnabled, setUserMessagingEnabled] = useState(false);
+  const [userMessagingSaving, setUserMessagingSaving] = useState(false);
+  const [userMessagingNotice, setUserMessagingNotice] = useState('');
+
+  const loadUserMessagingSetting = useCallback(async () => {
+    try {
+      const r = await settingsApi.getGlobalUserMessagingEnabled();
+      setUserMessagingEnabled(r.enabled);
+    } catch (e: any) { /* admin-only; ignore */ }
+  }, []);
+
+  useEffect(() => { if (userId) loadUserMessagingSetting(); }, [userId, loadUserMessagingSetting]);
+
+  const saveUserMessagingSetting = async () => {
+    setUserMessagingSaving(true); setUserMessagingNotice('');
+    try {
+      const r = await settingsApi.setGlobalUserMessagingEnabled(userMessagingEnabled);
+      setUserMessagingEnabled(r.enabled);
+      setUserMessagingNotice(r.enabled ? 'Users may now message each other.' : 'User-to-user messaging disabled — users can only contact their assigned admin.');
+    } catch (e: any) { setUserMessagingNotice(e.message || 'Failed to save messaging setting'); }
+    finally { setUserMessagingSaving(false); }
   };
 
   const loadTaxDefaults = useCallback(async () => {
@@ -525,6 +550,42 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
                   className="inline-flex items-center gap-1.5 px-4 py-2 bg-purple-600 text-white rounded-lg text-sm font-medium hover:bg-purple-700 disabled:opacity-50"
                 >
                   <Save className="h-4 w-4" />{aiSummarySaving ? 'Saving...' : 'Save'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {authUser?.is_admin && (
+            <div className="bg-white rounded-lg shadow p-6 space-y-3">
+              <h2 className="font-semibold text-gray-800 flex items-center gap-2">
+                <MessageCircle className="h-5 w-5 text-blue-600" /> User Messaging — Global
+              </h2>
+              <p className="text-xs text-gray-500">
+                Master switch for non-admin users messaging each other. Off by default: each user
+                can only message their single assigned admin contact. Admins can always message
+                anyone.
+              </p>
+              {userMessagingNotice && (
+                <div className={`text-xs px-3 py-2 rounded ${userMessagingNotice.includes('Failed') ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-700'}`}>
+                  {userMessagingNotice}
+                </div>
+              )}
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={userMessagingEnabled}
+                  onChange={e => setUserMessagingEnabled(e.target.checked)}
+                  className="h-4 w-4 text-blue-600 rounded"
+                />
+                Allow users to message each other
+              </label>
+              <div className="flex gap-2">
+                <button
+                  onClick={saveUserMessagingSetting}
+                  disabled={userMessagingSaving}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+                >
+                  <Save className="h-4 w-4" />{userMessagingSaving ? 'Saving...' : 'Save'}
                 </button>
               </div>
             </div>

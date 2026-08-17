@@ -11,6 +11,9 @@ Covers:
   - reject workflow auto-message (kind=reject, note + structured payload)
   - send validation: empty body, oversized body, self-message
   - peers endpoint scoping (user sees admins only; admin sees all users)
+  - conversation policy: user locked to the first admin who messaged them,
+    pick-any-admin before lock-in, replies in existing threads by other
+    admins, and the admin-managed user-to-user messaging toggle (default OFF)
   - Redis pub/sub event fired on send (the SSE delivery layer)
 """
 
@@ -360,6 +363,132 @@ async def test_peers_scoping(client):
     uids = [p["uid"] for p in peers]
     assert alice["uid"] in uids and bob["uid"] in uids
     assert admin_user["uid"] not in uids
+
+
+# ── Conversation policy: single admin lock-in + user-messaging toggle ──────
+
+async def test_user_locked_to_first_admin_who_messaged_them(client):
+    admin_headers = await _admin(client)
+    admin_a = await _user(client, admin_headers, "boss@pytest.local", is_admin=True)
+    admin_b = await _user(client, admin_headers, "carol@pytest.local", is_admin=True)
+    alice = await _user(client, admin_headers, "alice@pytest.local")
+    ah, _ = await _login(client, "alice@pytest.local")
+    ah_a, _ = await _login(client, "boss@pytest.local")
+    ah_b, _ = await _login(client, "carol@pytest.local")
+
+    # boss messages alice first -> boss becomes alice's locked-in admin
+    resp = await _send(ah_a, alice["uid"], "hello from boss")
+    assert resp.status_code == 200, resp.text
+
+    # alice cannot start a thread with the other admin
+    resp = await _send(ah, admin_b["uid"], "hello carol")
+    assert resp.status_code == 403, resp.text
+    assert "assigned admin contact" in resp.json()["detail"]
+
+    # alice can message her locked-in admin (same thread)
+    resp = await _send(ah, admin_a["uid"], "hello boss")
+    assert resp.status_code == 200, resp.text
+
+    # her peer picker shows ONLY the locked admin
+    resp = await client.get("/api/v1/messages/peers", headers=ah)
+    uids = [p["uid"] for p in resp.json()["peers"]]
+    assert uids == [admin_a["uid"]]
+
+    # admins may always message anyone (admin -> many), even a user whose
+    # locked-in admin is someone else
+    resp = await _send(ah_b, alice["uid"], "scheduling note")
+    assert resp.status_code == 200, resp.text
+
+
+async def test_user_picks_any_admin_before_any_admin_contacts_them(client):
+    admin_headers = await _admin(client)
+    admin_a = await _user(client, admin_headers, "boss@pytest.local", is_admin=True)
+    admin_b = await _user(client, admin_headers, "carol@pytest.local", is_admin=True)
+    alice = await _user(client, admin_headers, "alice@pytest.local")
+    ah, _ = await _login(client, "alice@pytest.local")
+
+    # no admin has contacted alice yet -> picker shows every admin
+    resp = await client.get("/api/v1/messages/peers", headers=ah)
+    assert resp.status_code == 200, resp.text
+    uids = [p["uid"] for p in resp.json()["peers"]]
+    assert admin_a["uid"] in uids and admin_b["uid"] in uids
+
+    # she may message any admin; the first one she messages locks in
+    resp = await _send(ah, admin_b["uid"], "hello carol")
+    assert resp.status_code == 200, resp.text
+
+    resp = await _send(ah, admin_a["uid"], "hello boss")
+    assert resp.status_code == 403, resp.text
+
+
+async def test_reply_in_existing_thread_by_other_admin_allowed(client):
+    admin_headers = await _admin(client)
+    admin_a = await _user(client, admin_headers, "boss@pytest.local", is_admin=True)
+    admin_b = await _user(client, admin_headers, "carol@pytest.local", is_admin=True)
+    alice = await _user(client, admin_headers, "alice@pytest.local")
+    ah, _ = await _login(client, "alice@pytest.local")
+    ah_a, _ = await _login(client, "boss@pytest.local")
+    ah_b, _ = await _login(client, "carol@pytest.local")
+    # boss contacts alice first -> boss locks in
+    resp = await _send(ah_a, alice["uid"], "first contact")
+    assert resp.status_code == 200, resp.text
+
+    # carol messages alice too (admins -> many) and alice replies in that
+    # existing thread; the lock-in only governs NEW threads
+    resp = await _send(ah_b, alice["uid"], "carol here")
+    assert resp.status_code == 200, resp.text
+    resp = await _send(ah, admin_a["uid"], "reply to boss")  # boss is locked
+    assert resp.status_code == 200, resp.text
+    resp = await _send(ah, admin_b["uid"], "reply to carol")
+    assert resp.status_code == 200, resp.text
+
+    convs = await _conversations(ah)
+    assert len(convs) == 2
+
+
+async def test_user_messaging_toggle_controls_user_to_user(client):
+    admin_headers = await _admin(client)
+    admin_user = await _user(client, admin_headers, "boss@pytest.local", is_admin=True)
+    alice = await _user(client, admin_headers, "alice@pytest.local")
+    bob = await _user(client, admin_headers, "bob@pytest.local")
+    ah, _ = await _login(client, "alice@pytest.local")
+    bh, _ = await _login(client, "bob@pytest.local")
+
+    # default OFF: alice cannot message bob; her picker hides other users
+    resp = await _send(ah, bob["uid"], "hi bob")
+    assert resp.status_code == 403, resp.text
+    resp = await client.get("/api/v1/messages/peers", headers=ah)
+    uids = [p["uid"] for p in resp.json()["peers"]]
+    assert bob["uid"] not in uids
+
+    # admins flip the global switch ON
+    resp = await client.put(
+        "/api/v1/settings/global/user-messaging",
+        headers=admin_headers,
+        json={"enabled": True},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["enabled"] is True
+
+    # non-users can now message each other and see each other in the picker
+    resp = await _send(ah, bob["uid"], "hi bob")
+    assert resp.status_code == 200, resp.text
+    resp = await client.get("/api/v1/messages/peers", headers=ah)
+    uids = [p["uid"] for p in resp.json()["peers"]]
+    assert bob["uid"] in uids
+    assert admin_user["uid"] in uids  # admins remain visible too
+
+    # flip back OFF
+    resp = await client.put(
+        "/api/v1/settings/global/user-messaging",
+        headers=admin_headers,
+        json={"enabled": False},
+    )
+    assert resp.status_code == 200, resp.text
+    resp = await _send(bh, alice["uid"], "hi alice")
+    assert resp.status_code == 403, resp.text
+    resp = await client.get("/api/v1/settings/global/user-messaging", headers=admin_headers)
+    assert resp.json()["enabled"] is False
 
 
 # ── Redis pub/sub delivery ─────────────────────────────────────────────────

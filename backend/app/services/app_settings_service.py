@@ -15,6 +15,7 @@ KEY_DEFAULT_TAX_RATE = "default_tax_rate"
 KEY_BACKUP_MAX_BYTES = "max_backup_bytes_per_user"
 KEY_BACKUP_MAX_COUNT = "max_backups_per_user"
 KEY_AI_SUMMARY_ENABLED = "ai_summary_enabled"
+KEY_USER_MESSAGING_ENABLED = "user_messaging_enabled"
 
 
 async def get_setting(key: str) -> Optional[str]:
@@ -99,3 +100,15 @@ async def get_ai_summary_enabled() -> bool:
 
 async def set_ai_summary_enabled(enabled: bool) -> None:
     await set_setting(KEY_AI_SUMMARY_ENABLED, "1" if enabled else "0")
+
+
+async def get_user_messaging_enabled() -> bool:
+    """Whether non-admin users may message each other (default off)."""
+    raw = await get_setting(KEY_USER_MESSAGING_ENABLED)
+    if raw is None:
+        return False
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+async def set_user_messaging_enabled(enabled: bool) -> None:
+    await set_setting(KEY_USER_MESSAGING_ENABLED, "1" if enabled else "0")

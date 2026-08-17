@@ -695,6 +695,16 @@ export const settingsApi = {
     return apiGlobalRequest('PUT', '/settings/global/ai-summary', { enabled });
   },
 
+  /** Whether non-admin users may message each other (admin, default OFF). */
+  async getGlobalUserMessagingEnabled(): Promise<{ enabled: boolean }> {
+    return apiGlobalRequest('GET', '/settings/global/user-messaging');
+  },
+
+  /** Enable/disable user-to-user messaging (admin only). */
+  async setGlobalUserMessagingEnabled(enabled: boolean): Promise<{ enabled: boolean }> {
+    return apiGlobalRequest('PUT', '/settings/global/user-messaging', { enabled });
+  },
+
   /** Get the admin-managed per-user backup quota + retention. */
   async getBackupLimits(): Promise<{ max_backup_bytes_per_user: number; max_backups_per_user: number }> {
     return apiGlobalRequest('GET', '/settings/global/backup-limits');

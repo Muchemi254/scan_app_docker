@@ -263,6 +263,28 @@ async def set_ai_summary_enabled_endpoint(
     return {"enabled": body.enabled}
 
 
+@global_router.get("/settings/global/user-messaging")
+async def get_user_messaging_enabled_endpoint():
+    """Whether non-admin users may message each other (admin-managed; default OFF)."""
+    from app.services.app_settings_service import get_user_messaging_enabled
+    return {"enabled": await get_user_messaging_enabled()}
+
+
+@global_router.put("/settings/global/user-messaging")
+async def set_user_messaging_enabled_endpoint(
+    body: AISummaryToggle,
+    _admin: str = Depends(require_admin),
+):
+    """Enable/disable user-to-user messaging (ADMIN ONLY).
+
+    When OFF (default), non-admin users can only message their single
+    locked-in admin contact. When ON, they may also message other users.
+    """
+    from app.services.app_settings_service import set_user_messaging_enabled
+    await set_user_messaging_enabled(body.enabled)
+    return {"enabled": body.enabled}
+
+
 @global_router.get("/settings/models", response_model=List[AIModel])
 async def get_available_models():
     """List available AI models."""

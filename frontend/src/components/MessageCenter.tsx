@@ -33,7 +33,7 @@ const MessageCenter = ({ open, onClose, onUnreadChange }: MessageCenterProps) =>
   const [draft, setDraft] = useState('');
   const [composing, setComposing] = useState(false);
   const [peers, setPeers] = useState<Peer[]>([]);
-  const [peerUid, setPeerUid] = useState('');
+  const [newPeerUid, setNewPeerUid] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const threadEndRef = useRef<HTMLDivElement>(null);
 
@@ -54,6 +54,7 @@ const MessageCenter = ({ open, onClose, onUnreadChange }: MessageCenterProps) =>
     setActiveId(null);
     setMessages([]);
     setComposing(false);
+    setNewPeerUid(null);
     loadConversations();
   }, [open, loadConversations]);
 
@@ -93,11 +94,14 @@ const MessageCenter = ({ open, onClose, onUnreadChange }: MessageCenterProps) =>
   const send = async () => {
     const text = draft.trim();
     if (!text || sending) return;
+    const recipient = activePeerUid();
+    if (!recipient) return;
     setSending(true);
     try {
-      const msg = await messagesApi.send(activePeerUid(), text);
+      const msg = await messagesApi.send(recipient, text);
       setDraft('');
       if (msg.conversation_id) {
+        setNewPeerUid(null);
         setActiveId(msg.conversation_id);
         setMessages(prev => [...prev, msg]);
         loadConversations();
@@ -115,11 +119,12 @@ const MessageCenter = ({ open, onClose, onUnreadChange }: MessageCenterProps) =>
       const conv = conversations.find(c => c.id === activeId);
       if (conv) return conv.other_user.uid;
     }
-    return peerUid;
+    return newPeerUid;
   };
 
   const startCompose = async () => {
     setComposing(true);
+    setNewPeerUid(null);
     try {
       setPeers(await messagesApi.peers());
     } catch {
@@ -131,9 +136,22 @@ const MessageCenter = ({ open, onClose, onUnreadChange }: MessageCenterProps) =>
     const existing = conversations.find(
       c => c.other_user.uid === uid && c.kind === 'pair'
     );
-    setPeerUid(uid);
     setComposing(false);
-    setActiveId(existing?.id ?? null);
+    setMessages([]);
+    if (existing) {
+      setNewPeerUid(null);
+      setActiveId(existing.id);
+    } else {
+      // No thread yet — open a fresh one with this peer so the first
+      // message can be sent immediately.
+      setActiveId(null);
+      setNewPeerUid(uid);
+    }
+  };
+
+  const backToList = () => {
+    setActiveId(null);
+    setNewPeerUid(null);
     setMessages([]);
   };
 
@@ -156,12 +174,12 @@ const MessageCenter = ({ open, onClose, onUnreadChange }: MessageCenterProps) =>
           </button>
         </div>
 
-        {activeId && !composing ? (
+        {(activeId || newPeerUid) && !composing ? (
           /* ── Thread view ── */
           <>
             <div className="flex items-center gap-2 px-3 py-2 border-b bg-gray-50">
               <button
-                onClick={() => { setActiveId(null); setMessages([]); }}
+                onClick={backToList}
                 className="p-1 rounded text-gray-500 hover:bg-gray-200"
                 aria-label="Back to conversations"
               >
@@ -304,8 +322,13 @@ const MessageCenter = ({ open, onClose, onUnreadChange }: MessageCenterProps) =>
   );
 
   function activeName(): string {
-    const conv = conversations.find(c => c.id === activeId);
-    return conv?.other_user.display_name || conv?.other_user.email || 'Conversation';
+    if (activeId) {
+      const conv = conversations.find(c => c.id === activeId);
+      if (conv) return conv.other_user.display_name || conv.other_user.email || 'Conversation';
+    }
+    // Fresh thread before the first message: name from the peer picker.
+    const peer = peers.find(p => p.uid === newPeerUid);
+    return peer?.display_name || peer?.email || 'Conversation';
   }
 
   function contentFor(conv?: Conversation) {
