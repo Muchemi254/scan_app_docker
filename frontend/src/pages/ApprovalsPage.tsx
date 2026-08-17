@@ -217,34 +217,6 @@ const ApprovalsPage = () => {
                 </div>
               </div>
             </div>
-
-            {/* Full detail line — every scalar field the API carries */}
-            {(row.location || row.category || row.invoice_number || row.batch_title || row.kra_pin) && (
-              <div className="mt-1.5 space-y-0.5 text-[11px] text-gray-500">
-                {row.location && <div className="truncate">Location: {row.location}</div>}
-                {row.category && <div className="truncate">Category: {row.category}</div>}
-                {row.invoice_number && <div className="truncate">Invoice #: {row.invoice_number}</div>}
-                {row.batch_title && <div className="truncate">Batch: {row.batch_title}</div>}
-                {row.kra_pin && <div className="truncate">KRA PIN: {row.kra_pin}</div>}
-              </div>
-            )}
-
-            <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px] text-gray-400">
-              <span className="truncate">
-                {row.item_count != null ? `${row.item_count} item${row.item_count === 1 ? '' : 's'}` : ''}
-                {row.tax_amount ? `${row.item_count != null ? ' · ' : ''}Tax KES ${Number(row.tax_amount).toLocaleString()}` : ''}
-                {row.tax_rate != null && row.tax_rate !== ''
-                  ? `${row.item_count != null || row.tax_amount ? ' · ' : ''}${row.tax_rate}%`
-                  : ''}
-              </span>
-              <span className="flex-shrink-0">
-                {row.scanned_at
-                  ? new Date(row.scanned_at).toLocaleDateString()
-                  : row.created_at
-                    ? new Date(row.created_at).toLocaleDateString()
-                    : ''}
-              </span>
-            </div>
           </div>
         ))}
       </div>
