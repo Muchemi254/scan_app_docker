@@ -37,30 +37,48 @@ const MessageCenter = ({ open, onClose, onUnreadChange }: MessageCenterProps) =>
   const [sending, setSending] = useState(false);
   const threadEndRef = useRef<HTMLDivElement>(null);
 
+  // Keep the unread callback behind a ref so `loadConversations` can stay
+  // referentially stable: otherwise every badge update re-runs the
+  // drawer-open effect and kicks the user out of an open thread.
+  const onUnreadChangeRef = useRef(onUnreadChange);
+  useEffect(() => {
+    onUnreadChangeRef.current = onUnreadChange;
+  }, [onUnreadChange]);
+
   const loadConversations = useCallback(async () => {
     try {
       const list = await messagesApi.conversations();
       setConversations(list);
       const unread = list.reduce((n, c) => n + c.unread_count, 0);
-      onUnreadChange?.(unread);
+      onUnreadChangeRef.current?.(unread);
     } catch {
       /* badge polling is the fallback */
     }
-  }, [onUnreadChange]);
+  }, []);
 
-  // Load threads when the drawer opens.
+  // Reset the drawer when it closes and load threads when it opens.
+  // Resetting on close is what prevents a stale `activeId` from auto-marking
+  // messages read while the user is on another page.
   useEffect(() => {
-    if (!open) return;
-    setActiveId(null);
-    setMessages([]);
-    setComposing(false);
-    setNewPeerUid(null);
-    loadConversations();
+    if (open) {
+      setActiveId(null);
+      setMessages([]);
+      setComposing(false);
+      setNewPeerUid(null);
+      loadConversations();
+    } else {
+      setActiveId(null);
+      setMessages([]);
+      setComposing(false);
+      setNewPeerUid(null);
+    }
   }, [open, loadConversations]);
 
-  // Auto-mark the active thread read + focus the reply box.
+  // Auto-mark the active thread read + focus the reply box. Only while the
+  // drawer is actually open — a lingering activeId must never mark messages
+  // read from another page.
   useEffect(() => {
-    if (!activeId) return;
+    if (!open || !activeId) return;
     let cancelled = false;
     (async () => {
       try {
@@ -74,7 +92,7 @@ const MessageCenter = ({ open, onClose, onUnreadChange }: MessageCenterProps) =>
       } catch { /* keep previous */ }
     })();
     return () => { cancelled = true; };
-  }, [activeId, user?.uid, loadConversations]);
+  }, [open, activeId, user?.uid, loadConversations]);
 
   useEffect(() => {
     threadEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -83,6 +101,7 @@ const MessageCenter = ({ open, onClose, onUnreadChange }: MessageCenterProps) =>
   // SSE: instant delivery while the drawer is open (or badge bump otherwise).
   useMessageStream((ev) => {
     if (ev.type !== 'message' || !ev.data) return;
+    if (!open) return; // Layout handles the badge/toast when the drawer is closed
     if (activeId && ev.data.conversation_id === activeId) {
       messagesApi.messages(activeId).then(setMessages).catch(() => {});
     } else {

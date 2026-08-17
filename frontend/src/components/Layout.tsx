@@ -424,7 +424,7 @@ const Layout = () => {
       <MessageCenter
         open={msgOpen && !impersonating}
         onClose={() => setMsgOpen(false)}
-        onUnreadChange={(n) => setMsgUnread(n)}
+        onUnreadChange={handleUnreadChange}
       />
     </div>
   );
