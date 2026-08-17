@@ -150,6 +150,7 @@ class AuditAction(str, Enum):
     APPROVED = "approved"
     REJECTED = "rejected"
     RECALLED = "recalled"
+    REPORT_EXPORT = "report_export"
 
 
 class AuditFieldChange(BaseModel):

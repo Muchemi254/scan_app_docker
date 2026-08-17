@@ -21,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from app.core.config import settings
-from app.api import health, receipts, tasks, images, batches, exports, cleaning, dashboard, review_batches, backup_api, scan_errors, settings as settings_api, auth as auth_api, admin_receipts, locations, ops, messages as messages_api
+from app.api import health, receipts, tasks, images, batches, exports, cleaning, dashboard, review_batches, backup_api, scan_errors, settings as settings_api, auth as auth_api, admin_receipts, locations, ops, messages as messages_api, reports
 
 # Configure logging
 logging.basicConfig(
@@ -326,6 +326,12 @@ def create_app() -> FastAPI:
     # Data cleaning (dedup, propagation, supplier merge)
     app.include_router(
         cleaning.router,
+        prefix=settings.API_V1_STR,
+    )
+
+    # Comprehensive reporting & exports (every entity, masked by default)
+    app.include_router(
+        reports.router,
         prefix=settings.API_V1_STR,
     )
 

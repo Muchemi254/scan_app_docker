@@ -28,6 +28,7 @@ const NotificationsPage = lazy(() => import('./pages/NotificationsPage'));
 const AdminPage = lazy(() => import('./pages/AdminPage'));
 const ApprovalsPage = lazy(() => import('./pages/ApprovalsPage'));
 const MyApprovalsPage = lazy(() => import('./pages/MyApprovalsPage'));
+const ReportsPage = lazy(() => import('./pages/ReportsPage'));
 
 import Layout from './components/Layout';
 import { ScannerProvider } from './contexts/ScannerContext';
@@ -253,6 +254,16 @@ const AppContent = () => {
                   element={
                     <PrivateRoute userId={userId} authLoading={authLoading}>
                       <MyApprovalsPage />
+                    </PrivateRoute>
+                  }
+                />
+
+                {/* Reports & exports — every entity, masked by default */}
+                <Route
+                  path="/reports"
+                  element={
+                    <PrivateRoute userId={userId} authLoading={authLoading}>
+                      <ReportsPage />
                     </PrivateRoute>
                   }
                 />
