@@ -157,6 +157,46 @@ async def _conversation_exists(a: str, b: str) -> bool:
         )
 
 
+async def _find_conversation(a: str, b: str) -> Optional[Dict[str, Any]]:
+    """The most recent conversation between this pair (either side), or None."""
+    a, b = sorted([a, b])
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT id, user_a, user_b, receipt_id, kind, created_at, last_message_at
+            FROM conversations
+            WHERE (user_a = $1 AND user_b = $2) OR (user_a = $2 AND user_b = $1)
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            a, b,
+        )
+    return dict(row) if row else None
+
+
+async def find_receipt_conversation(a: str, b: str) -> Optional[Dict[str, Any]]:
+    """The most recent conversation between the pair that is linked to a
+    receipt (receipt_id set), if any. Receipt templates and other
+    receipt-context messages should land in that thread, which also supplies
+    the `receipt_id` system variable for server-side rendering."""
+    a, b = sorted([a, b])
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT id, user_a, user_b, receipt_id, kind, created_at, last_message_at
+            FROM conversations
+            WHERE ((user_a = $1 AND user_b = $2) OR (user_a = $2 AND user_b = $1))
+              AND receipt_id IS NOT NULL
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            a, b,
+        )
+    return dict(row) if row else None
+
+
 async def _locked_admin_for(uid: str) -> Optional[str]:
     """The single admin contact for a non-admin user: the admin they have the
     earliest conversation with (admin → many, user → one-to-one). Triggered by

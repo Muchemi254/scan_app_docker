@@ -192,15 +192,27 @@ async def send_message(
     """
     kind: Optional[str] = None
     payload: Optional[dict] = None
+    receipt_id: Optional[str] = None
     if req.template_key:
         from app.services.message_templates import render_template
 
+        variables = dict(req.variables or {})
+        # Receipt-context templates should render with the system receipt_id
+        # variable and land in the pair's receipt thread when one exists.
+        if not variables.get("receipt_id"):
+            receipt_conv = await messages_service.find_receipt_conversation(
+                user_id, req.recipient_uid
+            )
+            if receipt_conv and receipt_conv.get("receipt_id"):
+                receipt_id = str(receipt_conv["receipt_id"])
+                variables["receipt_id"] = receipt_id[:8]
         try:
-            kind, body, payload = render_template(req.template_key, req.variables)
+            kind, body, payload = render_template(req.template_key, variables)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
     else:
         body = req.body
+        receipt_id = req.receipt_id
 
     message = await messages_service.send_message(
         user_id,
@@ -208,6 +220,6 @@ async def send_message(
         body,
         kind=kind,
         payload=payload,
-        receipt_id=req.receipt_id,
+        receipt_id=receipt_id,
     )
     return message

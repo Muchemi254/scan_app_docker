@@ -635,6 +635,47 @@ async def test_send_template_renders_server_side(client):
     assert resp.status_code == 400, resp.text
 
 
+async def test_template_send_lands_on_receipt_thread_and_injects_receipt_id(client):
+    """A template sent between a pair that already has a receipt conversation
+    targets that thread and auto-fills the `receipt_id` system variable, so the
+    server-rendered body never leaks a raw {receipt_id} token."""
+    admin_headers = await _admin(client)
+    alice = await _user(client, admin_headers, "alice@pytest.local")
+    ah, _ = await _login(client, "alice@pytest.local")
+    uid = alice["uid"]
+
+    # lock-in + receipt thread
+    await _send(admin_headers, uid, "hello")
+    rec = await _create(client, ah, uid)
+    r = await _transition(client, ah, uid, rec["id"], "submit")
+    assert r.status_code == 200, r.text
+
+    resp = await client.post(
+        "/api/v1/messages/send",
+        headers=admin_headers,
+        json={
+            "recipient_uid": uid,
+            "template_key": "missing_info",
+            "variables": {"field": "invoice number"},
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["kind"] == "receipt_missing_info"
+    assert "{" not in body["body"], body["body"]
+    assert rec["id"][:8] in body["body"]
+    assert body["payload"]["receipt_id"] == rec["id"][:8]
+
+    # landed in the receipt conversation, not the handshake one
+    convs = await _conversations(ah)
+    rec_conv = next(c for c in convs if c["receipt_id"] == rec["id"])
+    msgs = await _messages(ah, rec_conv["id"])
+    assert msgs[-1]["kind"] == "receipt_missing_info"
+    handshake = next(c for c in convs if c["receipt_id"] is None)
+    handshake_msgs = await _messages(ah, handshake["id"])
+    assert all(m["kind"] != "receipt_missing_info" for m in handshake_msgs)
+
+
 # ── Redis pub/sub delivery ─────────────────────────────────────────────────
 
 async def test_pubsub_event_published_on_send(client):
