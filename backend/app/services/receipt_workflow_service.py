@@ -218,8 +218,10 @@ async def reject(
 async def list_pending_for_admin() -> list:
     """Cross-tenant list of every pending-approval receipt (admin only).
 
-    Deliberately lean: only the fields needed to make an approval decision,
-    plus owner identity and an image flag — never the full receipt payload.
+    Carries the scalar fields an approver needs to decide at a glance
+    (supplier, location, category, amounts, identifiers, timestamps and the
+    item count) plus owner identity and an image flag — but never the full
+    item payload.
     """
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -231,11 +233,22 @@ async def list_pending_for_admin() -> list:
                    u.display_name                          AS owner_display_name,
                    r.supplier                              AS supplier,
                    r.location                              AS location,
+                   r.category                              AS category,
                    r.receipt_date                          AS receipt_date,
                    r.total_amount                          AS total_amount,
+                   r.tax_amount                            AS tax_amount,
+                   r.tax_rate                              AS tax_rate,
+                   r.invoice_number                        AS invoice_number,
+                   r.kra_pin                               AS kra_pin,
+                   r.buyer_kra_pin                         AS buyer_kra_pin,
+                   r.cu_invoice                            AS cu_invoice,
+                   r.batch_title                           AS batch_title,
                    r.status                                AS status,
+                   r.scanned_at                            AS scanned_at,
                    r.updated_at                            AS updated_at,
                    r.created_at                            AS created_at,
+                   (SELECT count(*) FROM line_items li
+                     WHERE li.receipt_id = r.id)           AS item_count,
                    (r.image_filename IS NOT NULL)          AS has_image
             FROM receipts r
             LEFT JOIN users u ON u.uid = r.user_id
@@ -257,11 +270,21 @@ async def list_pending_for_admin() -> list:
                     "owner_display_name": d["owner_display_name"],
                     "supplier": d["supplier"],
                     "location": d["location"],
+                    "category": d["category"],
                     "receipt_date": d["receipt_date"],
                     "total_amount": d["total_amount"],
+                    "tax_amount": d["tax_amount"],
+                    "tax_rate": d["tax_rate"],
+                    "invoice_number": d["invoice_number"],
+                    "kra_pin": d["kra_pin"],
+                    "buyer_kra_pin": d["buyer_kra_pin"],
+                    "cu_invoice": d["cu_invoice"],
+                    "batch_title": d["batch_title"],
                     "status": d["status"],
+                    "scanned_at": d["scanned_at"],
                     "updated_at": d["updated_at"],
                     "created_at": d["created_at"],
+                    "item_count": d["item_count"],
                     "imageUrl": image_url,
                 }
             )

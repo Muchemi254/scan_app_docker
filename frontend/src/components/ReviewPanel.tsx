@@ -11,37 +11,66 @@ import { receiptStatusLabel, receiptStatusClass } from '../utils/receiptStatus';
 
 /* Shared read-only summary of a receipt (used by the main panel and the
    approve modal so both always show identical data). */
-const ReceiptSummary = ({ data }: { data: ReceiptData }) => (
+const fmtDate = (v?: string | null): string => {
+  if (!v) return '';
+  const d = new Date(v);
+  return isNaN(d.getTime()) ? '' : d.toLocaleString();
+};
+
+const ReceiptSummary = ({ data, showImage = true }: { data: ReceiptData; showImage?: boolean }) => (
   <div className="space-y-3 text-sm">
+    {showImage && data.imageUrl && (
+      <div>
+        <ImageViewer
+          imageUrl={data.imageUrl}
+          altText="Receipt"
+          containerClass="h-44 sm:h-60"
+        />
+      </div>
+    )}
+
     <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
-      {[
+      {([
         ['Supplier', data.supplier],
         ['Total', data.totalAmount],
         ['Tax', data.taxAmount],
         ['Date', data.receiptDate],
+        ['Scanned', fmtDate(data.scannedAt)],
         ['Category', data.category],
         ['Location', data.location],
         ...(data.taxRate != null && data.taxRate !== ''
-          ? [['Tax Rate', `${data.taxRate}%`] as [string, string]]
+          ? ([['Tax Rate', `${data.taxRate}%`]] as [string, string])
           : []),
         ['Status', receiptStatusLabel(data.status)],
         ['Invoice #', data.invoiceNumber],
         ['KRA PIN', data.kraPin],
+        ['Buyer PIN', data.buyerKraPin],
         ['CU Invoice', data.cuInvoice],
         ['Batch', data.batchTitle],
-      ]
+        ['Created', fmtDate(data.createdAt)],
+        ['Updated', fmtDate(data.updatedAt)],
+        ['ID', data.id],
+      ] as [string, string][])
         .filter(([, v]) => v)
         .map(([label, value]) => (
           <div key={label} className="flex gap-2">
             <dt className="font-medium text-gray-500 w-24 flex-shrink-0">{label}:</dt>
-            <dd className="text-gray-800 break-words">{value}</dd>
+            <dd
+              className={`break-words ${
+                label === 'ID'
+                  ? 'font-mono text-xs text-gray-500 truncate'
+                  : 'text-gray-800'
+              }`}
+            >
+              {value}
+            </dd>
           </div>
         ))}
     </dl>
 
     {data.items && data.items.length > 0 && (
       <div className="mt-4">
-        <h4 className="font-semibold text-gray-700 mb-2">Items</h4>
+        <h4 className="font-semibold text-gray-700 mb-2">Items ({data.items.length})</h4>
         <div className="overflow-x-auto rounded border">
           <table className="w-full text-xs">
             <thead className="bg-gray-50 border-b">
@@ -50,6 +79,7 @@ const ReceiptSummary = ({ data }: { data: ReceiptData }) => (
                 <th className="text-right px-2 py-1.5">Qty</th>
                 <th className="text-right px-2 py-1.5">Price</th>
                 <th className="text-right px-2 py-1.5">Tax</th>
+                <th className="text-right px-2 py-1.5">Disc.</th>
                 <th className="text-right px-2 py-1.5">Total</th>
               </tr>
             </thead>
@@ -58,12 +88,24 @@ const ReceiptSummary = ({ data }: { data: ReceiptData }) => (
                 const qty = Number(item.quantity) || 0;
                 const price = parseCurrencyToNumber(item.price);
                 const tax = parseCurrencyToNumber(item.tax);
+                const rate =
+                  item.taxRate != null && item.taxRate !== '' ? `${item.taxRate}%` : '';
                 return (
                   <tr key={i} className="hover:bg-gray-50">
-                    <td className="px-2 py-1.5">{item.name}</td>
+                    <td className="px-2 py-1.5">
+                      <span>{item.name}</span>
+                      {(item.isZeroRated || rate) && (
+                        <span className="ml-1 text-[10px] text-gray-500">
+                          {item.isZeroRated ? '· 0-rated' : `· ${rate}`}
+                        </span>
+                      )}
+                    </td>
                     <td className="text-right px-2 py-1.5">{qty}</td>
                     <td className="text-right px-2 py-1.5">{price.toFixed(2)}</td>
                     <td className="text-right px-2 py-1.5">{tax.toFixed(2)}</td>
+                    <td className="text-right px-2 py-1.5">
+                      {item.discount ? `${item.discount}%` : '—'}
+                    </td>
                     <td className="text-right px-2 py-1.5 font-medium">
                       {(qty * (price + tax)).toFixed(2)}
                     </td>
@@ -314,16 +356,30 @@ const ReviewPanel = ({
 
       {/* ── Approve confirm modal: receipt view + edit (in-modal) + cancel ── */}
       {approveOpen && approveDraft && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col">
-            <div className="flex-shrink-0 flex items-center justify-between px-4 py-3 border-b">
-              <h3 className="font-semibold text-gray-900">
-                {approveMode === 'edit' ? 'Edit Receipt' : 'Approve Receipt'}
-              </h3>
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-2 sm:p-4">
+          <div
+            className={`bg-white rounded-lg shadow-xl w-full flex flex-col ${
+              approveMode === 'edit'
+                ? 'max-w-2xl lg:max-w-[95vw] xl:max-w-6xl 2xl:max-w-7xl max-h-[92vh] lg:h-[92vh]'
+                : 'max-w-3xl max-h-[90vh]'
+            }`}
+          >
+            <div className="flex-shrink-0 flex items-center justify-between gap-3 px-4 py-3 border-b">
+              <div className="min-w-0">
+                <h3 className="font-semibold text-gray-900">
+                  {approveMode === 'edit' ? 'Edit Receipt' : 'Approve Receipt'}
+                </h3>
+                <p className="text-xs text-gray-500 truncate mt-0.5">
+                  {approveDraft.supplier || 'Receipt'} ·{' '}
+                  {approveDraft.location || 'no location'} ·{' '}
+                  {approveDraft.receiptDate || 'no date'} · KES{' '}
+                  {Number(approveDraft.totalAmount || 0).toLocaleString()}
+                </p>
+              </div>
               <button
                 onClick={() => setApproveOpen(false)}
                 disabled={loading || actionLoading}
-                className="text-gray-400 hover:text-gray-600 text-xl leading-none"
+                className="text-gray-400 hover:text-gray-600 text-xl leading-none flex-shrink-0"
                 title="Close"
               >×</button>
             </div>
@@ -332,7 +388,7 @@ const ReviewPanel = ({
               {approveMode === 'edit' ? (
                 <div className="flex flex-col lg:flex-row lg:h-full gap-4">
                   {(approveDraftImage ? URL.createObjectURL(approveDraftImage) : approveDraft.imageUrl) && (
-                    <div className="lg:w-1/2 flex-shrink-0 border rounded bg-gray-50 flex flex-col">
+                    <div className="lg:w-[45%] xl:w-[40%] flex-shrink-0 border rounded bg-gray-50 flex flex-col">
                       <div className="flex-shrink-0 px-3 pt-2 pb-1 text-xs font-semibold text-gray-500 uppercase tracking-wide">
                         Receipt Image
                       </div>
@@ -340,7 +396,7 @@ const ReviewPanel = ({
                         <ImageViewer
                           imageUrl={approveDraftImage ? URL.createObjectURL(approveDraftImage) : approveDraft.imageUrl}
                           altText="Receipt"
-                          containerClass="h-40 sm:h-56 lg:h-full lg:min-h-[40vh]"
+                          containerClass="h-40 sm:h-56 lg:h-full lg:min-h-[50vh]"
                         />
                       </div>
                     </div>
@@ -581,68 +637,7 @@ const ReviewPanel = ({
         ) : (
           /* ── View mode ── */
           <div className="p-4 space-y-3 text-sm">
-            <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
-              {[
-                ['Supplier', receipt.supplier],
-                ['Total', receipt.totalAmount],
-                ['Tax', receipt.taxAmount],
-                ['Date', receipt.receiptDate],
-                ['Category', receipt.category],
-                ['Location', receipt.location],
-                ...(receipt.taxRate != null && receipt.taxRate !== ''
-                  ? [['Tax Rate', `${receipt.taxRate}%`] as [string, string]]
-                  : []),
-                ['Status', receiptStatusLabel(receipt.status)],
-                ['Invoice #', receipt.invoiceNumber],
-                ['KRA PIN', receipt.kraPin],
-                ['CU Invoice', receipt.cuInvoice],
-                ['Batch', receipt.batchTitle],
-              ]
-                .filter(([, v]) => v)
-                .map(([label, value]) => (
-                  <div key={label} className="flex gap-2">
-                    <dt className="font-medium text-gray-500 w-24 flex-shrink-0">{label}:</dt>
-                    <dd className="text-gray-800 break-words">{value}</dd>
-                  </div>
-                ))}
-            </dl>
-
-            {receipt.items && receipt.items.length > 0 && (
-              <div className="mt-4">
-                <h4 className="font-semibold text-gray-700 mb-2">Items</h4>
-                <div className="overflow-x-auto rounded border">
-                  <table className="w-full text-xs">
-                    <thead className="bg-gray-50 border-b">
-                      <tr>
-                        <th className="text-left px-2 py-1.5">Name</th>
-                        <th className="text-right px-2 py-1.5">Qty</th>
-                        <th className="text-right px-2 py-1.5">Price</th>
-                        <th className="text-right px-2 py-1.5">Tax</th>
-                        <th className="text-right px-2 py-1.5">Total</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y">
-                      {receipt.items.map((item: any, i: number) => {
-                        const qty = Number(item.quantity) || 0;
-                        const price = parseCurrencyToNumber(item.price);
-                        const tax = parseCurrencyToNumber(item.tax);
-                        return (
-                          <tr key={i} className="hover:bg-gray-50">
-                            <td className="px-2 py-1.5">{item.name}</td>
-                            <td className="text-right px-2 py-1.5">{qty}</td>
-                            <td className="text-right px-2 py-1.5">{price.toFixed(2)}</td>
-                            <td className="text-right px-2 py-1.5">{tax.toFixed(2)}</td>
-                            <td className="text-right px-2 py-1.5 font-medium">
-                              {(qty * (price + tax)).toFixed(2)}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
+            <ReceiptSummary data={receipt} showImage={false} />
 
             {receipt.imageUrl && (
               <div className="mt-4">

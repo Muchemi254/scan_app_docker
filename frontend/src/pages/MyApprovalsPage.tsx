@@ -120,59 +120,83 @@ const MyApprovalsPage = () => {
 
           {((tab === 'pending' && items.length > 0) || (tab === 'approved' && approved.length > 0)) && (
             <div className="bg-white rounded-lg shadow overflow-hidden">
-              <table className="w-full text-sm">
-                <thead className="bg-gray-50 border-b text-left text-xs text-gray-500 uppercase tracking-wide">
-                  <tr>
-                    <th className="px-3 py-2">Supplier</th>
-                    <th className="px-3 py-2">Location</th>
-                    <th className="px-3 py-2">Date</th>
-                    <th className="px-3 py-2 text-right">Amount</th>
-                    <th className="px-3 py-2">Status</th>
-                    <th className="px-3 py-2 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {(tab === 'pending' ? items : approved).map((r: any) => (
-                    <tr key={r.id} className="hover:bg-gray-50">
-                      <td className="px-3 py-2">{r.supplier || '—'}</td>
-                      <td className="px-3 py-2">{r.location || '—'}</td>
-                      <td className="px-3 py-2">{r.receiptDate || r.receipt_date || '—'}</td>
-                      <td className="px-3 py-2 text-right font-medium">
-                        KES {Number(r.totalAmount ?? r.total_amount ?? 0).toLocaleString()}
-                      </td>
-                      <td className="px-3 py-2">
-                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${receiptStatusClass(r.status)}`}>
-                          {receiptStatusLabel(r.status)}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2">
-                        <div className="flex justify-end gap-1.5">
-                          <button
-                            onClick={() => navigate(`/receipts/${r.id}`)}
-                            className="px-2 py-1 text-xs rounded border text-gray-600 hover:bg-gray-100"
-                          >
-                            View
-                          </button>
-                          {tab === 'pending' && (
-                            <button
-                              onClick={() => setRecallTarget(r)}
-                              disabled={busyId === r.id}
-                              className="px-2 py-1 text-xs rounded bg-gray-600 text-white hover:bg-gray-700 disabled:opacity-50"
-                            >
-                              Recall
-                            </button>
-                          )}
-                          {tab === 'approved' && !isAdmin && (
-                            <span className="inline-flex items-center px-2 py-1 text-xs text-gray-400">
-                              Read-only
-                            </span>
-                          )}
-                        </div>
-                      </td>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs sm:text-sm">
+                  <thead className="bg-gray-50 border-b text-left text-xs text-gray-500 uppercase tracking-wide">
+                    <tr>
+                      <th className="px-3 py-2">Supplier</th>
+                      <th className="px-3 py-2">Category</th>
+                      <th className="px-3 py-2">Location</th>
+                      <th className="px-3 py-2">Date</th>
+                      <th className="px-3 py-2">Invoice #</th>
+                      <th className="px-3 py-2 text-right">Tax</th>
+                      <th className="px-3 py-2 text-right">Amount</th>
+                      <th className="px-3 py-2">Batch</th>
+                      <th className="px-3 py-2 text-right">Items</th>
+                      <th className="px-3 py-2">Scanned</th>
+                      <th className="px-3 py-2">Status</th>
+                      <th className="px-3 py-2 text-right">Actions</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y">
+                    {(tab === 'pending' ? items : approved).map((r: any) => (
+                      <tr key={r.id} className="hover:bg-gray-50">
+                        <td className="px-3 py-2 font-medium">{r.supplier || '—'}</td>
+                        <td className="px-3 py-2">{r.category || '—'}</td>
+                        <td className="px-3 py-2">{r.location || '—'}</td>
+                        <td className="px-3 py-2 whitespace-nowrap">{r.receiptDate || r.receipt_date || '—'}</td>
+                        <td className="px-3 py-2">{r.invoiceNumber || r.invoice_number || '—'}</td>
+                        <td className="px-3 py-2 text-right whitespace-nowrap">
+                          {r.taxAmount ?? r.tax_amount
+                            ? `KES ${Number(r.taxAmount ?? r.tax_amount ?? 0).toLocaleString()}${r.taxRate ? ` (${r.taxRate}%)` : ''}`
+                            : '—'}
+                        </td>
+                        <td className="px-3 py-2 text-right font-medium whitespace-nowrap">
+                          KES {Number(r.totalAmount ?? r.total_amount ?? 0).toLocaleString()}
+                        </td>
+                        <td className="px-3 py-2">{r.batchTitle || r.batch_title || '—'}</td>
+                        <td className="px-3 py-2 text-right">{r.items?.length ?? '—'}</td>
+                        <td className="px-3 py-2 whitespace-nowrap">
+                          {r.scannedAt || r.scanned_at
+                            ? new Date(r.scannedAt || r.scanned_at).toLocaleDateString()
+                            : r.createdAt || r.created_at
+                              ? new Date(r.createdAt || r.created_at).toLocaleDateString()
+                              : '—'}
+                        </td>
+                        <td className="px-3 py-2">
+                          <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${receiptStatusClass(r.status)}`}>
+                            {receiptStatusLabel(r.status)}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2">
+                          <div className="flex justify-end gap-1.5">
+                            <button
+                              onClick={() => navigate(`/receipts/${r.id}`)}
+                              className="px-2 py-1 text-xs rounded border text-gray-600 hover:bg-gray-100"
+                            >
+                              View
+                            </button>
+                            {tab === 'pending' && (
+                              <button
+                                onClick={() => setRecallTarget(r)}
+                                disabled={busyId === r.id}
+                                className="px-2 py-1 text-xs rounded bg-gray-600 text-white hover:bg-gray-700 disabled:opacity-50"
+                              >
+                                Recall
+                              </button>
+                            )}
+                            {tab === 'approved' && !isAdmin && (
+                              <span className="inline-flex items-center px-2 py-1 text-xs text-gray-400">
+                                Read-only
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </>

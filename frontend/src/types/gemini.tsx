@@ -33,6 +33,8 @@ export interface ReceiptData {
   imageUrl?: string;
   thumbnailUrl?: string;
   scannedAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
   status?: string;
   batchTitle?: string;
 }
@@ -41,7 +43,10 @@ export interface ReceiptItem {
   name: string;
   quantity: number;
   price: string;
+  tax?: string | null;
   taxRate?: string | null;
+  isZeroRated?: boolean;
+  discount?: string | null;
 }
 
 export interface GeminiResponse {

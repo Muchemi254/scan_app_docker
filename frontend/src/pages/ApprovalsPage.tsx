@@ -194,14 +194,55 @@ const ApprovalsPage = () => {
                 : 'border-transparent hover:bg-gray-50'
             }`}
           >
-            <div className="font-medium text-sm truncate">{row.supplier || 'Untitled'}</div>
-            <div className="text-xs text-gray-400 mt-0.5">
-              {row.receipt_date || '—'} · {row.owner_display_name || row.owner_email || row.owner_uid}
+            <div className="flex gap-2.5">
+              {row.imageUrl ? (
+                <img
+                  src={`/api/images/cached?url=${encodeURIComponent(row.imageUrl)}`}
+                  alt=""
+                  className="w-10 h-10 rounded object-cover border bg-gray-50 flex-shrink-0 mt-0.5"
+                />
+              ) : (
+                <div className="w-10 h-10 rounded bg-gray-100 border flex-shrink-0 mt-0.5" />
+              )}
+              <div className="min-w-0 flex-1">
+                <div className="font-medium text-sm truncate">{row.supplier || 'Untitled'}</div>
+                <div className="text-xs text-gray-400 mt-0.5 truncate">
+                  {row.receipt_date || '—'} · {row.owner_display_name || row.owner_email || row.owner_uid}
+                </div>
+                <div className="flex items-center justify-between mt-1">
+                  <span className="text-xs text-gray-600 font-medium">KES {Number(row.total_amount || 0).toLocaleString()}</span>
+                  <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium ${receiptStatusClass(row.status)}`}>
+                    {receiptStatusLabel(row.status)}
+                  </span>
+                </div>
+              </div>
             </div>
-            <div className="flex items-center justify-between mt-1">
-              <span className="text-xs text-gray-600 font-medium">KES {Number(row.total_amount || 0).toLocaleString()}</span>
-              <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium ${receiptStatusClass(row.status)}`}>
-                {receiptStatusLabel(row.status)}
+
+            {/* Full detail line — every scalar field the API carries */}
+            {(row.location || row.category || row.invoice_number || row.batch_title || row.kra_pin) && (
+              <div className="mt-1.5 space-y-0.5 text-[11px] text-gray-500">
+                {row.location && <div className="truncate">Location: {row.location}</div>}
+                {row.category && <div className="truncate">Category: {row.category}</div>}
+                {row.invoice_number && <div className="truncate">Invoice #: {row.invoice_number}</div>}
+                {row.batch_title && <div className="truncate">Batch: {row.batch_title}</div>}
+                {row.kra_pin && <div className="truncate">KRA PIN: {row.kra_pin}</div>}
+              </div>
+            )}
+
+            <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px] text-gray-400">
+              <span className="truncate">
+                {row.item_count != null ? `${row.item_count} item${row.item_count === 1 ? '' : 's'}` : ''}
+                {row.tax_amount ? `${row.item_count != null ? ' · ' : ''}Tax KES ${Number(row.tax_amount).toLocaleString()}` : ''}
+                {row.tax_rate != null && row.tax_rate !== ''
+                  ? `${row.item_count != null || row.tax_amount ? ' · ' : ''}${row.tax_rate}%`
+                  : ''}
+              </span>
+              <span className="flex-shrink-0">
+                {row.scanned_at
+                  ? new Date(row.scanned_at).toLocaleDateString()
+                  : row.created_at
+                    ? new Date(row.created_at).toLocaleDateString()
+                    : ''}
               </span>
             </div>
           </div>
