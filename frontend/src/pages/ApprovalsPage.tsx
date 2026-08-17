@@ -154,6 +154,33 @@ const ApprovalsPage = () => {
 
   const handleDeleted = (id: string) => advancePast(id);
 
+  // NOTE: all hooks must run on EVERY render — the early returns below make
+  // the hook count vary (React #310 "rendered more hooks") if any hook sits
+  // after them.
+  const sourceRows = searchResults !== null ? searchResults : items;
+  const displayTotal = searchResults !== null ? searchTotal : items.length;
+
+  const uniqueCategories = useMemo(
+    () => [...new Set(sourceRows.map((r: any) => r.category).filter(Boolean))].sort(),
+    [sourceRows],
+  );
+  const uniqueBatches = useMemo(
+    () => [...new Set(sourceRows.map((r: any) => r.batch_title).filter(Boolean))].sort(),
+    [sourceRows],
+  );
+
+  const filteredRows = useMemo(
+    () =>
+      sourceRows.filter((r: any) => {
+        const catMatch = filters.category ? r.category === filters.category : true;
+        const batchMatch = filters.batch ? (r.batch_title || '') === filters.batch : true;
+        return catMatch && batchMatch;
+      }),
+    [sourceRows, filters],
+  );
+
+  useEffect(() => { setPage(1); }, [filters, searchResults]);
+
   if (!isAdmin) {
     return (
       <div className="p-6 w-full">
@@ -188,30 +215,6 @@ const ApprovalsPage = () => {
       </div>
     );
   }
-
-  const sourceRows = searchResults !== null ? searchResults : items;
-  const displayTotal = searchResults !== null ? searchTotal : items.length;
-
-  const uniqueCategories = useMemo(
-    () => [...new Set(sourceRows.map((r: any) => r.category).filter(Boolean))].sort(),
-    [sourceRows],
-  );
-  const uniqueBatches = useMemo(
-    () => [...new Set(sourceRows.map((r: any) => r.batch_title).filter(Boolean))].sort(),
-    [sourceRows],
-  );
-
-  const filteredRows = useMemo(
-    () =>
-      sourceRows.filter((r: any) => {
-        const catMatch = filters.category ? r.category === filters.category : true;
-        const batchMatch = filters.batch ? (r.batch_title || '') === filters.batch : true;
-        return catMatch && batchMatch;
-      }),
-    [sourceRows, filters],
-  );
-
-  useEffect(() => { setPage(1); }, [filters, searchResults]);
 
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
   const clampedPage = Math.min(page, totalPages);
