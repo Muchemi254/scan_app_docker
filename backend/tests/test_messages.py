@@ -779,3 +779,80 @@ async def test_pubsub_event_published_on_send(client):
         assert event.get("conversation_id")
     finally:
         await pubsub.unsubscribe()
+
+
+# ── Workflow auto-message housekeeping (prune + dedupe) ─────────────────────
+
+async def test_resubmit_prunes_rejection_and_dedupes_submit(client):
+    """A resubmitted receipt clears its stale rejection from the chat, and
+    never gains a second submit bubble."""
+    admin_headers = await _admin(client)
+    alice = await _user(client, admin_headers, "alice@pytest.local")
+    ah, _ = await _login(client, "alice@pytest.local")
+    uid = alice["uid"]
+
+    await _send(admin_headers, uid, "hello")  # lock-in
+    rec = await _create(client, ah, uid)
+    await _transition(client, ah, uid, rec["id"], "submit")
+    r = await _transition(
+        client, admin_headers, uid, rec["id"], "reject", note="Fix the tax rate"
+    )
+    assert r.status_code == 200, r.text
+
+    convs = await _conversations(ah)
+    conv = next(c for c in convs if c["receipt_id"] == rec["id"])
+    msgs = await _messages(ah, conv["id"])
+    assert [m["kind"] for m in msgs] == ["receipt_submit", "receipt_rejection"]
+
+    r = await _transition(client, ah, uid, rec["id"], "submit")
+    assert r.status_code == 200, r.text
+    msgs = await _messages(ah, conv["id"])
+    assert [m["kind"] for m in msgs] == ["receipt_submit"]  # one, clean
+
+
+async def test_recall_prunes_submit_then_resubmit_restores(client):
+    """Recalling a submission clears its submit bubble; resubmitting clears
+    the recall bubble and restores one submit bubble."""
+    admin_headers = await _admin(client)
+    alice = await _user(client, admin_headers, "alice@pytest.local")
+    ah, _ = await _login(client, "alice@pytest.local")
+    uid = alice["uid"]
+
+    await _send(admin_headers, uid, "hello")  # lock-in
+    rec = await _create(client, ah, uid)
+    await _transition(client, ah, uid, rec["id"], "submit")
+    r = await _transition(client, ah, uid, rec["id"], "recall")
+    assert r.status_code == 200, r.text
+
+    convs = await _conversations(ah)
+    conv = next(c for c in convs if c["receipt_id"] == rec["id"])
+    assert [m["kind"] for m in await _messages(ah, conv["id"])] == ["receipt_recall"]
+
+    r = await _transition(client, ah, uid, rec["id"], "submit")
+    assert r.status_code == 200, r.text
+    assert [m["kind"] for m in await _messages(ah, conv["id"])] == ["receipt_submit"]
+
+
+async def test_repeat_rejections_keep_single_rejection_message(client):
+    """reject → resubmit → reject keeps exactly one rejection bubble (the
+    latest note wins; stale ones are pruned on resubmit)."""
+    admin_headers = await _admin(client)
+    alice = await _user(client, admin_headers, "alice@pytest.local")
+    ah, _ = await _login(client, "alice@pytest.local")
+    uid = alice["uid"]
+
+    await _send(admin_headers, uid, "hello")  # lock-in
+    rec = await _create(client, ah, uid)
+    await _transition(client, ah, uid, rec["id"], "submit")
+    await _transition(client, admin_headers, uid, rec["id"], "reject", note="Note one")
+    await _transition(client, ah, uid, rec["id"], "submit")
+    r = await _transition(client, admin_headers, uid, rec["id"], "reject", note="Note two")
+    assert r.status_code == 200, r.text
+
+    convs = await _conversations(ah)
+    conv = next(c for c in convs if c["receipt_id"] == rec["id"])
+    msgs = await _messages(ah, conv["id"])
+    kinds = [m["kind"] for m in msgs]
+    assert kinds.count("receipt_rejection") == 1
+    assert kinds.count("receipt_submit") == 1
+    assert "Note two" in msgs[-1]["body"]

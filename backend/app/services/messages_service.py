@@ -19,7 +19,7 @@ import json
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 from fastapi import HTTPException
 
@@ -195,6 +195,57 @@ async def find_receipt_conversation(a: str, b: str) -> Optional[Dict[str, Any]]:
             a, b,
         )
     return dict(row) if row else None
+
+
+_WORKFLOW_AUTO_KINDS = (
+    "receipt_submit", "receipt_recall", "receipt_approval", "receipt_rejection",
+)
+
+
+async def prune_receipt_auto_messages(
+    receipt_id: str, kinds: Iterable[str]
+) -> int:
+    """Delete workflow auto-messages of the given kinds from the receipt's
+    thread(s). Used to clear stale markers — a rejection (or recall) is no
+    longer true once the receipt is resubmitted — so the chat only ever
+    shows the current state. Returns how many messages were removed.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            DELETE FROM messages
+            WHERE conversation_id IN (
+                SELECT id FROM conversations WHERE receipt_id = $1::uuid
+            )
+              AND kind = ANY($2)
+            RETURNING id
+            """,
+            str(receipt_id), list(kinds),
+        )
+    return len(rows)
+
+
+async def receipt_thread_has_kinds(
+    receipt_id: str, kinds: Iterable[str]
+) -> bool:
+    """Whether the receipt's thread(s) already carry a message of any of the
+    given kinds. Used to dedupe workflow auto-messages (only-when-necessary:
+    one submit / one approval per receipt, no matter how many times an event
+    fires)."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return bool(
+            await conn.fetchval(
+                """
+                SELECT 1 FROM messages m
+                JOIN conversations c ON c.id = m.conversation_id
+                WHERE c.receipt_id = $1::uuid AND m.kind = ANY($2)
+                LIMIT 1
+                """,
+                str(receipt_id), list(kinds),
+            )
+        )
 
 
 async def _locked_admin_for(uid: str) -> Optional[str]:

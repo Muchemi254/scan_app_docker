@@ -271,9 +271,26 @@ async def _notify_workflow(
     - submit / recall by an ADMIN: the admin → owner.
 
     Best-effort: a messaging failure must never undo a successful transition.
+
+    The chat is kept clean by pruning (only-when-necessary) rules:
+    - resubmit clears stale rejections / recalls for the receipt,
+    - each transition kind appears at most once per receipt (dedupe), so
+      repeated events never pile up duplicate bubbles.
     """
     try:
         from app.services import messages_service
+
+        # Stale markers to drop for this event, and the kind to dedupe on.
+        prune_kinds, dedupe_kind = {
+            "receipt_submit":    (["receipt_rejection", "receipt_recall"], "receipt_submit"),
+            "receipt_recall":    (["receipt_submit", "receipt_rejection"], "receipt_recall"),
+            "receipt_approval":  ([], "receipt_approval"),
+            "receipt_rejection": ([], "receipt_rejection"),
+        }[kind]
+        if prune_kinds:
+            await messages_service.prune_receipt_auto_messages(receipt_id, prune_kinds)
+        if await messages_service.receipt_thread_has_kinds(receipt_id, [dedupe_kind]):
+            return  # already notified for this state — nothing new to say
 
         supplier = receipt.get("supplier") or "receipt"
         total = receipt.get("totalAmount") or receipt.get("total_amount")
