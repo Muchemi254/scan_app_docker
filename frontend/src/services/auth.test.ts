@@ -171,7 +171,7 @@ describe('auth service', () => {
 
   it('adminDeleteUser encodes the uid and returns without error on 204', async () => {
     localStorage.setItem(TOKEN_KEY, 'admin-token');
-    fetchMock.mockResolvedValue({ ok: true, status: 204, json: async () => ({}) } as Response);
+    fetchMock.mockResolvedValue({ ok: true, status: 204, headers: new Headers(), json: async () => ({}) } as Response);
 
     await adminDeleteUser('uid/with-slash');
     expect(fetchMock).toHaveBeenCalledWith(

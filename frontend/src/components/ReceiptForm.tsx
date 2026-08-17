@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
 import Decimal from 'decimal.js';
 import { parseCurrencyToNumber } from '../utils/helpers';
+import { addTax, splitTax } from '../utils/taxCalc';
 
 const DEFAULT_TAX_RATE = 16;
 
@@ -47,6 +48,11 @@ const ReceiptForm = ({
   // Receipt-level default tax rate for bulk operations. Higher precedence:
   // the receipt's own override > the user's default passed from Settings.
   const activeTaxRate = Number(formData.taxRate) || defaultTaxRate || 16;
+
+  // Custom rate entered in the toolbar for bulk add/split (blank = receipt default).
+  const [customTaxRate, setCustomTaxRate] = useState('');
+  const parsedCustomRate = parseFloat(customTaxRate);
+  const bulkTaxRate = customTaxRate !== '' && !isNaN(parsedCustomRate) ? parsedCustomRate : activeTaxRate;
 
   const [taxAdded, setTaxAdded] = useState(false);
   const [taxSplit, setTaxSplit] = useState(false);
@@ -211,8 +217,8 @@ const ReceiptForm = ({
       if (item.isZeroRated) return item;
 
       const price = parseFloat(item.price) || 0;
-      const tax = new Decimal(price).mul(activeTaxRate).div(100).toDecimalPlaces(3).toNumber();
-      return { ...item, tax: tax.toString() };
+      const tax = addTax(price, bulkTaxRate);
+      return { ...item, tax: tax.toString(), taxRate: bulkTaxRate.toString() };
     });
 
     setFormData({ ...formData, items: updatedItems });
@@ -230,14 +236,13 @@ const ReceiptForm = ({
       if (item.isZeroRated) return item;
 
       const fullPrice = parseFloat(item.price) || 0;
-      const fullPriceDecimal = new Decimal(fullPrice);
-      const priceWithoutTax = fullPriceDecimal.div(new Decimal(1).plus(activeTaxRate / 100));
-      const tax = fullPriceDecimal.minus(priceWithoutTax);
+      const { priceWithoutTax, tax } = splitTax(fullPrice, bulkTaxRate);
 
       return {
         ...item,
-        price: priceWithoutTax.toDecimalPlaces(3).toString(),
-        tax: tax.toDecimalPlaces(3).toString(),
+        price: priceWithoutTax.toString(),
+        tax: tax.toString(),
+        taxRate: bulkTaxRate.toString(),
       };
     });
 
@@ -284,7 +289,8 @@ const ReceiptForm = ({
           price: item.price,
           tax: item.tax,
           discount: item.discount,
-          isZeroRated: item.isZeroRated
+          isZeroRated: item.isZeroRated,
+          taxRate: item.taxRate,
         }
       }));
     }
@@ -297,10 +303,10 @@ const ReceiptForm = ({
     saveItemOriginalState(index);
 
     const price = parseCurrencyToNumber(item.price);
-    const tax = new Decimal(price).mul(activeTaxRate).div(100).toDecimalPlaces(3).toNumber();
+    const tax = addTax(price, bulkTaxRate);
 
     const newItems = [...formData.items];
-    newItems[index] = { ...newItems[index], tax: tax.toString() };
+    newItems[index] = { ...newItems[index], tax: tax.toString(), taxRate: bulkTaxRate.toString() };
 
     setFormData({ ...formData, items: newItems });
     setOpenActionIndex(null);
@@ -313,15 +319,67 @@ const ReceiptForm = ({
     saveItemOriginalState(index);
 
     const fullPrice = parseCurrencyToNumber(item.price);
-    const fullPriceDecimal = new Decimal(fullPrice);
-    const priceWithoutTax = fullPriceDecimal.div(new Decimal(1).plus(activeTaxRate / 100));
-    const tax = fullPriceDecimal.minus(priceWithoutTax);
+    const { priceWithoutTax, tax } = splitTax(fullPrice, bulkTaxRate);
 
     const newItems = [...formData.items];
     newItems[index] = {
       ...newItems[index],
-      price: priceWithoutTax.toDecimalPlaces(3).toString(),
-      tax: tax.toDecimalPlaces(3).toString(),
+      price: priceWithoutTax.toString(),
+      tax: tax.toString(),
+      taxRate: bulkTaxRate.toString(),
+    };
+
+    setFormData({ ...formData, items: newItems });
+    setOpenActionIndex(null);
+  };
+
+  const handleCustomAddTax = (index: number) => {
+    const item = formData.items[index];
+    if (item.isZeroRated) return;
+
+    const input = window.prompt(`Add tax at what rate %? (price is tax-exclusive, default ${bulkTaxRate}%)`, String(bulkTaxRate));
+    if (input === null) return;
+    const rate = parseFloat(input);
+    if (isNaN(rate) || rate < 0 || rate > 100) {
+      alert('Please enter a valid percentage (0–100).');
+      return;
+    }
+
+    saveItemOriginalState(index);
+
+    const price = parseCurrencyToNumber(item.price);
+    const tax = addTax(price, rate);
+
+    const newItems = [...formData.items];
+    newItems[index] = { ...newItems[index], tax: tax.toString(), taxRate: rate.toString() };
+
+    setFormData({ ...formData, items: newItems });
+    setOpenActionIndex(null);
+  };
+
+  const handleCustomSplitTax = (index: number) => {
+    const item = formData.items[index];
+    if (item.isZeroRated) return;
+
+    const input = window.prompt(`Split tax at what rate %? (price is tax-inclusive, default ${bulkTaxRate}%)`, String(bulkTaxRate));
+    if (input === null) return;
+    const rate = parseFloat(input);
+    if (isNaN(rate) || rate < 0 || rate > 100) {
+      alert('Please enter a valid percentage (0–100).');
+      return;
+    }
+
+    saveItemOriginalState(index);
+
+    const fullPrice = parseCurrencyToNumber(item.price);
+    const { priceWithoutTax, tax } = splitTax(fullPrice, rate);
+
+    const newItems = [...formData.items];
+    newItems[index] = {
+      ...newItems[index],
+      price: priceWithoutTax.toString(),
+      tax: tax.toString(),
+      taxRate: rate.toString(),
     };
 
     setFormData({ ...formData, items: newItems });
@@ -373,7 +431,8 @@ const ReceiptForm = ({
       price: originalState.price,
       tax: originalState.tax,
       discount: originalState.discount,
-      isZeroRated: originalState.isZeroRated
+      isZeroRated: originalState.isZeroRated,
+      taxRate: originalState.taxRate,
     };
 
     setFormData({ ...formData, items: newItems });
@@ -388,8 +447,8 @@ const ReceiptForm = ({
 
   const itemCount = formData.items.length;
 
-  // Grid: Name | Qty | Price | Tax | Disc% | Tax% | Total | Actions
-  const gridCols = 'grid-cols-[1fr_52px_72px_64px_44px_44px_72px_28px]';
+  // Grid: Name | Qty | Price | Tax | Disc% | Total | Actions
+  const gridCols = 'grid-cols-[1fr_52px_72px_64px_44px_72px_28px]';
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
@@ -464,20 +523,35 @@ const ReceiptForm = ({
       <div className="mt-4">
         <div className="flex justify-between items-center mb-1">
           <h3 className="font-semibold text-sm">Items {itemCount > 0 && `(${itemCount})`}</h3>
-          <div className="flex gap-1">
+          <div className="flex gap-1 items-center">
+            <label htmlFor="custom-bulk-tax-rate" className="text-xs text-gray-500 whitespace-nowrap">
+              Custom Tax %
+            </label>
+            <input
+              id="custom-bulk-tax-rate"
+              type="number"
+              min="0"
+              max="100"
+              step="0.01"
+              value={customTaxRate}
+              onChange={(e) => setCustomTaxRate(e.target.value)}
+              placeholder={String(activeTaxRate)}
+              className="w-14 px-1.5 py-0.5 border rounded text-xs text-right"
+              title="Custom tax rate for bulk and per-item add/split (blank = receipt default)"
+            />
             <button
               type="button"
               onClick={handleAddTax}
               className={`text-xs px-2 py-0.5 rounded border ${taxAdded ? 'bg-blue-500 text-white border-blue-500' : 'bg-white border-gray-300 hover:bg-gray-100'}`}
             >
-              {taxAdded ? 'Undo Add Tax' : `Bulk: Add Tax (${activeTaxRate}%)`}
+              {taxAdded ? 'Undo Add Tax' : `Bulk: Add Tax (${bulkTaxRate}%)`}
             </button>
             <button
               type="button"
               onClick={handleSplitTax}
               className={`text-xs px-2 py-0.5 rounded border ${taxSplit ? 'bg-green-600 text-white border-green-600' : 'bg-white border-gray-300 hover:bg-gray-100'}`}
             >
-              {taxSplit ? 'Undo Split' : `Bulk: Split Tax (${activeTaxRate}%)`}
+              {taxSplit ? 'Undo Split' : `Bulk: Split Tax (${bulkTaxRate}%)`}
             </button>
             <button
               type="button"
@@ -504,7 +578,6 @@ const ReceiptForm = ({
             <span className="text-right">Price</span>
             <span className="text-right">Tax</span>
             <span className="text-right">Disc%</span>
-            <span className="text-right">Tax%</span>
             <span className="text-right">Total</span>
             <span></span>
           </div>
@@ -568,17 +641,6 @@ const ReceiptForm = ({
                 className={`w-full px-1 py-1 border-0 border-b rounded-none text-sm text-right focus:outline-none focus:border-pink-400 bg-transparent ${hasDiscount ? 'border-pink-200 text-pink-700 font-medium' : 'border-gray-200 text-gray-500'}`}
                 title="Discount percentage"
               />
-              <input
-                type="number"
-                min="0"
-                max="100"
-                step="0.01"
-                placeholder={String(activeTaxRate)}
-                value={item.taxRate || ''}
-                onChange={(e) => handleItemChange(index, 'taxRate', e.target.value)}
-                className={`w-full px-1 py-1 border-0 border-b rounded-none text-sm text-right focus:outline-none focus:border-blue-400 bg-transparent ${item.isZeroRated ? 'text-gray-400 italic' : 'text-gray-500'}`}
-                title="Per-item tax rate % (blank = receipt default)"
-              />
               <span className={`text-xs text-right font-mono tabular-nums px-1 ${hasDiscount ? 'text-pink-700 font-medium' : ''}`}>
                 {total.toFixed(2)}
               </span>
@@ -603,7 +665,7 @@ const ReceiptForm = ({
                           onClick={() => handleIndividualAddTax(index)}
                           className="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-blue-700"
                         >
-                          Add Tax ({activeTaxRate}%)
+                          Add Tax ({bulkTaxRate}%)
                         </button>
                         <button
                           type="button"
@@ -611,6 +673,20 @@ const ReceiptForm = ({
                           className="w-full text-left px-3 py-1.5 hover:bg-green-50 text-green-700"
                         >
                           Split Tax
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleCustomAddTax(index)}
+                          className="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-blue-700 border-t"
+                        >
+                          Custom Add Tax…
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleCustomSplitTax(index)}
+                          className="w-full text-left px-3 py-1.5 hover:bg-green-50 text-green-700"
+                        >
+                          Custom Split Tax…
                         </button>
                       </>
                     )}
