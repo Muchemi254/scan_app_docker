@@ -1,5 +1,5 @@
 // src/pages/ApprovalsPage.tsx
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { receiptApi } from '../services/api';
 import { useAuthStore } from '../stores/authStore';
 import { receiptStatusLabel, receiptStatusClass } from '../utils/receiptStatus';
