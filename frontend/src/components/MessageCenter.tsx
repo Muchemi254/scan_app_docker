@@ -679,6 +679,7 @@ function MessageBubble({ m, mine }: { m: Message; mine: boolean }) {
             alt="receipt"
             className="w-16 h-16 object-cover rounded-lg mb-2 border"
             loading="lazy"
+            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
           />
         )}
         <p className="whitespace-pre-wrap break-words">{m.body}</p>

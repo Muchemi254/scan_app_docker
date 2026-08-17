@@ -46,6 +46,27 @@ export class ErrorBoundary extends Component<Props, State> {
       error,
       errorInfo
     });
+
+    // Stale-deployment recovery: a long-open tab still runs the previous
+    // bundle, which lazy-loads chunk files with the OLD content-hash. After a
+    // redeploy those files are gone (404), so reloading once serves index.html
+    // fresh and every import resolves. The flag is reset on the next app boot
+    // (componentDidMount), so a later deploy can still auto-recover.
+    const msg = error?.message || '';
+    if (
+      msg.includes('Failed to fetch dynamically imported module') ||
+      msg.includes('Importing a module script failed') ||
+      msg.includes('Unable to preload CSS')
+    ) {
+      if (!sessionStorage.getItem('chunk-reload-attempted')) {
+        sessionStorage.setItem('chunk-reload-attempted', '1');
+        window.location.reload();
+      }
+    }
+  }
+
+  componentDidMount() {
+    sessionStorage.removeItem('chunk-reload-attempted');
   }
 
   logErrorToBackend = async (error: Error, errorInfo: React.ErrorInfo) => {
