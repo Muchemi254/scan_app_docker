@@ -33,6 +33,8 @@ const MyApprovalsPage = () => {
   const [approved, setApproved] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [recallTarget, setRecallTarget] = useState<any | null>(null);
 
   const load = useCallback(async () => {
     if (!effectiveUid) return;
@@ -45,7 +47,7 @@ const MyApprovalsPage = () => {
       setItems(p.items || []);
       setApproved(a.items || []);
     } catch (e: any) {
-      alert(e.message || 'Failed to load documents');
+      setError(e.message || 'Failed to load documents');
     } finally {
       setLoading(false);
     }
@@ -55,14 +57,15 @@ const MyApprovalsPage = () => {
     load();
   }, [load]);
 
-  const recall = async (r: any) => {
-    if (!window.confirm('Recall this receipt back to review so you can edit it?')) return;
-    setBusyId(r.id);
+  const confirmRecall = async () => {
+    if (!recallTarget) return;
+    setBusyId(recallTarget.id);
     try {
-      await receiptApi.recall(effectiveUid!, r.id);
+      await receiptApi.recall(effectiveUid!, recallTarget.id);
+      setRecallTarget(null);
       await load();
     } catch (e: any) {
-      alert(e.message || 'Recall failed');
+      setError(e.message || 'Recall failed');
     } finally {
       setBusyId(null);
     }
@@ -152,7 +155,7 @@ const MyApprovalsPage = () => {
                           </button>
                           {tab === 'pending' && (
                             <button
-                              onClick={() => recall(r)}
+                              onClick={() => setRecallTarget(r)}
                               disabled={busyId === r.id}
                               className="px-2 py-1 text-xs rounded bg-gray-600 text-white hover:bg-gray-700 disabled:opacity-50"
                             >
@@ -173,6 +176,46 @@ const MyApprovalsPage = () => {
             </div>
           )}
         </>
+      )}
+
+      {error && (
+        <div className="mt-4 px-4 py-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 flex items-center justify-between gap-3">
+          <span>{error}</span>
+          <button
+            onClick={() => setError(null)}
+            className="text-red-400 hover:text-red-600 font-medium"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {/* ── Recall confirm modal (replaces browser confirm) ── */}
+      {recallTarget && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-sm p-5 space-y-4">
+            <h3 className="text-lg font-bold text-gray-900">Recall Receipt</h3>
+            <p className="text-sm text-gray-600">
+              Recall <strong>{recallTarget.supplier || 'this receipt'}</strong> back to review so you can edit it?
+            </p>
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                onClick={() => setRecallTarget(null)}
+                disabled={busyId === recallTarget.id}
+                className="px-4 py-2 text-gray-700 bg-gray-100 rounded hover:bg-gray-200 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmRecall}
+                disabled={busyId === recallTarget.id}
+                className="px-4 py-2 text-white bg-gray-600 rounded hover:bg-gray-700 disabled:opacity-50"
+              >
+                {busyId === recallTarget.id ? 'Recalling…' : 'Recall'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

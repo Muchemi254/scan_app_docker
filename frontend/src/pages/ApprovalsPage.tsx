@@ -30,6 +30,8 @@ const ApprovalsPage = () => {
   const [isEditing, setIsEditing] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 1024);
   const [page, setPage] = useState(1);
+  // Unsaved-changes confirm when switching receipts mid-edit (modal, no browser confirm)
+  const [discardTarget, setDiscardTarget] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -88,10 +90,18 @@ const ApprovalsPage = () => {
 
   const handleSelect = (newId: string) => {
     if (isEditing) {
-      if (!confirm('You have unsaved changes. Do you want to discard them and switch receipts?')) return;
+      setDiscardTarget(newId);
+      return;
     }
     setSelectedId(newId);
     if (window.innerWidth < 1024) setSidebarOpen(false);
+  };
+
+  const confirmDiscardSwitch = () => {
+    if (!discardTarget) return;
+    setSelectedId(discardTarget);
+    if (window.innerWidth < 1024) setSidebarOpen(false);
+    setDiscardTarget(null);
   };
 
   // When a receipt leaves the pending queue (approve/reject/delete), advance
@@ -284,6 +294,32 @@ const ApprovalsPage = () => {
           )}
         </div>
       </div>
+
+      {/* ── Unsaved-changes modal when switching receipts mid-edit ── */}
+      {discardTarget && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-sm p-5 space-y-4">
+            <h3 className="text-lg font-bold text-gray-900">Unsaved Changes</h3>
+            <p className="text-sm text-gray-600">
+              You have unsaved edits. Discard them and switch to another receipt?
+            </p>
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                onClick={() => setDiscardTarget(null)}
+                className="px-4 py-2 text-gray-700 bg-gray-100 rounded hover:bg-gray-200"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDiscardSwitch}
+                className="px-4 py-2 text-white bg-red-600 rounded hover:bg-red-700"
+              >
+                Discard & Switch
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

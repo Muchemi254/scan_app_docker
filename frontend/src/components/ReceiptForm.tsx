@@ -61,6 +61,35 @@ const ReceiptForm = ({
   const [openActionIndex, setOpenActionIndex] = useState<number | null>(null);
   const actionRef = useRef<HTMLDivElement>(null);
 
+  // In-form prompt modal (replaces window.prompt/alert for tax & discount ops)
+  const [prompt, setPrompt] = useState<{
+    title: string;
+    placeholder: string;
+    defaultValue: string;
+    onConfirm: (value: number) => void;
+  } | null>(null);
+  const [promptValue, setPromptValue] = useState('');
+  const [promptError, setPromptError] = useState<string | null>(null);
+
+  const confirmPrompt = () => {
+    if (!prompt) return;
+    const num = parseFloat(promptValue);
+    if (isNaN(num) || num < 0 || num > 100) {
+      setPromptError('Please enter a valid percentage (0–100).');
+      return;
+    }
+    prompt.onConfirm(num);
+    setPrompt(null);
+    setPromptValue('');
+    setPromptError(null);
+  };
+
+  const cancelPrompt = () => {
+    setPrompt(null);
+    setPromptValue('');
+    setPromptError(null);
+  };
+
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (actionRef.current && !actionRef.current.contains(e.target as Node)) {
@@ -265,18 +294,20 @@ const ReceiptForm = ({
   };
 
   const handleBulkDiscount = () => {
-    const pct = window.prompt('Enter discount percentage for all items:');
-    if (pct === null) return;
-    const num = parseFloat(pct);
-    if (isNaN(num) || num < 0 || num > 100) {
-      alert('Please enter a valid percentage (0–100).');
-      return;
-    }
-    const updatedItems = formData.items.map((item) => ({
-      ...item,
-      discount: num === 0 ? '' : num.toString(),
-    }));
-    setFormData({ ...formData, items: updatedItems });
+    setPrompt({
+      title: 'Apply discount to all items',
+      placeholder: 'Discount % (0–100)',
+      defaultValue: '',
+      onConfirm: (num) => {
+        const updatedItems = formData.items.map((item) => ({
+          ...item,
+          discount: num === 0 ? '' : num.toString(),
+        }));
+        setFormData({ ...formData, items: updatedItems });
+      },
+    });
+    setPromptValue('');
+    setPromptError(null);
   };
 
   // Individual item operations
@@ -337,53 +368,49 @@ const ReceiptForm = ({
     const item = formData.items[index];
     if (item.isZeroRated) return;
 
-    const input = window.prompt(`Add tax at what rate %? (price is tax-exclusive, default ${bulkTaxRate}%)`, String(bulkTaxRate));
-    if (input === null) return;
-    const rate = parseFloat(input);
-    if (isNaN(rate) || rate < 0 || rate > 100) {
-      alert('Please enter a valid percentage (0–100).');
-      return;
-    }
-
-    saveItemOriginalState(index);
-
-    const price = parseCurrencyToNumber(item.price);
-    const tax = addTax(price, rate);
-
-    const newItems = [...formData.items];
-    newItems[index] = { ...newItems[index], tax: tax.toString(), taxRate: rate.toString() };
-
-    setFormData({ ...formData, items: newItems });
-    setOpenActionIndex(null);
+    setPrompt({
+      title: `Add tax at what rate %? (price is tax-exclusive, default ${bulkTaxRate}%)`,
+      placeholder: 'Rate % (0–100)',
+      defaultValue: String(bulkTaxRate),
+      onConfirm: (rate) => {
+        saveItemOriginalState(index);
+        const price = parseCurrencyToNumber(item.price);
+        const tax = addTax(price, rate);
+        const newItems = [...formData.items];
+        newItems[index] = { ...newItems[index], tax: tax.toString(), taxRate: rate.toString() };
+        setFormData({ ...formData, items: newItems });
+        setOpenActionIndex(null);
+      },
+    });
+    setPromptValue(String(bulkTaxRate));
+    setPromptError(null);
   };
 
   const handleCustomSplitTax = (index: number) => {
     const item = formData.items[index];
     if (item.isZeroRated) return;
 
-    const input = window.prompt(`Split tax at what rate %? (price is tax-inclusive, default ${bulkTaxRate}%)`, String(bulkTaxRate));
-    if (input === null) return;
-    const rate = parseFloat(input);
-    if (isNaN(rate) || rate < 0 || rate > 100) {
-      alert('Please enter a valid percentage (0–100).');
-      return;
-    }
-
-    saveItemOriginalState(index);
-
-    const fullPrice = parseCurrencyToNumber(item.price);
-    const { priceWithoutTax, tax } = splitTax(fullPrice, rate);
-
-    const newItems = [...formData.items];
-    newItems[index] = {
-      ...newItems[index],
-      price: priceWithoutTax.toString(),
-      tax: tax.toString(),
-      taxRate: rate.toString(),
-    };
-
-    setFormData({ ...formData, items: newItems });
-    setOpenActionIndex(null);
+    setPrompt({
+      title: `Split tax at what rate %? (price is tax-inclusive, default ${bulkTaxRate}%)`,
+      placeholder: 'Rate % (0–100)',
+      defaultValue: String(bulkTaxRate),
+      onConfirm: (rate) => {
+        saveItemOriginalState(index);
+        const fullPrice = parseCurrencyToNumber(item.price);
+        const { priceWithoutTax, tax } = splitTax(fullPrice, rate);
+        const newItems = [...formData.items];
+        newItems[index] = {
+          ...newItems[index],
+          price: priceWithoutTax.toString(),
+          tax: tax.toString(),
+          taxRate: rate.toString(),
+        };
+        setFormData({ ...formData, items: newItems });
+        setOpenActionIndex(null);
+      },
+    });
+    setPromptValue(String(bulkTaxRate));
+    setPromptError(null);
   };
 
   const handleIndividualZeroTax = (index: number) => {
@@ -403,22 +430,22 @@ const ReceiptForm = ({
   const handleIndividualDiscount = (index: number) => {
     saveItemOriginalState(index);
 
-    const pct = window.prompt('Enter discount percentage for this item:');
-    if (pct === null) return;
-    const num = parseFloat(pct);
-    if (isNaN(num) || num < 0 || num > 100) {
-      alert('Please enter a valid percentage (0–100).');
-      return;
-    }
-
-    const newItems = [...formData.items];
-    newItems[index] = {
-      ...newItems[index],
-      discount: num === 0 ? '' : num.toString(),
-    };
-
-    setFormData({ ...formData, items: newItems });
-    setOpenActionIndex(null);
+    setPrompt({
+      title: 'Enter discount percentage for this item',
+      placeholder: 'Discount % (0–100)',
+      defaultValue: '',
+      onConfirm: (num) => {
+        const newItems = [...formData.items];
+        newItems[index] = {
+          ...newItems[index],
+          discount: num === 0 ? '' : num.toString(),
+        };
+        setFormData({ ...formData, items: newItems });
+        setOpenActionIndex(null);
+      },
+    });
+    setPromptValue('');
+    setPromptError(null);
   };
 
   const handleIndividualReset = (index: number) => {
@@ -791,6 +818,46 @@ const ReceiptForm = ({
           </button>
         )}
       </div>
+
+      {/* ── In-form prompt modal (tax rate / discount %) ── */}
+      {prompt && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-sm p-5 space-y-3">
+            <h3 className="text-sm font-semibold text-gray-900">{prompt.title}</h3>
+            <input
+              type="number"
+              min="0"
+              max="100"
+              step="0.01"
+              autoFocus
+              value={promptValue}
+              onChange={(e) => { setPromptValue(e.target.value); setPromptError(null); }}
+              onKeyDown={(e) => { if (e.key === 'Enter') confirmPrompt(); }}
+              placeholder={prompt.placeholder}
+              className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+            />
+            {promptError && (
+              <p className="text-xs text-red-600">{promptError}</p>
+            )}
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={cancelPrompt}
+                className="px-4 py-2 text-sm rounded font-medium bg-gray-200 text-gray-700 hover:bg-gray-300"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmPrompt}
+                className="px-4 py-2 text-sm rounded font-medium bg-blue-500 text-white hover:bg-blue-600"
+              >
+                Apply
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </form>
   );
 };
