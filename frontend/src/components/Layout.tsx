@@ -80,6 +80,10 @@ const Layout = () => {
     return () => clearInterval(timer);
   }, [refreshMsgUnread]);
 
+  // Stable identity so MessageCenter's loadConversations callback never
+  // changes (avoids re-running its drawer-open effect on every render).
+  const handleUnreadChange = useCallback((n: number) => setMsgUnread(n), []);
+
   // Instant badge update when a message arrives while the drawer is closed.
   useMessageStream((ev) => {
     if (ev.type !== 'message' || impersonating) return;
