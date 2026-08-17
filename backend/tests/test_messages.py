@@ -716,6 +716,39 @@ async def test_scan_error_mirrors_into_receipt_thread(client):
     assert last["payload"]["scan_error_kind"] == "batch"
 
 
+async def test_delete_receipt_cleans_its_conversation(client):
+    admin_headers = await _admin(client)
+    alice = await _user(client, admin_headers, "alice@pytest.local")
+    ah, _ = await _login(client, "alice@pytest.local")
+    uid = alice["uid"]
+
+    await _send(admin_headers, uid, "hello")
+    rec = await _create(client, ah, uid)
+    await _transition(client, ah, uid, rec["id"], "submit")
+    assert sum(1 for c in await _conversations(ah) if c["receipt_id"]) == 1
+
+    resp = await client.delete(f"/api/v1/users/{uid}/receipts/{rec['id']}", headers=ah)
+    assert resp.status_code == 204, resp.text
+    assert all(c["receipt_id"] is None for c in await _conversations(ah))
+
+
+async def test_delete_user_cleans_their_conversations(client):
+    admin_headers = await _admin(client)
+    alice = await _user(client, admin_headers, "alice@pytest.local")
+    ah, _ = await _login(client, "alice@pytest.local")
+    uid = alice["uid"]
+
+    await _send(admin_headers, uid, "handshake")
+    rec = await _create(client, ah, uid)
+    await _transition(client, ah, uid, rec["id"], "submit")
+    assert len(await _conversations(ah)) == 2
+
+    resp = await client.delete(f"/api/v1/auth/admin/users/{uid}", headers=admin_headers)
+    assert resp.status_code == 204, resp.text
+    convs = await _conversations(admin_headers)
+    assert all(c["other_user"]["uid"] != uid for c in convs)
+
+
 # ── Redis pub/sub delivery ─────────────────────────────────────────────────
 
 async def test_pubsub_event_published_on_send(client):

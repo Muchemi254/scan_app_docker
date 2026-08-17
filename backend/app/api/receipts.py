@@ -655,6 +655,13 @@ async def delete_receipt(
         # Delete document
         await DataService.delete_receipt(userId, receiptId)
 
+        # Receipt threads die with the receipt (messages cascade via FK).
+        try:
+            from app.services.messages_service import delete_conversations_for_receipt
+            await delete_conversations_for_receipt(receiptId)
+        except Exception as e:
+            logger.error(f"Failed to clean receipt conversations: {e}")
+
     except HTTPException:
         raise
     except Exception as e:

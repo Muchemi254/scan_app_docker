@@ -618,3 +618,24 @@ async def peers(uid: str) -> List[Dict[str, Any]]:
         for r in rows
     ]
     return peers_list
+
+
+async def delete_conversations_for_receipt(receipt_id: str) -> None:
+    """Remove every conversation threaded to a deleted receipt (messages
+    cascade via FK). Best-effort — deletion must not fail silently for the
+    caller."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM conversations WHERE receipt_id = $1::uuid", receipt_id
+        )
+
+
+async def delete_conversations_for_user(uid: str) -> None:
+    """Remove every conversation a user participates in (messages cascade
+    via FK). Called when the user is deleted so threads do not orphan."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM conversations WHERE user_a = $1 OR user_b = $1", uid
+        )

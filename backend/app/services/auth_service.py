@@ -192,6 +192,9 @@ async def delete_user(uid: str) -> dict:
                 "SELECT id FROM backups WHERE user_id = $1", uid
             )
         ]
+        await conn.execute(
+            "DELETE FROM conversations WHERE user_a = $1 OR user_b = $1", uid
+        )
         result = await conn.execute("DELETE FROM users WHERE uid = $1", uid)
         return {"deleted": result == "DELETE 1", "backup_ids": backup_ids}
 
