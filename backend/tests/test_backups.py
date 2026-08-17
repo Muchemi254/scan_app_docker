@@ -10,6 +10,7 @@ Covers:
   - quota summary endpoint reports usage
 """
 
+import json
 import os
 
 from tests.helpers import ADMIN_EMAIL, ADMIN_PASSWORD, create_user_via_admin, login
@@ -625,3 +626,78 @@ async def test_admin_delete_user_records_pollable_progress_op(client):
     admin_recent = await client.get("/api/v1/ops/recent?op_type=user_delete", headers=admin_headers)
     assert admin_recent.status_code == 200, admin_recent.text
     assert any(o["op_id"] == op_id for o in admin_recent.json()), admin_recent.text
+    try:
+        r = await ops_service._redis()
+        await r.delete("op:" + op_id)
+        await r.lrem("op:recent:global:user_delete", 0, op_id)
+    except Exception:
+        await asyncio.sleep(0)
+
+
+async def test_finalize_stale_ops_watchdog_marks_abandoned_running_ops_failed(client):
+    """A user-delete op whose background purge task died without reporting
+    (stuck 'running') is finalized by the watchdog instead of being polled
+    by the admin UI forever."""
+    import asyncio
+    from datetime import datetime, timedelta, timezone
+
+    from app.services import ops_service
+
+    stale_id = "test-stale-delete-op"
+    fresh_id = "test-fresh-delete-op"
+    try:
+        await ops_service.start_op(stale_id, "user_delete", owner="stale-owner",
+                                   message="Deleting account…")
+        # Backdate past the staleness window, simulating a task that never ran.
+        r = await ops_service._redis()
+        await r.pexpire("op:" + stale_id, 1)
+        await asyncio.sleep(0.05)
+        old_op = await ops_service.get_op(stale_id)
+        assert old_op is None  # expired
+
+        old_op = {
+            "op_id": stale_id,
+            "op_type": "user_delete",
+            "owner": "stale-owner",
+            "status": "running",
+            "stage": "starting",
+            "message": "Deleting account…",
+            "total": {},
+            "counts": {},
+            "errors": 0,
+            "created_at": (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat(),
+            "updated_at": (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat(),
+            "completed_at": None,
+            "result": None,
+        }
+        await r.set("op:" + stale_id, json.dumps(old_op), ex=86400)
+        await r.lpush("op:recent:global:user_delete", stale_id)
+
+        finalized = await ops_service.finalize_stale_ops(
+            "user_delete", max_age_seconds=600
+        )
+        assert finalized >= 1, finalized
+
+        op = await ops_service.get_op(stale_id)
+        assert op["status"] == "failed", op
+        assert "Timed out" in op["message"]
+        assert op["completed_at"] is not None
+
+        # A fresh running op is left alone
+        await ops_service.start_op(fresh_id, "user_delete", owner="fresh-owner",
+                                   message="Deleting account…")
+        await r.lpush("op:recent:global:user_delete", fresh_id)
+        finalized2 = await ops_service.finalize_stale_ops(
+            "user_delete", max_age_seconds=600
+        )
+        fresh = await ops_service.get_op(fresh_id)
+        assert fresh["status"] == "running", fresh
+    finally:
+        try:
+            r = await ops_service._redis()
+            await r.delete("op:" + stale_id)
+            await r.delete("op:" + fresh_id)
+            await r.lrem("op:recent:global:user_delete", 0, stale_id)
+            await r.lrem("op:recent:global:user_delete", 0, fresh_id)
+        except Exception:
+            await asyncio.sleep(0)

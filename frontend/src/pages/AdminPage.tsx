@@ -40,6 +40,16 @@ const PROVIDER_LABELS: Record<string, string> = {
   qwen: 'Alibaba Qwen (DashScope)',
 };
 
+// Ops created more than this long ago that still claim "running" are stale
+// (the server-side watchdog finalizes them) — never resume polling those.
+const OP_RESUME_WINDOW_MS = 10 * 60 * 1000;
+
+const isRecentOp = (o: { created_at?: string }) => {
+  if (!o.created_at) return false;
+  const age = Date.now() - new Date(o.created_at).getTime();
+  return Number.isFinite(age) && age >= 0 && age <= OP_RESUME_WINDOW_MS;
+};
+
 const AdminPage = ({ userId }: Props) => {
   const currentUser = useAuthStore(s => s.user);
   const [users, setUsers] = useState<AuthUser[]>([]);
@@ -113,18 +123,22 @@ const AdminPage = ({ userId }: Props) => {
           loadUsers();
         }
       } catch {
-        // op expired — drop the poller quietly
+        // op expired / unreachable — drop the row instead of leaving a
+        // phantom "Deleting account…" entry behind forever.
         stopDeletePoll(uid);
+        setDeleting(prev => { const n = { ...prev }; delete n[uid]; return n; });
       }
     };
     tick();
     deletePollers.current[uid] = window.setInterval(tick, 700);
   }, [loadUsers, stopDeletePoll]);
 
-  // Resume tracking of in-flight deletions after a page refresh.
+  // Resume tracking of in-flight deletions after a page refresh — but only
+  // ones recent enough to plausibly still be running; older stuck ops get
+  // finalized server-side and would just poll forever.
   useEffect(() => {
     opsApi.recent('user_delete').then(ops => {
-      ops.filter(o => o.status === 'running').forEach(o => {
+      ops.filter(o => o.status === 'running' && isRecentOp(o)).forEach(o => {
         setDeleting(prev => ({ ...prev, [o.owner]: { opId: o.op_id, email: o.message || 'deleted user', status: 'running', message: o.message, counts: o.counts } }));
         pollDeleteOp(o.owner, o.op_id, o.message || 'deleted user');
       });

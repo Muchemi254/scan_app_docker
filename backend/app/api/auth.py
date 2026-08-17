@@ -31,6 +31,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+# Strong references to fire-and-forget background tasks (user-delete purge) so
+# they are not garbage-collected before their first await (see admin_delete_user).
+_background_cleanup_tasks: set = set()
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Schemas
@@ -237,11 +241,15 @@ async def admin_delete_user(
     if settings.SCHEDULE_DELETE_CLEANUP:
         try:
             from app.services import data_cleanup_service
-            asyncio.create_task(
+            task = asyncio.create_task(
                 data_cleanup_service.force_user_cleanup(
                     uid, backup_ids=deleted.get("backup_ids", []), op_id=op_ref,
                 )
             )
+            # Keep a strong reference so the task isn't garbage-collected
+            # before its first await if the event loop is momentarily busy.
+            _background_cleanup_tasks.add(task)
+            task.add_done_callback(_background_cleanup_tasks.discard)
         except Exception as e:
             logger.warning(f"Failed to schedule cleanup for deleted user {uid}: {e}")
             await ops_service.update_op(op_ref, status="failed",

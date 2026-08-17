@@ -152,3 +152,40 @@ async def list_ops(owner: str, op_type: Optional[str] = None,
     except Exception as e:
         logger.warning("list_ops(%s) Redis failure: %s", owner, e)
         return []
+
+
+async def finalize_stale_ops(op_type: str, max_age_seconds: int = 600) -> int:
+    """Mark ops stuck in ``running`` longer than ``max_age_seconds`` as failed.
+
+    Safety net for fire-and-forget background tasks (e.g. user-delete purge)
+    that died without ever updating their op — without it, the admin UI would
+    poll a phantom "Deleting account…" row forever. Returns ops finalized.
+    """
+    try:
+        r = await _redis()
+        if op_type == "user_delete":
+            ids = await r.lrange(_GLOBAL_IDX_KEY % op_type, 0, -1)
+        else:
+            ids = await r.lrange(_IDX_KEY % op_type, 0, -1)
+        now = datetime.now(timezone.utc)
+        finalized = 0
+        for oid in ids:
+            op = await get_op(oid)
+            if not op or op.get("status") != "running":
+                continue
+            created = op.get("created_at")
+            try:
+                age = (now - datetime.fromisoformat(created)).total_seconds()
+            except Exception:
+                continue
+            if age <= max_age_seconds:
+                continue
+            await update_op(
+                oid, status="failed",
+                message="Timed out waiting for background cleanup",
+            )
+            finalized += 1
+        return finalized
+    except Exception as e:
+        logger.warning("finalize_stale_ops(%s) Redis failure: %s", op_type, e)
+        return 0

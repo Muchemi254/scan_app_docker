@@ -128,6 +128,20 @@ async def lifespan(app: FastAPI):
                 raise
             except Exception as e:
                 logger.warning(f"Background cleanup failed: {e}")
+            # Watchdog: any op still "running" past its window (e.g. a delete
+            # whose background task died) gets finalized so admin UIs stop
+            # polling a phantom row forever.
+            try:
+                from app.services import ops_service
+                stale = await ops_service.finalize_stale_ops(
+                    "user_delete", max_age_seconds=settings.OP_STALE_AFTER_SECONDS
+                )
+                if stale:
+                    logger.info("Finalized %d stale user-delete operation(s)", stale)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(f"Stale-op watchdog failed: {e}")
             await asyncio.sleep(settings.DATA_CLEANUP_INTERVAL_SECONDS)
 
     try:

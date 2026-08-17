@@ -87,6 +87,11 @@ class Settings(BaseSettings):
     # timer in the app lifetime so deleting a user never blocks on I/O.
     DATA_CLEANUP_INTERVAL_SECONDS: int = _env_int(
         "DATA_CLEANUP_INTERVAL_SECONDS", 300
+    )
+    # Watchdog: user-delete ops still "running" after this long are marked
+    # failed (the background purge died without reporting — see ops_service).
+    OP_STALE_AFTER_SECONDS: int = _env_int(
+        "OP_STALE_AFTER_SECONDS", 600
     )  # 5 min
     # Don't treat files younger than this as orphans (protects in-flight writes).
     ORPHANED_FILE_MIN_AGE_SECONDS: float = _env_int(
