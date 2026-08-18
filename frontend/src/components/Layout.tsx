@@ -8,7 +8,6 @@ import {
   LogOut, Menu, X, ChevronDown, User, Settings,
   Images, Sparkles, Search, ListChecks, Bell,
   Shield, PlusCircle, CheckCheck, Users, MessageCircle,
-  BarChart3,
 } from 'lucide-react';
 import { scanErrorApi } from '../services/api';
 import { messagesApi } from '../services/messagesApi';
@@ -235,16 +234,6 @@ const Layout = () => {
                   </Link>
                 )}
 
-                {/* Reports & exports — every entity, masked by default */}
-                {!impersonating && (
-                  <Link to="/reports"
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors ${
-                      isActive('/reports') ? 'bg-blue-100 text-blue-700 font-medium' : 'text-gray-600 hover:bg-gray-100'
-                    }`}>
-                    <BarChart3 className="h-4 w-4" /><span>Reports</span>
-                  </Link>
-                )}
-
                 {user?.is_admin && (
                   <Link to="/admin"
                     className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors ${
@@ -385,12 +374,6 @@ const Layout = () => {
               <Link to="/my-approvals" onClick={() => setMobileMenuOpen(false)}
                 className={`flex items-center gap-3 px-4 py-2.5 rounded-lg ${isActive('/my-approvals') ? 'bg-blue-100 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-100'}`}>
                 <CheckCheck className="h-5 w-5" /><span>My Approvals</span>
-              </Link>
-            )}
-            {!impersonating && (
-              <Link to="/reports" onClick={() => setMobileMenuOpen(false)}
-                className={`flex items-center gap-3 px-4 py-2.5 rounded-lg ${isActive('/reports') ? 'bg-blue-100 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-100'}`}>
-                <BarChart3 className="h-5 w-5" /><span>Reports</span>
               </Link>
             )}
             {!impersonating && (
