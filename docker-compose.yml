@@ -32,6 +32,10 @@ services:
       context: ./docker/postgres
       dockerfile: Dockerfile.fix
     container_name: scan-app-collation-fix
+    # CRITICAL: replace the official postgres entrypoint with the fix script —
+    # without this the container just boots a plain postgres server and the
+    # one-shot never runs (the compose up hangs on the dependency forever).
+    entrypoint: ["/usr/local/bin/collation_fix.sh"]
     user: "0:0"  # root — script gosu's to postgres; also chowns the volume
     restart: "no"
     volumes:

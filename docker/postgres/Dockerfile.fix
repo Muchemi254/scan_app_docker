@@ -7,3 +7,7 @@ FROM postgres:16
 
 COPY collation_fix.sh /usr/local/bin/collation_fix.sh
 RUN chmod +x /usr/local/bin/collation_fix.sh
+
+# Replace the official postgres entrypoint — this image exists ONLY to run the
+# one-shot script, never to boot a server.
+ENTRYPOINT ["/usr/local/bin/collation_fix.sh"]
