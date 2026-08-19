@@ -16,7 +16,7 @@ async function apiRequest<T>(method: string, endpoint: string, data?: any): Prom
   const response = await fetch(url, options);
   if (!response.ok) {
     let detail = `API error: ${response.status}`;
-    try { const err = await response.json(); detail = err.detail || detail; } catch {}
+    try { const err = await response.json(); detail = err.detail || detail; } catch { /* non-JSON error body */ }
     throw new Error(detail);
   }
   if (response.status === 204) return undefined as any;
@@ -79,7 +79,7 @@ export const reviewBatchApi = {
 
     if (!response.ok) {
       let detail = `Upload failed: ${response.status}`;
-      try { const err = await response.json(); detail = err.detail || detail; } catch {}
+      try { const err = await response.json(); detail = err.detail || detail; } catch { /* non-JSON error body */ }
       throw new Error(detail);
     }
     return response.json();
@@ -131,6 +131,7 @@ export const reviewBatchApi = {
       date_from?: string;
       date_to?: string;
       pivotConfig?: { rowField: string; colField: string; valueField: string };
+      columns?: string[];
     },
   ): Promise<void> {
     const authorization = await getAuthHeader();
@@ -148,7 +149,7 @@ export const reviewBatchApi = {
 
     if (!response.ok) {
       let detail = `Export failed: ${response.status}`;
-      try { const err = await response.json(); detail = err.detail || detail; } catch {}
+      try { const err = await response.json(); detail = err.detail || detail; } catch { /* non-JSON error body */ }
       throw new Error(detail);
     }
 

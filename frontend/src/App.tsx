@@ -1,4 +1,4 @@
-import { useEffect, useState, lazy, Suspense } from 'react';
+import { useEffect, lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from './stores/authStore';
 import { useScopeStore } from './stores/scopeStore';
@@ -30,7 +30,6 @@ const ApprovalsPage = lazy(() => import('./pages/ApprovalsPage'));
 const MyApprovalsPage = lazy(() => import('./pages/MyApprovalsPage'));
 
 import Layout from './components/Layout';
-import { ScannerProvider } from './contexts/ScannerContext';
 import { ToastContainer } from './components/ToastContainer';
 import PrivateRoute from './contexts/PrivateRoute';
 
@@ -76,7 +75,7 @@ const AppContent = () => {
   return (
     <QueryClientProvider client={queryClient}>
       <ApiConfigProvider>
-        <TaskProvider userId={userId}>
+        <TaskProvider userId={userId ?? undefined}>
           <ErrorBoundary>
             <Suspense fallback={<PageLoader />}>
               {/* Global toast notifications (top-right) */}

@@ -60,17 +60,14 @@ const ReviewBatchDetailPage = ({ userId }: { userId: string | null }) => {
 
   // Search
   const [searchResults, setSearchResults] = useState<any[] | null>(null);
-  const [searchTotal, setSearchTotal] = useState(0);
 
-  const onSearchResults = (results: any[], total: number) => {
+  const onSearchResults = (results: any[], _total: number) => {
     setSearchResults(results);
-    setSearchTotal(total);
     setPage(1);
   };
 
   const onSearchClear = () => {
     setSearchResults(null);
-    setSearchTotal(0);
     setPage(1);
   };
 

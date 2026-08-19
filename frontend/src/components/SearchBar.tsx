@@ -24,7 +24,7 @@ const SearchBar = ({
   const [inputValue, setInputValue] = useState('');
   const [isSearching, setIsSearching] = useState(false);
   const [total, setTotal] = useState(0);
-  const searchTimer = useRef<ReturnType<typeof setTimeout>>();
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const q = e.target.value;

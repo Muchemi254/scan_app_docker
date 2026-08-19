@@ -55,7 +55,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  delete globalThis.localStorage;
+  delete (globalThis as any).localStorage;
 });
 
 describe('auth service', () => {

@@ -4,8 +4,8 @@ import { useAuthStore } from '../stores/authStore';
 import { useScopeStore } from '../stores/scopeStore';
 import { adminListUsers } from '../services/auth';
 import {
-  Home, Camera, FileText, ClipboardCheck, Download,
-  LogOut, Menu, X, ChevronDown, User, Settings,
+  Home, Camera, FileText, ClipboardCheck,
+  LogOut, Menu, X, ChevronDown, Settings,
   Images, Sparkles, Search, ListChecks, Bell,
   Shield, PlusCircle, CheckCheck, Users, MessageCircle,
 } from 'lucide-react';

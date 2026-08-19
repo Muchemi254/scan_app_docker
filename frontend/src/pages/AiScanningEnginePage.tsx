@@ -9,6 +9,7 @@ interface AIModel {
   provider: string;
   description: string;
   caveat?: string;
+  supports_thinking?: boolean;
 }
 
 interface ProviderConfig {

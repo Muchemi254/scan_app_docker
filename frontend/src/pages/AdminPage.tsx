@@ -13,7 +13,7 @@ import {
   type AdminAIProvider,
   type AuthUser,
 } from '../services/auth';
-import { opsApi, type OpProgress } from '../services/opsApi';
+import { opsApi } from '../services/opsApi';
 import { settingsApi, locationsApi } from '../services/api';
 import {
   ShieldAlert, Plus, Trash2, RefreshCw, User as UserIcon, Globe, X, Key,
@@ -238,19 +238,6 @@ const AdminPage = ({ userId }: Props) => {
     }
   };
 
-  // Admin-only guard
-  if (!currentUser?.is_admin) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4 py-8">
-        <div className="text-center space-y-3 max-w-md bg-white p-8 rounded-xl shadow">
-          <ShieldAlert className="h-10 w-10 text-red-500 mx-auto" />
-          <h2 className="text-xl font-semibold text-gray-800">Access Denied</h2>
-          <p className="text-sm text-gray-500">You need administrator privileges to view this page.</p>
-        </div>
-      </div>
-    );
-  }
-
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     setCreating(true);
@@ -381,6 +368,19 @@ const AdminPage = ({ userId }: Props) => {
   useEffect(() => {
     if (activeTab === 'backups') loadBackupLimits();
   }, [activeTab, loadBackupLimits]);
+
+  // Admin-only guard (after hooks: must not sit between hook calls)
+  if (!currentUser?.is_admin) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4 py-8">
+        <div className="text-center space-y-3 max-w-md bg-white p-8 rounded-xl shadow">
+          <ShieldAlert className="h-10 w-10 text-red-500 mx-auto" />
+          <h2 className="text-xl font-semibold text-gray-800">Access Denied</h2>
+          <p className="text-sm text-gray-500">You need administrator privileges to view this page.</p>
+        </div>
+      </div>
+    );
+  }
 
   const saveBackupLimits = async () => {
     const gb = Number(backupLimitGB);

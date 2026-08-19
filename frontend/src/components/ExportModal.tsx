@@ -94,7 +94,7 @@ const ExportModal = ({ receipts, onClose, fileName = 'filtered_receipts' }: Expo
         <div className="flex gap-4">
           <button
             onClick={() => {
-              exportToExcel(rows, `${fileName}.xlsx`);
+              exportToExcel(rows, 'detailed', { title: fileName, pivotConfig: undefined });
               onClose();
             }}
             className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
@@ -103,7 +103,7 @@ const ExportModal = ({ receipts, onClose, fileName = 'filtered_receipts' }: Expo
           </button>
           <button
             onClick={() => {
-              exportToPDF(rows, `${fileName}.pdf`);
+              exportToPDF(rows, 'detailed', { title: fileName, pivotConfig: undefined });
               onClose();
             }}
             className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"

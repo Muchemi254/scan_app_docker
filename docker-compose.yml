@@ -18,22 +18,42 @@ services:
       - data-network
 
   # ========================================================================
-  # PostgreSQL — primary database
+  # PostgreSQL — primary database (rebuilt with Wal-G for WAL archiving)
   # ========================================================================
   postgres:
-    image: postgres:16-alpine
+    build:
+      context: .
+      dockerfile: docker/postgres/Dockerfile
+    image: scan-app-postgres-walg:16
     container_name: scan-app-postgres
     ports:
       # Localhost only — never publish the DB to the LAN. Backend/worker reach
       # it over data-network; host tools can use 127.0.0.1:5432.
       - "127.0.0.1:5432:5432"
     restart: unless-stopped
+    # Continuous WAL archiving to the encrypted backup store (§ system backups).
+    command:
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_command=wal-g wal-push %p
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - backup_data:/backups
     environment:
       POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set in .env}
       POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set in .env}
       POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
-    volumes:
-      - pgdata:/var/lib/postgresql/data
+      # Byte-order collation, matching the semantics the app was built and
+      # tested against (musl treated en_US.utf8 as C). glibc's real
+      # en_US.UTF-8 sorts lowercase-first and would silently break text
+      # comparisons (e.g. the conversations pair-order check).
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+      # Wal-G store + encryption (shared with the backup sidecar)
+      WALG_FILE_PREFIX: /backups/system_backups/wal
+      WALG_LIBSODIUM_KEY_PATH: /backups/system_backups/keys/.backup_key
+      WALG_COMPRESSION_METHOD: zstd
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
       interval: 5s
@@ -175,6 +195,48 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  # ========================================================================
+  # System Backup sidecar — Wal-G (PITR) + nightly encrypted pg_dump + images
+  # ========================================================================
+  backup:
+    build:
+      context: ./backup
+    image: scan-app-backup:latest
+    container_name: scan-app-backup
+    restart: unless-stopped
+    volumes:
+      - backup_data:/backups
+      - pgdata:/var/lib/postgresql/data:ro
+      - image_data:/system-raw/images:ro
+      - review_batch_data:/system-raw/review_batch:ro
+    environment:
+      # Postgres connection (superuser, for pg_dump/verify)
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${DB_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+      # Wal-G store + encryption (same key file as the postgres archive path)
+      WALG_FILE_PREFIX: /backups/system_backups/wal
+      WALG_LIBSODIUM_KEY_PATH: /backups/system_backups/keys/.backup_key
+      WALG_COMPRESSION_METHOD: zstd
+      # Retention
+      BACKUP_RETAIN_FULL: ${BACKUP_RETAIN_FULL:-7}
+      BACKUP_RETAIN_DUMPS: ${BACKUP_RETAIN_DUMPS:-14}
+      # Schedules (UTC); one full job covers DB + images in a single process
+      CRON_FULL: ${BACKUP_CRON_FULL:-0 2 * * *}
+      CRON_VERIFY: ${BACKUP_CRON_VERIFY:-0 4 * * 0}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - data-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   # ========================================================================
   # React Frontend + Nginx

@@ -6,7 +6,7 @@
  * All AI-powered receipt extraction is done server-side.
  */
 
-interface ApiConfigStatus {
+export interface ApiConfigStatus {
   allValid: boolean;
 }
 

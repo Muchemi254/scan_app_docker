@@ -158,8 +158,6 @@ const BatchPanel = ({
   const reviewCount = batch.items.filter(i => i.status === 'needs_review').length;
   const failedCount = batch.items.filter(i => i.status === 'failed').length;
   const duplicateCount = batch.items.filter(i => i.status === 'duplicate').length;
-  const optimizingCount = batch.items.filter(i => i.status === 'optimizing').length;
-  const processingCount = batch.items.filter(i => i.status === 'processing').length;
   const totalCount = batch.items.length;
   const finishedCount = doneCount + reviewCount + failedCount + duplicateCount;
   const isLive = batch.status === 'uploading' || batch.status === 'processing';

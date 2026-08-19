@@ -1,7 +1,7 @@
 // src/pages/ViewScansPage.tsx
 import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Hash, Calendar, Clock, Filter, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Hash, Calendar, Clock, X } from 'lucide-react';
 import { useReceiptStore } from '../stores/receiptStore';
 import { useAuthStore } from '../stores/authStore';
 import { receiptApi } from '../services/api';
@@ -59,7 +59,7 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
       const r = await receiptApi.search(searchQuery.trim(), PAGE_SIZE, offset);
       setSearchResults(r.results || []);
       setSearchTotal(r.total || 0);
-    } catch (_) {}
+    } catch (_) { /* search failure: fall back to local receipts */ }
   };
 
   const [filters, setFilters] = useState({
@@ -110,7 +110,7 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
       return searchResults.sort((a: any, b: any) => (b._search_rank || 0) - (a._search_rank || 0));
     }
 
-    let result = (receipts as ReceiptData[]).filter(r => {
+    const result = (receipts as ReceiptData[]).filter(r => {
       const batchMatch = batchParam ? (r.batchTitle || '').trim() === batchParam : true;
       const categoryMatch = filters.category ? r.category === filters.category : true;
       const supplierMatch = filters.supplier ? r.supplier === filters.supplier : true;
@@ -158,7 +158,6 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
   const clampedPage  = Math.min(page, totalPages);
   const pageReceipts = filteredReceipts.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);
   const selected     = filteredReceipts.find(r => r.id === selectedId);
-  const displayReceipts = searchResults !== null ? searchResults : filteredReceipts;
 
   if (loading && receipts.length === 0) {
     return (

@@ -1,5 +1,5 @@
 // src/services/gemini.ts
-import type { ResponseSchema, ReceiptData, GeminiResponse, ReceiptItem } from '../types/gemini';
+import type { ResponseSchema, ReceiptData, GeminiResponse } from '../types/gemini';
 import { handleApiError, getUserMessage } from './apiErrorHandler';
 
 // Pricing for Gemini models (per 1M tokens)
@@ -91,6 +91,7 @@ const parseGeminiResponse = (text: string): ReceiptData => {
     }
     
     return {
+      id: parsed.id || '',
       supplier: parsed.supplier,
       totalAmount: sanitizePrice(parsed.totalAmount),
       taxAmount: sanitizePrice(parsed.taxAmount),

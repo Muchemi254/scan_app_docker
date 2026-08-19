@@ -83,9 +83,45 @@ The suite requires `AUTH_MODE=local` and a writable test DB; `conftest.py` force
 
 Manual testing via Swagger UI (`/docs`) and curl. Frontend testing via browser DevTools.
 
+## System Backups (Wal-G + pg_dump + images)
+
+Whole-cluster backups run automatically from the `backup` sidecar (build `./backup`,
+cron inside). See `ops/restore/README.md` for the full runbook.
+
+```bash
+docker compose logs -f backup                 # job logs + schedule
+docker compose exec backup /opt/backup/full.sh          # manual: ONE process = Wal-G base + pg_dump + images tarball + combined manifest + retention (reports COMPLETE only when both DB and images succeeded)
+docker compose exec backup /opt/backup/images.sh        # manual: images-only ad-hoc archive
+docker compose exec backup /opt/backup/verify.sh        # weekly: restore dump to scratch DB + decrypt/integrity-check images archive
+docker compose exec backup wal-g backup-list            # base backups in store
+ops/restore/restore.sh --latest               # full restore to scratch container + PITR with --time
+```
+
+- Store: `backup_data` volume → `system_backups/{wal,dumps,images,keys,manifests}`,
+  **encrypted** (Wal-G/libo sodium + GPG-AES256 for dumps AND images; key
+  auto-generated on first sidecar boot, never in git/env).
+- The nightly `full.sh` job is a single process covering the whole system: a
+  full backup only reports COMPLETE when DB (wal-g base + pg_dump) AND images
+  (encrypted tarball) both succeeded; one combined manifest per run pairs them.
+- Postgres runs the custom `scan-app-postgres-walg:16` image (Debian `postgres:16`,
+  not -alpine — the Wal-G release binary is glibc) with `archive_mode=on` +
+  `archive_command=wal-g wal-push %p` → PITR with ~seconds RPO.
+- Wal-G physical backup is **local-mode**: `wal-g backup-push /var/lib/postgresql/data`
+  (pgdata mounted `:ro` into the backup container) — remote backup-push is broken on
+  PG ≥ 15.
+- Manifests record `alembic_version`; restore compares against repo head (forward
+  migrations safe, rollback blocked).
+- Retention: `BACKUP_RETAIN_FULL` (default 7) Wal-G bases, `BACKUP_RETAIN_DUMPS`
+  (default 14) dumps+images+manifests.
+
 ## Gotchas
 
-- `npm run build` is the typecheck command (runs `tsc && vite build`)
+- `npm run build` is the typecheck command (runs `tsc && vite build`); note `tsc`
+  alone is a no-op on the solution-style tsconfig — real checks are `npx tsc -b`
+  and `npx eslint src` (flat config `eslint.config.js`, ESLint 9)
+- Postgres uses `C.UTF-8` collation (byte-order). Do NOT initdb with en_US.UTF-8:
+  glibc sorts lowercase-first and silently breaks text comparisons (e.g. the
+  `conversations.chk_pair_ordered` check) that were built/tested under byte order
 - Backend tests are pytest (in-container), not jest — see Testing above
 - Scan sessions are durable in Postgres — a `prepared` session survives restarts and is dispatched manually; Redis is only the Celery broker and non-scan caches (ephemeral)
 - Frontend `VITE_*` vars are build-time only; changing `.env` requires rebuild

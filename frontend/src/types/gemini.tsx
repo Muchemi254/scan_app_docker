@@ -14,6 +14,11 @@ export interface PropertySchema {
   type: string;
   description?: string;
   format?: string;
+  items?: {
+    type: string;
+    properties?: Record<string, PropertySchema>;
+    propertyOrdering?: string[];
+  };
 }
 
 export interface ReceiptData {

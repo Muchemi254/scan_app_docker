@@ -387,7 +387,7 @@ const MyApprovalsPage = () => {
               {/* Guard rails: isAdmin=false hides Approve/Reject; approved
                   receipts are read-only via ReviewPanel itself. */}
               <ReviewPanel
-                userId={effectiveUid}
+                userId={effectiveUid || ''}
                 receipt={viewTarget}
                 setIsEditing={() => {}}
                 isAdmin={false}

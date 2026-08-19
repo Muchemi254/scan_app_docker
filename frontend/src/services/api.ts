@@ -68,7 +68,7 @@ async function apiRequest<T>(
     try {
       const error = await response.json();
       detail = error.detail || detail;
-    } catch {}
+    } catch { /* non-JSON error body */ }
     throw new Error(detail);
   }
 
@@ -112,7 +112,7 @@ async function apiGlobalRequest<T>(
     try {
       const error = await response.json();
       detail = error.detail || detail;
-    } catch {}
+    } catch { /* non-JSON error body */ }
     throw new Error(detail);
   }
 
@@ -164,7 +164,7 @@ async function apiUpload<T>(
     try {
       const error = await response.json();
       detail = error.detail || detail;
-    } catch {}
+    } catch { /* non-JSON error body */ }
     throw new Error(detail);
   }
 
@@ -212,7 +212,7 @@ export const receiptApi = {
       try {
         const error = await response.json();
         detail = error.detail || detail;
-      } catch {}
+      } catch { /* non-JSON error body */ }
       throw new Error(detail);
     }
 
@@ -344,7 +344,7 @@ export const receiptApi = {
     });
     if (!response.ok) {
       let detail = `API error: ${response.status}`;
-      try { const error = await response.json(); detail = error.detail || detail; } catch {}
+      try { const error = await response.json(); detail = error.detail || detail; } catch { /* non-JSON error body */ }
       throw new Error(detail);
     }
     return response.json();
@@ -490,7 +490,7 @@ export const batchApi = {
           try {
             const error = JSON.parse(xhr.responseText);
             detail = error.detail || detail;
-          } catch {}
+          } catch { /* non-JSON error body */ }
           reject(new Error(detail));
         }
       };
@@ -775,7 +775,7 @@ export const exportApi = {
 
     if (!response.ok) {
       let detail = `Export failed: ${response.status}`;
-      try { const err = await response.json(); detail = err.detail || detail; } catch {}
+      try { const err = await response.json(); detail = err.detail || detail; } catch { /* non-JSON error body */ }
       throw new Error(detail);
     }
 
@@ -812,6 +812,7 @@ export const dashboardApi = {
     tax_total: number;
     largest_receipt: number | null;
     avg_items_per_receipt: number;
+    batch_titles: string[];
     date_range_start: string | null;
     date_range_end: string | null;
   }> {

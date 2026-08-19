@@ -94,7 +94,6 @@ class GeminiCacheManager {
 
   getCostReduction() {
     if (this.stats.totalRequests === 0) return 0;
-    const cacheHitRate = (this.stats.cachedRequests / this.stats.totalRequests) * 100;
     const costWithoutCache = (this.stats.inputTokens + this.stats.cachedTokens) * 0.075 / 1_000_000;
     const costWithCache = (this.stats.inputTokens * 0.075 + this.stats.cachedTokens * 0.0225) / 1_000_000;
     return ((costWithoutCache - costWithCache) / costWithoutCache * 100).toFixed(1);

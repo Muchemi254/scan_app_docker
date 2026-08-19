@@ -42,6 +42,7 @@ export interface ImportResult {
     skipped: number;
     errors: number;
     remapped?: number;
+    audit_logs?: number;
   };
 }
 

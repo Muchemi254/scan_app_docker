@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { cleaningApi, receiptApi } from '../services/api';
+import { cleaningApi } from '../services/api';
 import { Sparkles, Merge, GitBranch, Copy, Trash2, CheckCircle, Loader2, AlertTriangle, Search, X, ChevronDown, ChevronRight, Image, Scale, ExternalLink } from 'lucide-react';
 import ImageViewer from '../components/ImageViewer';
 

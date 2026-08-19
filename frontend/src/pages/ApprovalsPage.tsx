@@ -24,7 +24,6 @@ const ApprovalsPage = () => {
   const isAdmin = !!user?.is_admin;
 
   const [items, setItems] = useState<any[]>([]);
-  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
 
   // Search (reuses the indexed search) + client-side filters
@@ -42,9 +41,8 @@ const ApprovalsPage = () => {
 
   const load = useCallback(async () => {
     try {
-      const data = await receiptApi.listPendingApproval();
+      const data: any = await receiptApi.listPendingApproval();
       setItems(data.items || []);
-      setTotal(data.total || 0);
     } catch (e: any) {
       console.error('Failed to load approvals', e);
     } finally {

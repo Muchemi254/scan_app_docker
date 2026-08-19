@@ -16,7 +16,7 @@ import {
 import { toast } from '../stores/toastStore';
 import {
   Bell, CheckCheck, Inbox, ListChecks, Trash2,
-  CircleAlert, CircleX, CircleCheck, Info,
+  CircleAlert, CircleX, Info,
 } from 'lucide-react';
 
 const CODE_ICONS: Record<string, typeof CircleAlert> = {

@@ -8,7 +8,7 @@ interface AuditEntry {
   action: string;
   changed_by: string;
   timestamp: string;
-  changes: { field: string; old_value: any; new_value: any }[];
+  changes: { field: string; old_value: any; new_value: any; action?: string }[];
 }
 
 const AuditTrail = ({ receiptId, ownerUid }: { receiptId: string; ownerUid?: string }) => {

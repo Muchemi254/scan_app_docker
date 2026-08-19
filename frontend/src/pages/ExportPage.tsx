@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { receiptApi, exportApi } from '../services/api';
 import { useReceiptStore } from '../stores/receiptStore';
 import { exportReport, exportMultiSheetExcel, defaultPivotConfig, type ReportType, type ExportFormat, type PivotConfig } from '../services/export';
-import { FileSpreadsheet, FileText, FileDown, BarChart3, TrendingUp, Building2, Receipt, Percent, Loader2, AlertCircle, Table2, Server, Download } from 'lucide-react';
+import { FileSpreadsheet, FileText, FileDown, BarChart3, TrendingUp, Building2, Receipt, Percent, Loader2, Table2, Server } from 'lucide-react';
 
 interface ExportPageProps {
   userId: string | null;
@@ -37,7 +37,7 @@ const FORMATS: { value: ExportFormat; label: string; icon: any }[] = [
 ];
 
 const ExportPage = ({ userId, customReceipts, onClose }: ExportPageProps) => {
-  const { items: cachedReceipts, loading: storeLoading, load } = useReceiptStore();
+  const { items: cachedReceipts, load } = useReceiptStore();
   const [reportType, setReportType] = useState<ReportType>('detailed');
   const [format, setFormat] = useState<ExportFormat>('xlsx');
   const [dateRange, setDateRange] = useState({ start: '', end: '' });
@@ -118,13 +118,13 @@ const ExportPage = ({ userId, customReceipts, onClose }: ExportPageProps) => {
     }
   };
 
-  const activeIcon = REPORT_TYPES.find(t => t.value === reportType)?.icon;
+  const ActiveIcon = REPORT_TYPES.find(t => t.value === reportType)?.icon;
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-6">
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
-          {activeIcon && <activeIcon className="h-7 w-7 text-blue-600" />}
+          {ActiveIcon && <ActiveIcon className="h-7 w-7 text-blue-600" />}
           <h1 className="text-2xl font-bold text-gray-900">Export & Reports</h1>
         </div>
         {onClose && (
@@ -379,6 +379,8 @@ function reportTitle(type: ReportType): string {
     supplier: 'Spending by Supplier',
     monthly: 'Monthly Spending Trend',
     tax: 'Tax Summary Report',
+    pivot: 'Pivot Report',
+    receipts: 'Receipts Report',
   };
   return titles[type];
 }

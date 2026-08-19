@@ -7,7 +7,7 @@ import AuditTrail from './AuditTrail';
 import type { ReceiptData } from '../types/gemini';
 import ImageViewer from './ImageViewer';
 import { parseCurrencyToNumber } from '../utils/helpers';
-import { receiptStatusLabel, receiptStatusClass } from '../utils/receiptStatus';
+import { receiptStatusLabel } from '../utils/receiptStatus';
 
 /* Shared read-only summary of a receipt (used by the main panel and the
    approve modal so both always show identical data). */
@@ -39,7 +39,7 @@ const ReceiptSummary = ({ data, showImage = true }: { data: ReceiptData; showIma
         ['Category', data.category],
         ['Location', data.location],
         ...(data.taxRate != null && data.taxRate !== ''
-          ? ([['Tax Rate', `${data.taxRate}%`]] as [string, string])
+          ? ([['Tax Rate', `${data.taxRate}%`]] as [string, string][])
           : []),
         ['Status', receiptStatusLabel(data.status)],
         ['Invoice #', data.invoiceNumber],
@@ -174,17 +174,6 @@ const ReviewPanel = ({
   useEffect(() => {
     setIsEditing(editing);
   }, [editing, setIsEditing]);
-
-  const handleSelectRequest = (newId: string) => {
-    if (editing) {
-      setPendingId(newId);
-      setShowUnsavedModal(true);
-    } else {
-      // Logic for changing receipt - this depends on parent container's state handling
-      // For now, simple console log as parent needs to know
-      console.log('Change to:', newId);
-    }
-  };
 
   const confirmDiscard = () => {
     if (pendingId) {
@@ -394,7 +383,7 @@ const ReviewPanel = ({
                       </div>
                       <div className="p-2 flex-1">
                         <ImageViewer
-                          imageUrl={approveDraftImage ? URL.createObjectURL(approveDraftImage) : approveDraft.imageUrl}
+                          imageUrl={approveDraftImage ? URL.createObjectURL(approveDraftImage) : (approveDraft.imageUrl || '')}
                           altText="Receipt"
                           containerClass="h-40 sm:h-56 lg:h-full lg:min-h-[50vh]"
                         />

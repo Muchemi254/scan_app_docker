@@ -4,8 +4,9 @@
  * Allows graceful handling of missing API keys
  */
 
-import { createContext, useContext, ReactNode, useState, useEffect } from 'react';
-import { validateApiConfig, ApiConfigStatus } from '../services/apiConfig';
+import { createContext, useContext, useState, useEffect } from 'react';
+import type { ReactNode } from 'react';
+import { validateApiConfig, type ApiConfigStatus } from '../services/apiConfig';
 
 interface ApiConfigContextType {
   config: ApiConfigStatus | null;

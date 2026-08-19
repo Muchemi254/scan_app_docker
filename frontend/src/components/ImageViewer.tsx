@@ -31,8 +31,6 @@ const ImageViewer = ({
 
   const touchContainerRef = useRef<HTMLDivElement>(null);
 
-  if (!imageUrl) return null;
-
   // Route all images through the server-side Redis cache proxy.
   // First request: server fetches from Firebase → caches → returns.
   // After prefetch or second view: instant from Redis (no network call).
@@ -149,6 +147,8 @@ const ImageViewer = ({
   const imageTransform = `translate(${panX}px, ${panY}px) rotate(${rotation}deg) scale(${zoom})`;
   const cursorStyle = zoom > 1 ? (isDragging ? 'grabbing' : 'grab') : 'default';
   const zoomPct = Math.round(zoom * 100);
+
+  if (!imageUrl) return null;
 
   return (
     <div className="relative">

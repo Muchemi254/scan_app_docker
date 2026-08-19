@@ -14,10 +14,10 @@ import AiScanningEnginePage from './AiScanningEnginePage';
 import { useIsImpersonating } from '../utils/scope';
 
 // Keep export page import for its report logic
-import { receiptApi, exportApi } from '../services/api';
+import { exportApi } from '../services/api';
 import { useReceiptStore } from '../stores/receiptStore';
 import { exportReport, exportMultiSheetExcel, defaultPivotConfig, type ReportType, type ExportFormat, type PivotConfig } from '../services/export';
-import { FileText, BarChart3, TrendingUp, Building2, Receipt, Percent, Table2 } from 'lucide-react';
+import { BarChart3, TrendingUp, Building2, Receipt, Percent, Table2 } from 'lucide-react';
 
 type Tab = 'ai' | 'export' | 'backup' | 'tax';
 
@@ -92,7 +92,7 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
   const [exportProgress, setExportProgress] = useState({ pct: 0, status: '' });
   const [importFile, setImportFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<BackupPreview | null>(null);
-  const [previewing, setPreviewing] = useState(false);
+  const [_previewing, setPreviewing] = useState(false);
   const [importing, setImporting] = useState(false);
   const [conflictMode, setConflictMode] = useState<string>('skip');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -262,7 +262,7 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
     try {
       const glob = await settingsApi.getGlobalTaxRate();
       setGlobalTax(String(glob.default_tax_rate));
-    } catch (e: any) { /* global is admin-only; ignore */ }
+    } catch (e: any) { /* tax setting is admin scoped; ignore */ }
   }, []);
 
   useEffect(() => { if (userId) loadTaxDefaults(); }, [userId, loadTaxDefaults]);
@@ -324,9 +324,12 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
 
   const handleFrontendExport = () => {
     if (multiSheet) {
-      exportMultiSheetExcel(storeReceipts);
+      exportMultiSheetExcel(storeReceipts, { title: 'Receipt Export' });
     } else {
-      exportReport(storeReceipts, reportType, exportFormat, pivotConfig, dateFrom, dateTo);
+      exportReport(storeReceipts, reportType, exportFormat, {
+        title: 'Receipt Export',
+        pivotConfig: reportType === 'pivot' ? pivotConfig : undefined,
+      });
     }
   };
 
@@ -414,7 +417,9 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
   };
 
   const toggleReceipt = (id: string) => setSelectedIds(prev => {
-    const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next;
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
   });
 
   const toggleAll = () => {
@@ -682,7 +687,7 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
                           checked={checked}
                           onChange={() => setSelectedColumns(prev => {
                             const next = new Set(prev);
-                            checked ? next.delete(f.key) : next.add(f.key);
+                            if (checked) next.delete(f.key); else next.add(f.key);
                             return next;
                           })}
                           className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600"

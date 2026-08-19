@@ -18,7 +18,6 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
 
   // Search
   const [searchResults, setSearchResults] = useState<any[] | null>(null);
-  const [searchTotal, setSearchTotal] = useState(0);
 
   const receipts = useMemo(() => {
     if (searchResults !== null) {
@@ -27,15 +26,13 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
     return allReceipts.filter(r => r.status === 'needs_review') as ReceiptData[];
   }, [allReceipts, searchResults]);
 
-  const onSearchResults = (results: any[], total: number) => {
+  const onSearchResults = (results: any[], _total: number) => {
     setSearchResults(results);
-    setSearchTotal(total);
     setPage(1);
   };
 
   const onSearchClear = () => {
     setSearchResults(null);
-    setSearchTotal(0);
     setPage(1);
   };
 

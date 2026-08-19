@@ -1,9 +1,10 @@
 import { Navigate } from 'react-router-dom';
+import type { ReactNode } from 'react';
 
 interface PrivateRouteProps {
   userId: string | null;
   authLoading?: boolean;
-  children: JSX.Element;
+  children: ReactNode;
 }
 
 const PrivateRoute = ({ userId, authLoading = false, children }: PrivateRouteProps) => {

@@ -90,7 +90,7 @@ async function api<T>(method: string, endpoint: string, data?: any): Promise<T> 
     try {
       const error = await response.json();
       detail = error.detail || detail;
-    } catch {}
+    } catch { /* non-JSON error body */ }
     throw new Error(detail);
   }
 

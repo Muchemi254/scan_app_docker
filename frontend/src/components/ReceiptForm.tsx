@@ -2,8 +2,7 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import Decimal from 'decimal.js';
 import { parseCurrencyToNumber } from '../utils/helpers';
 import { addTax, splitTax } from '../utils/taxCalc';
-
-const DEFAULT_TAX_RATE = 16;
+import type { ReceiptData } from '../types/gemini';
 
 const ReceiptForm = ({
   initialData,
@@ -22,7 +21,8 @@ const ReceiptForm = ({
   locations?: { id: string; name: string }[];
   defaultTaxRate?: number;
 }) => {
-  const [formData, setFormData] = useState(() => ({
+  const [formData, setFormData] = useState<ReceiptData>(() => ({
+    id: initialData?.id || '',
     supplier: initialData?.supplier || '',
     totalAmount: initialData?.totalAmount || '',
     taxAmount: initialData?.taxAmount || '',
@@ -111,6 +111,7 @@ const ReceiptForm = ({
   useEffect(() => {
     if (initialData) {
       setFormData({
+        id: initialData.id || '',
         supplier: initialData.supplier || '',
         totalAmount: initialData.totalAmount || '',
         taxAmount: initialData.taxAmount || '',
@@ -529,7 +530,7 @@ const ReceiptForm = ({
             min="0"
             max="100"
             step="0.01"
-            value={formData.taxRate}
+            value={formData.taxRate ?? ''}
             onChange={handleChange}
             className="w-full px-2 py-1 border rounded text-sm"
             placeholder={`${activeTaxRate}`}

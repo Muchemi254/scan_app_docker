@@ -2,7 +2,7 @@
  * Custom hook for managing task progress and persistence.
  */
 import { useEffect, useCallback, useRef } from 'react';
-import { useTaskStore } from '../stores/taskStore';
+import { useTaskStore, type TaskFile } from '../stores/taskStore';
 import { getToken, getUserId } from '../services/auth';
 
 interface UseTaskProgressOptions {
@@ -26,7 +26,7 @@ export const useTaskProgress = (options: UseTaskProgressOptions = {}) => {
   );
 
   const updateProgress = useCallback(
-    (index: number, total: number, message?: string) => {
+    (index: number, total: number, _message?: string) => {
       const percentage = Math.round(((index + 1) / total) * 100);
       taskStore.updateProgress(index, total, percentage);
       onProgressUpdate?.(percentage, index, total);
@@ -36,7 +36,7 @@ export const useTaskProgress = (options: UseTaskProgressOptions = {}) => {
 
   const updateFileStatus = useCallback(
     (index: number, status: 'pending' | 'optimizing' | 'processing' | 'done' | 'needs_review' | 'failed', message?: string, receiptId?: string) => {
-      taskStore.updateFileStatus(index, status, message, receiptId);
+      taskStore.updateFileStatus(index, status as TaskFile['status'], message, receiptId);
     },
     [taskStore]
   );
@@ -86,9 +86,10 @@ export const useTaskProgress = (options: UseTaskProgressOptions = {}) => {
         }
 
         if (task.results && typeof task.results === 'object') {
-          Object.entries(task.results).forEach(([key, value]) => {
+          Object.entries(task.results).forEach(([key, raw]) => {
             if (typeof key === 'string' && key.startsWith('item_')) {
               const idx = parseInt(key.replace('item_', ''), 10);
+              const value = raw as any;
               if (value === null || value === undefined) {
                 taskStore.updateFileStatus(idx, 'failed', 'AI extraction failed');
               } else if (value && value.status === 'needs_review') {

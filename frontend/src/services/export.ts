@@ -1,8 +1,8 @@
-import { utils, writeFile, type WorkBook, type WorkSheet } from 'xlsx';
+import { utils, writeFile, type WorkBook } from 'xlsx';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
-type ReportType = 'detailed' | 'category' | 'supplier' | 'monthly' | 'tax' | 'pivot';
+type ReportType = 'detailed' | 'category' | 'supplier' | 'monthly' | 'tax' | 'pivot' | 'receipts';
 type ExportFormat = 'xlsx' | 'pdf' | 'csv';
 
 export interface PivotConfig {
@@ -19,7 +19,7 @@ const NUMERIC_FIELDS = new Set(['Quantity', 'Price', 'Tax', 'Total', 'totalAmoun
 const DATE_FIELDS = new Set(['receiptDate']);
 
 function sanitizeNumeric(v: any): number {
-  const n = typeof v === 'string' ? parseFloat(v.replace(/[^0-9.\-]/g, '')) : Number(v);
+  const n = typeof v === 'string' ? parseFloat(v.replace(/[^0-9.-]/g, '')) : Number(v);
   return isNaN(n) ? 0 : n;
 }
 
@@ -244,6 +244,7 @@ function reportTitle(type: ReportType, cfg?: PivotConfig): string {
     monthly: 'Monthly Spending Trend',
     tax: 'Tax Summary Report',
     pivot: 'Pivot Table',
+    receipts: 'Receipts Report',
   };
   return titles[type];
 }
@@ -255,6 +256,7 @@ function reportData(type: ReportType, receipts: any[], cfg?: PivotConfig): any[]
     case 'supplier': return supplierSummary(receipts);
     case 'monthly': return monthlyTrend(receipts);
     case 'tax': return taxSummary(receipts);
+    case 'receipts': return detailedRows(receipts);
     case 'pivot': {
       if (!cfg) return [];
       const pivot = computePivot(receipts, cfg);
