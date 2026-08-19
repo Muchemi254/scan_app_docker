@@ -183,6 +183,15 @@ log "initdb'ing fresh cluster under C.UTF-8"
 as_pg env LANG=C.UTF-8 LC_ALL=C.UTF-8 LC_COLLATE=C.UTF-8 LC_CTYPE=C.UTF-8 \
   initdb -D "$PGDATA" -U "$PGUSER" -A "$PGAUTH" -E UTF8 "${PWARGS[@]}" >/dev/null
 
+# initdb only allows local + localhost TCP; the official entrypoint appends
+# host rules for remote containers right after initdb. Without this, backend/
+# worker containers cannot connect ("no pg_hba.conf entry ... no encryption").
+log "adding host auth rules to pg_hba.conf (mirrors the official entrypoint)"
+{
+  echo "host all all 0.0.0.0/0 $PGAUTH"
+  echo "host all all ::/0 $PGAUTH"
+} >> "$PGDATA/pg_hba.conf"
+
 start_server
 if [ "$(psql_db "SELECT 1 FROM pg_database WHERE datname='$PGDB'")" != "1" ]; then
   log "creating database '$PGDB'"
