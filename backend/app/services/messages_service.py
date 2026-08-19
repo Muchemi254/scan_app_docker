@@ -46,6 +46,17 @@ ALLOWED_KINDS = {
     "receipt_payment",
 }
 
+# System-generated bubbles (workflow events + scan-error mirrors). Not real
+# conversation — cleared together by the "Clear notifications" action.
+NOTIFICATION_KINDS = {
+    "receipt_submit",
+    "receipt_recall",
+    "receipt_approval",
+    "receipt_rejection",
+    "system",
+    "reject",  # legacy auto-rejection
+}
+
 
 def _ts(value) -> Optional[float]:
     if not value:
@@ -200,6 +211,42 @@ async def find_receipt_conversation(a: str, b: str) -> Optional[Dict[str, Any]]:
 _WORKFLOW_AUTO_KINDS = (
     "receipt_submit", "receipt_recall", "receipt_approval", "receipt_rejection",
 )
+
+
+async def clear_notifications(uid: str) -> int:
+    """Remove system-generated notification bubbles from a user's inbox.
+
+    Deletes every workflow / system message (kinds in NOTIFICATION_KINDS) in
+    conversations the user participates in, then drops conversations left
+    without any message. Real user <-> admin conversation messages (manual
+    sends and template kinds) are untouched. Returns how many messages were
+    removed.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            DELETE FROM messages
+            WHERE conversation_id IN (
+                SELECT id FROM conversations
+                WHERE user_a = $1 OR user_b = $1
+            )
+              AND kind = ANY($2)
+            RETURNING id
+            """,
+            uid, list(NOTIFICATION_KINDS),
+        )
+        await conn.execute(
+            """
+            DELETE FROM conversations c
+            WHERE (c.user_a = $1 OR c.user_b = $1)
+              AND NOT EXISTS (
+                  SELECT 1 FROM messages m WHERE m.conversation_id = c.id
+              )
+            """,
+            uid,
+        )
+    return len(rows)
 
 
 async def prune_receipt_auto_messages(

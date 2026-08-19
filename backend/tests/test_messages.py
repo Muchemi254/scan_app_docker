@@ -8,7 +8,9 @@ Covers:
     count, mark conversation read, mark individual messages read)
   - participant isolation: no cross-tenant leakage through the API
   - row-level security: raw SQL still cannot read another tenant's threads
-  - reject workflow auto-message (kind=reject, note + structured payload)
+  - rejection is the only workflow auto-message (kind=receipt_rejection,
+    note + structured payload); submit / recall / approve never message —
+    the approvals pages are the source of truth for those events
   - send validation: empty body, oversized body, self-message
   - peers endpoint scoping (user sees admins only; admin sees all users)
   - conversation policy: user locked to the first admin who messaged them,
@@ -492,9 +494,12 @@ async def test_user_messaging_toggle_controls_user_to_user(client):
     assert resp.json()["enabled"] is False
 
 
-# ── Workflow auto-messages (submit / recall / approve) ─────────────────────
+# ── Workflow events stay out of the inbox (only rejections message) ────────
 
-async def test_approve_sends_auto_message(client):
+async def test_approve_sends_no_inbox_message(client):
+    """Approving a receipt must never create an inbox message — processed
+    documents are visible on the approvals page, and one bubble per receipt
+    would flood the inbox (1000 receipts = 1000 messages)."""
     admin_headers = await _admin(client)
     alice = await _user(client, admin_headers, "alice@pytest.local")
     ah, _ = await _login(client, "alice@pytest.local")
@@ -508,17 +513,12 @@ async def test_approve_sends_auto_message(client):
     )
     assert r.status_code == 200, r.text
 
-    convs = await _conversations(ah)
-    assert len(convs) == 1
-    msgs = await _messages(ah, convs[0]["id"])
-    assert msgs[-1]["kind"] == "receipt_approval"
-    assert "approved" in msgs[-1]["body"].lower()
-    assert msgs[-1]["payload"]["receipt_id"] == rec["id"]
-    assert msgs[-1]["payload"]["status"] == "processed"
-    assert msgs[-1]["payload"]["total_amount"] is not None
+    assert await _conversations(ah) == []
 
 
-async def test_submit_notifies_locked_admin_only(client):
+async def test_submit_sends_no_inbox_notification(client):
+    """Submitting for approval creates no inbox message for anyone — the
+    admin approval center is the source of truth, not the inbox."""
     admin_headers = await _admin(client)
     admin_a = await _user(client, admin_headers, "boss@pytest.local", is_admin=True)
     admin_b = await _user(client, admin_headers, "carol@pytest.local", is_admin=True)
@@ -534,14 +534,9 @@ async def test_submit_notifies_locked_admin_only(client):
     r = await _transition(client, ah, uid, rec["id"], "submit")
     assert r.status_code == 200, r.text
 
-    # boss received the submit notification, carol did not
+    # the handshake conversation exists, but no receipt thread was created
     convs_boss = await _conversations(ah_a)
-    assert any(c["receipt_id"] == rec["id"] for c in convs_boss)
-    got = []
-    for c in convs_boss:
-        if c["receipt_id"] == rec["id"]:
-            got = await _messages(ah_a, c["id"])
-    assert any(m["kind"] == "receipt_submit" for m in got)
+    assert not any(c["receipt_id"] == rec["id"] for c in convs_boss)
     ah_b, _, _ = await login(client, "carol@pytest.local", "pass-123")
     convs_carol = await _conversations(ah_b)
     assert not any(c["receipt_id"] == rec["id"] for c in convs_carol)
@@ -559,7 +554,8 @@ async def test_submit_without_admin_contact_sends_nothing(client):
     assert await _conversations(ah) == []
 
 
-async def test_recall_sends_auto_message(client):
+async def test_recall_sends_no_inbox_message(client):
+    """Recalling a submission creates no inbox message for anyone."""
     admin_headers = await _admin(client)
     admin_a = await _user(client, admin_headers, "boss@pytest.local", is_admin=True)
     alice = await _user(client, admin_headers, "alice@pytest.local")
@@ -567,20 +563,60 @@ async def test_recall_sends_auto_message(client):
     ah_a, _ = await _login(client, "boss@pytest.local")
     uid = alice["uid"]
 
+    await _send(ah_a, alice["uid"], "hello from boss")
     rec = await _create(client, ah, uid)
     await _transition(client, ah, uid, rec["id"], "submit")
     r = await _transition(client, ah, uid, rec["id"], "recall")
     assert r.status_code == 200, r.text
 
-    # recall to the admin happens only when an admin contact is locked in
-    assert await _conversations(ah_a) == []
+    assert not any(c["receipt_id"] == rec["id"] for c in await _conversations(ah_a))
 
-    await _send(ah_a, alice["uid"], "hello from boss")
+
+async def test_clear_notifications_removes_bubbles_keeps_chat(client):
+    """POST /messages/clear-notifications strips workflow/system bubbles from
+    the caller's inbox while keeping real user<->admin conversation messages
+    (handshake + replies); threads left empty are removed."""
+    admin_headers, default_admin, _ = await login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+    alice = await _user(client, admin_headers, "alice@pytest.local")
+    ah, _ = await _login(client, "alice@pytest.local")
+    uid = alice["uid"]
+
+    # a real conversation: admin handshake, then a rejection bubble on the
+    # receipt thread, then the owner replying in the handshake thread
+    await _send(admin_headers, uid, "hello alice")
+    rec = await _create(client, ah, uid)
     await _transition(client, ah, uid, rec["id"], "submit")
-    r = await _transition(client, ah, uid, rec["id"], "recall")
+    r = await _transition(
+        client, admin_headers, uid, rec["id"], "reject", note="Fix the tax rate"
+    )
     assert r.status_code == 200, r.text
-    convs = await _conversations(ah_a)
-    assert any(c["receipt_id"] == rec["id"] for c in convs)
+    await _send(ah, default_admin["uid"], "ok, fixing")
+
+    convs = await _conversations(ah)
+    assert len(convs) == 2  # handshake pair + receipt thread
+    by_rec = {c["receipt_id"]: c for c in convs}
+    thread = by_rec[rec["id"]]
+    assert [m["kind"] for m in await _messages(ah, thread["id"])] == ["receipt_rejection"]
+
+    resp = await client.post(
+        "/api/v1/messages/clear-notifications", headers=ah
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["removed"] == 1  # only the rejection bubble
+
+    # the receipt thread is gone (left empty), the real chat survives
+    convs = await _conversations(ah)
+    assert len(convs) == 1
+    assert convs[0]["receipt_id"] is None
+    msgs = await _messages(ah, convs[0]["id"])
+    assert [m["body"] for m in msgs] == ["hello alice", "ok, fixing"]
+
+    # clearing an already-clean inbox removes nothing
+    resp = await client.post(
+        "/api/v1/messages/clear-notifications", headers=ah
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["removed"] == 0
 
 
 # ── Predefined templates ───────────────────────────────────────────────────
@@ -591,7 +627,6 @@ async def test_templates_catalog(client):
     assert resp.status_code == 200, resp.text
     templates = resp.json()["templates"]
     keys = {t["key"] for t in templates}
-    assert "approval_confirmed" in keys
     assert "rejection_reason" in keys
     assert "missing_info" in keys
     assert "payment_notice" in keys
@@ -638,16 +673,22 @@ async def test_send_template_renders_server_side(client):
 async def test_template_send_lands_on_receipt_thread_and_injects_receipt_id(client):
     """A template sent between a pair that already has a receipt conversation
     targets that thread and auto-fills the `receipt_id` system variable, so the
-    server-rendered body never leaks a raw {receipt_id} token."""
+    server-rendered body never leaks a raw {receipt_id} token.
+
+    The receipt thread is created by the rejection auto-message (the only
+    remaining workflow auto-message); submit alone no longer creates one."""
     admin_headers = await _admin(client)
     alice = await _user(client, admin_headers, "alice@pytest.local")
     ah, _ = await _login(client, "alice@pytest.local")
     uid = alice["uid"]
 
-    # lock-in + receipt thread
+    # lock-in + receipt thread (created by the rejection auto-message)
     await _send(admin_headers, uid, "hello")
     rec = await _create(client, ah, uid)
-    r = await _transition(client, ah, uid, rec["id"], "submit")
+    await _transition(client, ah, uid, rec["id"], "submit")
+    r = await _transition(
+        client, admin_headers, uid, rec["id"], "reject", note="Fix the tax rate"
+    )
     assert r.status_code == 200, r.text
 
     resp = await client.post(
@@ -695,9 +736,13 @@ async def test_scan_error_mirrors_into_receipt_thread(client):
     assert eid is not None
     assert await _conversations(ah) == []
 
-    # create the thread (lock-in + submit) -> mirror appears in it
+    # create the thread (lock-in + reject; submit alone no longer threads)
     await _send(admin_headers, uid, "hello")
     r = await _transition(client, ah, uid, rec["id"], "submit")
+    assert r.status_code == 200, r.text
+    r = await _transition(
+        client, admin_headers, uid, rec["id"], "reject", note="Fix the tax rate"
+    )
     assert r.status_code == 200, r.text
     eid = await log_error(
         uid, receipt_id=rec["id"], kind="batch", code="GEMINI_TIMEOUT",
@@ -722,9 +767,13 @@ async def test_delete_receipt_cleans_its_conversation(client):
     ah, _ = await _login(client, "alice@pytest.local")
     uid = alice["uid"]
 
+    # the receipt thread exists because of the rejection auto-message
     await _send(admin_headers, uid, "hello")
     rec = await _create(client, ah, uid)
     await _transition(client, ah, uid, rec["id"], "submit")
+    await _transition(
+        client, admin_headers, uid, rec["id"], "reject", note="Fix the tax rate"
+    )
     assert sum(1 for c in await _conversations(ah) if c["receipt_id"]) == 1
 
     resp = await client.delete(f"/api/v1/users/{uid}/receipts/{rec['id']}", headers=ah)
@@ -741,6 +790,9 @@ async def test_delete_user_cleans_their_conversations(client):
     await _send(admin_headers, uid, "handshake")
     rec = await _create(client, ah, uid)
     await _transition(client, ah, uid, rec["id"], "submit")
+    await _transition(
+        client, admin_headers, uid, rec["id"], "reject", note="Fix the tax rate"
+    )
     assert len(await _conversations(ah)) == 2
 
     resp = await client.delete(f"/api/v1/auth/admin/users/{uid}", headers=admin_headers)
@@ -781,11 +833,12 @@ async def test_pubsub_event_published_on_send(client):
         await pubsub.unsubscribe()
 
 
-# ── Workflow auto-message housekeeping (prune + dedupe) ─────────────────────
+# ── Workflow message housekeeping (prune + dedupe) ─────────────────────────
 
-async def test_resubmit_prunes_rejection_and_dedupes_submit(client):
-    """A resubmitted receipt clears its stale rejection from the chat, and
-    never gains a second submit bubble."""
+async def test_resubmit_prunes_rejection_marker(client):
+    """A resubmitted receipt clears its stale rejection from the chat — the
+    threaded conversation survives, the rejection bubble does not; submit
+    itself never adds a bubble."""
     admin_headers = await _admin(client)
     alice = await _user(client, admin_headers, "alice@pytest.local")
     ah, _ = await _login(client, "alice@pytest.local")
@@ -802,17 +855,17 @@ async def test_resubmit_prunes_rejection_and_dedupes_submit(client):
     convs = await _conversations(ah)
     conv = next(c for c in convs if c["receipt_id"] == rec["id"])
     msgs = await _messages(ah, conv["id"])
-    assert [m["kind"] for m in msgs] == ["receipt_submit", "receipt_rejection"]
+    assert [m["kind"] for m in msgs] == ["receipt_rejection"]
 
     r = await _transition(client, ah, uid, rec["id"], "submit")
     assert r.status_code == 200, r.text
     msgs = await _messages(ah, conv["id"])
-    assert [m["kind"] for m in msgs] == ["receipt_submit"]  # one, clean
+    assert msgs == []
 
 
-async def test_recall_prunes_submit_then_resubmit_restores(client):
-    """Recalling a submission clears its submit bubble; resubmitting clears
-    the recall bubble and restores one submit bubble."""
+async def test_submit_recall_resubmit_never_message(client):
+    """Submit, recall and resubmit create no inbox messages and no receipt
+    thread at all (the approvals pages are the source of truth)."""
     admin_headers = await _admin(client)
     alice = await _user(client, admin_headers, "alice@pytest.local")
     ah, _ = await _login(client, "alice@pytest.local")
@@ -821,16 +874,10 @@ async def test_recall_prunes_submit_then_resubmit_restores(client):
     await _send(admin_headers, uid, "hello")  # lock-in
     rec = await _create(client, ah, uid)
     await _transition(client, ah, uid, rec["id"], "submit")
-    r = await _transition(client, ah, uid, rec["id"], "recall")
-    assert r.status_code == 200, r.text
+    await _transition(client, ah, uid, rec["id"], "recall")
+    await _transition(client, ah, uid, rec["id"], "submit")
 
-    convs = await _conversations(ah)
-    conv = next(c for c in convs if c["receipt_id"] == rec["id"])
-    assert [m["kind"] for m in await _messages(ah, conv["id"])] == ["receipt_recall"]
-
-    r = await _transition(client, ah, uid, rec["id"], "submit")
-    assert r.status_code == 200, r.text
-    assert [m["kind"] for m in await _messages(ah, conv["id"])] == ["receipt_submit"]
+    assert not any(c["receipt_id"] == rec["id"] for c in await _conversations(ah))
 
 
 async def test_repeat_rejections_keep_single_rejection_message(client):
@@ -853,6 +900,5 @@ async def test_repeat_rejections_keep_single_rejection_message(client):
     conv = next(c for c in convs if c["receipt_id"] == rec["id"])
     msgs = await _messages(ah, conv["id"])
     kinds = [m["kind"] for m in msgs]
-    assert kinds.count("receipt_rejection") == 1
-    assert kinds.count("receipt_submit") == 1
+    assert kinds == ["receipt_rejection"]
     assert "Note two" in msgs[-1]["body"]

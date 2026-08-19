@@ -223,3 +223,18 @@ async def send_message(
         receipt_id=receipt_id,
     )
     return message
+
+
+@router.post("/clear-notifications")
+async def clear_notifications(
+    user_id: str = Depends(get_current_user_id),
+):
+    """Clear system-generated notification bubbles from my inbox.
+
+    Removes workflow / system auto-messages (submit / recall / approve /
+    reject / scan-error mirrors) from every conversation the caller
+    participates in, then drops conversations left empty. Real
+    user <-> admin messages are kept. Returns how many bubbles were removed.
+    """
+    removed = await messages_service.clear_notifications(user_id)
+    return {"removed": removed}

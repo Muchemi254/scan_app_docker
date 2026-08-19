@@ -159,7 +159,6 @@ async def submit(owner_uid: str, receipt_id: str, actor_uid: str) -> dict:
     )
     await _notify_workflow(
         actor_uid, owner_uid, receipt_id, updated, "receipt_submit",
-        submitted=True,
     )
     return updated
 
@@ -173,7 +172,6 @@ async def recall(owner_uid: str, receipt_id: str, actor_uid: str) -> dict:
     )
     await _notify_workflow(
         actor_uid, owner_uid, receipt_id, updated, "receipt_recall",
-        submitted=False,
     )
     return updated
 
@@ -209,7 +207,6 @@ async def approve(owner_uid: str, receipt_id: str, actor_uid: str) -> dict:
     )
     await _notify_workflow(
         actor_uid, owner_uid, receipt_id, updated, "receipt_approval",
-        submitted=True,
     )
     return updated
 
@@ -230,7 +227,7 @@ async def reject(
     )
     await _notify_workflow(
         actor_uid, owner_uid, receipt_id, updated, "receipt_rejection",
-        submitted=False, note=note,
+        note=note,
     )
     return updated
 
@@ -259,88 +256,53 @@ async def _notify_workflow(
     receipt: dict,
     kind: str,
     *,
-    submitted: bool,
     note: Optional[str] = None,
 ) -> None:
-    """Auto-message the workflow event (submit / recall / approve / reject).
+    """Handle workflow events in the message center.
 
-    Audience:
-    - reject / approve: always the admin → owner.
-    - submit / recall by the OWNER: the owner's single locked-in admin (if any
-      — with no admin contact there is no one to notify yet).
-    - submit / recall by an ADMIN: the admin → owner.
+    The inbox is reserved for crucial communication, so only a rejection
+    auto-messages anyone (admin → owner, with the reason). Submit / recall /
+    approve are visible on the approvals pages and must never flood the
+    inbox with one bubble per receipt.
 
-    Best-effort: a messaging failure must never undo a successful transition.
+    Housekeeping stays best-effort so a messaging failure can never undo a
+    successful transition:
 
-    The chat is kept clean by pruning (only-when-necessary) rules:
-    - resubmit clears stale rejections / recalls for the receipt,
-    - each transition kind appears at most once per receipt (dedupe), so
-      repeated events never pile up duplicate bubbles.
+    - resubmit / recall clear stale markers (a rejection is no longer true
+      once the receipt is resubmitted; the chat only shows current state),
+    - a repeat rejection keeps exactly one bubble (dedupe), so repeated
+      events never pile up.
     """
     try:
         from app.services import messages_service
 
-        # Stale markers to drop for this event, and the kind to dedupe on.
-        prune_kinds, dedupe_kind = {
-            "receipt_submit":    (["receipt_rejection", "receipt_recall"], "receipt_submit"),
-            "receipt_recall":    (["receipt_submit", "receipt_rejection"], "receipt_recall"),
-            "receipt_approval":  ([], "receipt_approval"),
-            "receipt_rejection": ([], "receipt_rejection"),
-        }[kind]
-        if prune_kinds:
-            await messages_service.prune_receipt_auto_messages(receipt_id, prune_kinds)
-        if await messages_service.receipt_thread_has_kinds(receipt_id, [dedupe_kind]):
-            return  # already notified for this state — nothing new to say
+        if kind != "receipt_rejection":
+            prune_kinds = {
+                "receipt_submit":   ["receipt_rejection", "receipt_recall"],
+                "receipt_recall":   ["receipt_rejection", "receipt_recall"],
+                "receipt_approval": [],
+            }[kind]
+            if prune_kinds:
+                await messages_service.prune_receipt_auto_messages(
+                    receipt_id, prune_kinds
+                )
+            return  # nothing is sent to the inbox for these events
 
-        supplier = receipt.get("supplier") or "receipt"
-        total = receipt.get("totalAmount") or receipt.get("total_amount")
-        total_txt = f"KES {total}" if total is not None else "KES 0.00"
+        if await messages_service.receipt_thread_has_kinds(receipt_id, ["receipt_rejection"]):
+            return  # already notified — never a second rejection bubble
 
-        if kind == "receipt_approval":
-            recipient = owner_uid
-            body = (
-                f"Your receipt from {supplier} ({total_txt}) was approved "
-                "and is now fully processed."
-            )
-        elif kind == "receipt_rejection":
-            recipient = owner_uid
-            body = (
-                "Your receipt was rejected. "
-                f"{note.strip()}  Please review the details and fix what's needed."
-                if note and note.strip()
-                else "Your receipt was rejected. Please review the details and resubmit when fixed."
-            )
-        else:
-            # submit / recall — the recipient depends on the actor.
-            if await _is_admin(actor_uid):
-                recipient = owner_uid
-                if kind == "receipt_submit":
-                    body = (
-                        f"Your receipt from {supplier} ({total_txt}) was "
-                        "submitted for approval."
-                    )
-                else:
-                    body = (
-                        f"Your receipt from {supplier} ({total_txt}) was recalled."
-                    )
-            else:
-                locked = await messages_service._locked_admin_for(owner_uid)
-                if not locked:
-                    return  # no admin contact yet — nothing to notify
-                recipient = locked
-                if kind == "receipt_submit":
-                    body = (
-                        f"Receipt from {supplier} ({total_txt}) was submitted "
-                        "for approval."
-                    )
-                else:
-                    body = f"Receipt from {supplier} ({total_txt}) was recalled."
+        body = (
+            "Your receipt was rejected. "
+            f"{note.strip()}  Please review the details and fix what's needed."
+            if note and note.strip()
+            else "Your receipt was rejected. Please review the details and resubmit when fixed."
+        )
 
         payload = _receipt_notify_payload(receipt_id, receipt)
         payload["note"] = note
         await messages_service.send_message(
             actor_uid,
-            recipient,
+            owner_uid,
             body,
             kind=kind,
             payload=payload,

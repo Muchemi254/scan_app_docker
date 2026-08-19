@@ -55,10 +55,12 @@ class DataService:
     async def list_receipts(
         cls, user_id: str, skip: int = 0, limit: int = 50,
         status: Optional[str] = None, category: Optional[str] = None,
-        batch_title: Optional[str] = None,
+        batch_title: Optional[str] = None, rejected: bool = False,
     ) -> tuple:
         db, _ = cls._backend()
-        return await db.list_receipts(user_id, skip, limit, status, category, batch_title)
+        return await db.list_receipts(
+            user_id, skip, limit, status, category, batch_title, rejected
+        )
 
     @classmethod
     async def update_receipt(cls, user_id: str, receipt_id: str, receipt_data: Dict[str, Any]) -> bool:

@@ -12,7 +12,7 @@ import ReviewPanel from '../components/ReviewPanel';
 import SearchBar from '../components/SearchBar';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 
-type Tab = 'pending' | 'approved';
+type Tab = 'pending' | 'approved' | 'rejected';
 
 /**
  * User-facing document pipeline page.
@@ -20,6 +20,8 @@ type Tab = 'pending' | 'approved';
  * - Pending Approval: receipts awaiting an admin decision (Recall → back to
  *   review for editing, or View).
  * - Approved: finalized receipts — read-only, cannot be re-edited.
+ * - Rejected: receipts the admin sent back with a reason (latest admin
+ *   decision was a rejection) — View to fix and resubmit.
  *
  * Receipts are grouped by batch, searchable through the existing indexed
  * search, and opened inline in a review modal guarded so no admin-only
@@ -37,6 +39,7 @@ const MyApprovalsPage = () => {
   const [tab, setTab] = useState<Tab>('pending');
   const [items, setItems] = useState<any[]>([]);
   const [approved, setApproved] = useState<any[]>([]);
+  const [rejected, setRejected] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -61,12 +64,14 @@ const MyApprovalsPage = () => {
     if (!effectiveUid) return;
     setLoading(true);
     try {
-      const [p, a] = await Promise.all([
+      const [p, a, r] = await Promise.all([
         receiptApi.list(0, 1000, { status: 'pending_approval' }),
         receiptApi.list(0, 1000, { status: 'processed' }),
+        receiptApi.list(0, 1000, { rejected: true }),
       ]);
       setItems(p.items || []);
       setApproved(a.items || []);
+      setRejected(r.items || []);
     } catch (e: any) {
       setError(e.message || 'Failed to load documents');
     } finally {
@@ -83,9 +88,9 @@ const MyApprovalsPage = () => {
   const deepLinkId = searchParams.get('receipt');
   useEffect(() => {
     if (!deepLinkId || viewTarget) return;
-    const found = [...items, ...approved].find(r => r.id === deepLinkId);
+    const found = [...items, ...approved, ...rejected].find(r => r.id === deepLinkId);
     if (found) setViewTarget(found);
-  }, [deepLinkId, items, approved, viewTarget]);
+  }, [deepLinkId, items, approved, rejected, viewTarget]);
 
   // Reset search when switching user scope (search is tenant-scoped)
   useEffect(() => {
@@ -103,7 +108,7 @@ const MyApprovalsPage = () => {
     setSearchTotal(0);
   };
 
-  const allLoaded = useMemo(() => [...items, ...approved], [items, approved]);
+  const allLoaded = useMemo(() => [...items, ...approved, ...rejected], [items, approved, rejected]);
   const uniqueCategories = useMemo(
     () => [...new Set(allLoaded.map((r: any) => r.category).filter(Boolean))].sort(),
     [allLoaded],
@@ -130,12 +135,20 @@ const MyApprovalsPage = () => {
 
   const listForTab = useMemo(() => {
     if (searchResults !== null) {
+      // Rejection is an audit-derived state, not a persisted status, so
+      // search results (which carry only the status) filter to the status
+      // rejected receipts share: needs_review.
+      const rejectedMatch = (r: any) => r.status === 'needs_review';
       return searchResults.filter((r: any) =>
-        tab === 'pending' ? r.status === 'pending_approval' : r.status === 'processed',
+        tab === 'pending' ? r.status === 'pending_approval'
+          : tab === 'approved' ? r.status === 'processed'
+            : rejectedMatch(r),
       );
     }
-    return applyFilters(tab === 'pending' ? items : approved);
-  }, [searchResults, tab, items, approved, applyFilters]);
+    return applyFilters(
+      tab === 'pending' ? items : tab === 'approved' ? approved : rejected,
+    );
+  }, [searchResults, tab, items, approved, rejected, applyFilters]);
 
   // Group by batch name (receipts without a batch land in "Unbatched")
   const groups = useMemo(() => {
@@ -193,6 +206,7 @@ const MyApprovalsPage = () => {
   const TABS: { key: Tab; label: string }[] = [
     { key: 'pending', label: `Pending Approval (${items.length})` },
     { key: 'approved', label: `Approved (${approved.length})` },
+    { key: 'rejected', label: `Rejected (${rejected.length})` },
   ];
 
   const clearAll = () => {
@@ -263,20 +277,24 @@ const MyApprovalsPage = () => {
         </div>
       ) : groups.length === 0 ? (
         <div className="bg-white rounded-lg shadow p-8 text-center">
-          <div className="text-5xl mb-4">{searchResults !== null ? '🔍' : tab === 'pending' ? '📨' : '✅'}</div>
+          <div className="text-5xl mb-4">{searchResults !== null ? '🔍' : tab === 'pending' ? '📨' : tab === 'approved' ? '✅' : '↩️'}</div>
           <h2 className="text-xl font-bold text-gray-800 mb-1">
             {searchResults !== null
               ? 'No matches'
               : tab === 'pending'
                 ? 'Nothing pending approval'
-                : 'No approved documents yet'}
+                : tab === 'approved'
+                  ? 'No approved documents yet'
+                  : 'No rejected documents'}
           </h2>
           <p className="text-gray-500 text-sm">
             {searchResults !== null
               ? 'Try a different search term.'
               : tab === 'pending'
                 ? 'Receipts you submit for approval will appear here.'
-                : 'Your approved receipts will be listed here.'}
+                : tab === 'approved'
+                  ? 'Your approved receipts will be listed here.'
+                  : 'Receipts the admin sent back will appear here.'}
           </p>
         </div>
       ) : (
@@ -318,9 +336,15 @@ const MyApprovalsPage = () => {
                         <span className="text-sm font-medium text-gray-700 whitespace-nowrap">
                           KES {Number(r.totalAmount ?? r.total_amount ?? 0).toLocaleString()}
                         </span>
-                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium flex-shrink-0 ${receiptStatusClass(r.status)}`}>
-                          {receiptStatusLabel(r.status)}
-                        </span>
+                        {tab === 'rejected' ? (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium flex-shrink-0 bg-red-100 text-red-700">
+                            Rejected
+                          </span>
+                        ) : (
+                          <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium flex-shrink-0 ${receiptStatusClass(r.status)}`}>
+                            {receiptStatusLabel(r.status)}
+                          </span>
+                        )}
                         {tab === 'pending' && (
                           <button
                             onClick={() => setRecallTarget(r)}

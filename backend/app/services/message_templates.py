@@ -51,15 +51,6 @@ class Template:
 
 TEMPLATES: List[Template] = [
     Template(
-        "approval_confirmed",
-        "receipt_approval",
-        "Approved",
-        "Notify the user that their receipt was approved and processed.",
-        "Your receipt from {supplier} (KES {total}) was approved and is now "
-        "fully processed. Thank you!",
-        {"supplier", "total", "invoice_number"},
-    ),
-    Template(
         "rejection_reason",
         "receipt_rejection",
         "Rejected",

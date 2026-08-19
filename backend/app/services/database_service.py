@@ -341,6 +341,7 @@ class DatabaseService:
         status: Optional[str] = None,
         category: Optional[str] = None,
         batch_title: Optional[str] = None,
+        rejected: bool = False,
     ) -> tuple:
         """List receipts with filters and pagination. Returns (receipts, total)."""
         pool = await get_pool()
@@ -352,6 +353,17 @@ class DatabaseService:
             if status:
                 params.append(status)
                 conditions.append(f"status = ${param_idx}")
+                param_idx += 1
+            if rejected:
+                # Rejections are not a persisted status — the admin decision
+                # reverts the receipt to needs_review. A receipt "is rejected"
+                # when its most recent audit entry is a rejection.
+                params.append(user_id)
+                conditions.append(
+                    f"(SELECT a.action FROM audit_logs a "
+                    f" WHERE a.receipt_id = receipts.id AND a.user_id = ${param_idx} "
+                    f" ORDER BY a.timestamp DESC, a.id DESC LIMIT 1) = 'rejected'"
+                )
                 param_idx += 1
             if category:
                 params.append(category)

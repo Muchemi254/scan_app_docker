@@ -239,6 +239,7 @@ export const receiptApi = {
     if (filters?.status) params.append('status', filters.status);
     if (filters?.category) params.append('category', filters.category);
     if (filters?.batchTitle) params.append('batchTitle', filters.batchTitle);
+    if (filters?.rejected) params.append('rejected', String(filters.rejected));
 
     return apiRequest('GET', `/receipts?${params.toString()}`);
   },

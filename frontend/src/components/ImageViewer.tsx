@@ -16,18 +16,24 @@ const ImageViewer = ({
   const [panY, setPanY] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
-  const [loadError, setLoadError] = useState(false);
-  const [loading, setLoading] = useState(false);
 
-  // Reset error + loading state when imageUrl changes (switching receipts)
-  useEffect(() => {
-    setLoadError(false);
-    setLoading(true);
+  // Per-image load state keyed by URL. Resetting in a useEffect would race:
+  // the <img> starts loading with the new src at commit time, and for
+  // instantly-cached images onLoad can fire BEFORE the effect runs — the
+  // spinner would then spin forever. Resetting during render (same pass as
+  // the new src) guarantees onLoad/onError arrive after the reset.
+  const [view, setView] = useState({
+    url: imageUrl,
+    loading: !!imageUrl,
+    error: false,
+  });
+  if (view.url !== imageUrl) {
+    setView({ url: imageUrl, loading: !!imageUrl, error: false });
     setRotation(0);
     setZoom(1);
     setPanX(0);
     setPanY(0);
-  }, [imageUrl]);
+  }
 
   const touchContainerRef = useRef<HTMLDivElement>(null);
 
@@ -176,7 +182,7 @@ const ImageViewer = ({
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
         >
-          {loadError ? (
+          {view.error ? (
             <div className="text-center p-6">
               <div className="text-4xl mb-3">⚠️</div>
               <div className="text-sm text-red-600 mb-4 font-medium">Failed to load image</div>
@@ -184,17 +190,16 @@ const ImageViewer = ({
             </div>
           ) : (
             <>
-              {loading && (
+              {view.loading && (
                 <div className="absolute inset-0 flex items-center justify-center bg-gray-50 z-10">
                   <div className="animate-spin rounded-full h-6 w-6 border-2 border-blue-500 border-t-transparent" />
                 </div>
               )}
               <img
-                key={imageUrl}
                 src={displayUrl}
                 alt={altText}
-                onLoad={() => setLoading(false)}
-                onError={() => { setLoadError(true); setLoading(false); }}
+                onLoad={() => setView((v) => ({ ...v, loading: false }))}
+                onError={() => setView((v) => ({ ...v, loading: false, error: true }))}
                 className="max-w-full max-h-full object-contain transition-transform duration-200 select-none"
                 style={{ transform: imageTransform, cursor: cursorStyle }}
                 draggable={false}

@@ -301,6 +301,7 @@ async def list_receipts(
     status_filter: Optional[str] = Query(None, alias="status"),
     category: Optional[str] = Query(None),
     batch_title: Optional[str] = Query(None, alias="batchTitle"),
+    rejected: bool = Query(False),
     current_user_id: str = Depends(get_current_user_id),
 ):
     """
@@ -313,6 +314,7 @@ async def list_receipts(
         status_filter: Filter by status (processed, needs_review)
         category: Filter by category
         batch_title: Filter by batchTitle (for gallery groupings)
+        rejected: Only receipts whose latest admin decision was a rejection
         current_user_id: Authenticated user
 
     Returns:
@@ -323,7 +325,7 @@ async def list_receipts(
     try:
         receipts, total = await DataService.list_receipts(
             userId, skip=skip, limit=limit, status=status_filter,
-            category=category, batch_title=batch_title,
+            category=category, batch_title=batch_title, rejected=rejected,
         )
 
         return ReceiptList(

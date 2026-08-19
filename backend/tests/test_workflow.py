@@ -220,6 +220,79 @@ async def test_double_approve_returns_conflict(client):
     assert r2.status_code == 409, r2.text
 
 
+# ── Rejected list (audit-derived, backs the user's Rejected tab) ────────────
+
+async def test_rejected_list_shows_rejected_only(client):
+    """GET /receipts?rejected=true returns only receipts whose most recent
+    workflow decision was a rejection. Rejections revert the status to
+    needs_review, so the filter is derived from the audit trail, not from
+    the current status."""
+    admin_headers, _, _ = await login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+    alice = await _user(client, admin_headers, "alice@pytest.local")
+    ah, _, _ = await login(client, "alice@pytest.local", "pass-123")
+    uid = alice["uid"]
+
+    # untouched receipt — never submitted, never rejected
+    fresh = await _create(client, ah, uid)
+    # rejected once
+    rejected = await _create(client, ah, uid)
+    await _transition(client, ah, uid, rejected["id"], "submit")
+    r = await _transition(
+        client, admin_headers, uid, rejected["id"], "reject", note="Fix the tax rate"
+    )
+    assert r.status_code == 200, r.text
+    # approved
+    processed = await _create(client, ah, uid)
+    await _transition(client, ah, uid, processed["id"], "submit")
+    r = await _transition(client, admin_headers, uid, processed["id"], "approve")
+    assert r.status_code == 200, r.text
+
+    resp = await client.get(
+        f"/api/v1/users/{uid}/receipts?rejected=true", headers=ah
+    )
+    assert resp.status_code == 200, resp.text
+    ids = {i["id"] for i in resp.json()["items"]}
+    assert ids == {rejected["id"]}
+    assert fresh["id"] not in ids
+    assert processed["id"] not in ids
+
+    # the plain list still shows the rejected receipt as needs_review
+    resp = await client.get(
+        f"/api/v1/users/{uid}/receipts?status=needs_review", headers=ah
+    )
+    assert resp.status_code == 200, resp.text
+    by_id = {i["id"]: i for i in resp.json()["items"]}
+    assert by_id[rejected["id"]]["status"] == "needs_review"
+    assert fresh["id"] in by_id
+
+
+async def test_rejected_after_resubmit_disappears(client):
+    """Resubmitting a rejected receipt moves it off the rejected list — its
+    latest workflow action is no longer a rejection."""
+    admin_headers, _, _ = await login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+    alice = await _user(client, admin_headers, "alice@pytest.local")
+    ah, _, _ = await login(client, "alice@pytest.local", "pass-123")
+    uid = alice["uid"]
+
+    rec = await _create(client, ah, uid)
+    await _transition(client, ah, uid, rec["id"], "submit")
+    r = await _transition(
+        client, admin_headers, uid, rec["id"], "reject", note="Fix the tax rate"
+    )
+    assert r.status_code == 200, r.text
+
+    resp = await client.get(
+        f"/api/v1/users/{uid}/receipts?rejected=true", headers=ah
+    )
+    assert {i["id"] for i in resp.json()["items"]} == {rec["id"]}
+
+    await _transition(client, ah, uid, rec["id"], "submit")
+    resp = await client.get(
+        f"/api/v1/users/{uid}/receipts?rejected=true", headers=ah
+    )
+    assert {i["id"] for i in resp.json()["items"]} == set()
+
+
 # ── Location required only for finalize-to-processed ─────────────────────────
 
 async def test_submit_without_location_is_allowed(client):

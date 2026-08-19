@@ -69,6 +69,7 @@ const MessageCenter = ({ open, onClose, onUnreadChange }: MessageCenterProps) =>
   const [rejecting, setRejecting] = useState(false);
   const [rejectNote, setRejectNote] = useState('');
   const [approving, setApproving] = useState(false);
+  const [clearingNotifications, setClearingNotifications] = useState(false);
   const threadEndRef = useRef<HTMLDivElement>(null);
   const templateRef = useRef<HTMLDivElement>(null);
 
@@ -282,6 +283,26 @@ const MessageCenter = ({ open, onClose, onUnreadChange }: MessageCenterProps) =>
       navigate(target);
     }
     onClose();
+  };
+
+  // Remove workflow/system bubbles (rejections, old status notifications,
+  // scan-error mirrors) from the inbox. Real user<->admin chat is kept.
+  const clearNotifications = async () => {
+    if (clearingNotifications) return;
+    setClearingNotifications(true);
+    try {
+      const { removed } = await messagesApi.clearNotifications();
+      if (removed > 0) {
+        toast('success', 'Notifications cleared', `${removed} notification${removed === 1 ? '' : 's'} removed`);
+      }
+      setActiveId(null);
+      setMessages([]);
+      loadConversations();
+    } catch (e: any) {
+      toast('error', 'Clear failed', e?.message || 'Could not clear notifications');
+    } finally {
+      setClearingNotifications(false);
+    }
   };
 
   // When replying inside a thread, the recipient is the thread's other user.
@@ -538,12 +559,25 @@ const MessageCenter = ({ open, onClose, onUnreadChange }: MessageCenterProps) =>
           /* ── Conversation list ── */
           <>
             <div className="flex items-center justify-between px-4 py-2 border-b">
-              <button
-                onClick={startCompose}
-                className="flex items-center gap-1.5 text-sm font-medium text-blue-600 hover:text-blue-700"
-              >
-                <Plus className="h-4 w-4" /> New message
-              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={startCompose}
+                  className="flex items-center gap-1.5 text-sm font-medium text-blue-600 hover:text-blue-700"
+                >
+                  <Plus className="h-4 w-4" /> New message
+                </button>
+                {conversations.length > 0 && (
+                  <button
+                    onClick={clearNotifications}
+                    disabled={clearingNotifications}
+                    title="Remove workflow notifications (rejections, status bubbles, system messages) from your inbox — real conversations are kept"
+                    className="flex items-center gap-1 text-xs text-gray-500 hover:text-red-600 disabled:opacity-40"
+                  >
+                    <X className="h-3 w-3" />
+                    {clearingNotifications ? 'Clearing…' : 'Clear notifications'}
+                  </button>
+                )}
+              </div>
               <span className="text-xs text-gray-400">
                 {conversations.reduce((n, c) => n + c.unread_count, 0)} unread
               </span>

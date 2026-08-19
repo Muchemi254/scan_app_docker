@@ -242,6 +242,7 @@ class FirestoreService:
         status: Optional[str] = None,
         category: Optional[str] = None,
         batch_title: Optional[str] = None,
+        rejected: bool = False,
     ) -> tuple[List[Dict[str, Any]], int]:
         """
         List receipts with filtering and pagination.
@@ -253,6 +254,11 @@ class FirestoreService:
             status: Filter by status (optional)
             category: Filter by category (optional)
             batch_title: Filter by batchTitle (optional)
+            rejected: Only receipts whose latest audit action was a rejection.
+                Legacy firestore backend: audit-driven rejection filtering is
+                not available here — the flag is accepted for interface
+                compatibility and filters on status needs_review as a
+                best-effort approximation.
 
         Returns:
             Tuple of (receipts list, total count)
@@ -267,6 +273,8 @@ class FirestoreService:
                 query = query.where("category", "==", category)
             if batch_title and batch_title != "__ungrouped__":
                 query = query.where("batchTitle", "==", batch_title)
+            if rejected:
+                query = query.where("status", "==", "needs_review")
 
             # Get all matching documents
             all_docs = list(query.stream())

@@ -125,6 +125,12 @@ export const messagesApi = {
     return api('GET', '/unread-count');
   },
 
+  /** Remove system-generated notification bubbles (workflow / system kinds)
+   *  from the caller's inbox; real user<->admin messages are kept. */
+  async clearNotifications(): Promise<{ removed: number }> {
+    return api('POST', '/clear-notifications');
+  },
+
   /** Who the caller may start a conversation with. */
   async peers(): Promise<Peer[]> {
     const res: { peers: Peer[] } = await api('GET', '/peers');
