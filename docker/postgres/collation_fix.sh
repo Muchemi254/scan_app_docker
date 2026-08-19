@@ -54,6 +54,22 @@ stop_server() { as_pg pg_ctl -D "$PGDATA" -m fast -w -t 60 stop; }
 psqlx() { as_pg env PGPASSWORD="$PGPASSWORD" PGHOST="$SOCKET_DIR" psql -X -A -t -U "$PGUSER" -d postgres -v ON_ERROR_STOP=1 -c "$1"; }
 psql_db() { as_pg env PGPASSWORD="$PGPASSWORD" PGHOST="$SOCKET_DIR" psql -X -A -t -U "$PGUSER" -d "$PGDB" -v ON_ERROR_STOP=1 -c "$1"; }
 
+ensure_host_auth() {
+  # initdb only allows local + localhost TCP; the official entrypoint appends
+  # host rules for remote containers right after initdb, but the fix script
+  # bypasses it. Ensure they exist even when the marker short-circuits —
+  # clusters migrated by older script versions lack them, and backend/worker
+  # containers then get "no pg_hba.conf entry" and cannot connect.
+  if [ -f "$PGDATA/pg_hba.conf" ]; then
+    for rule in "host all all 0.0.0.0/0 $PGAUTH" "host all all ::/0 $PGAUTH"; do
+      if ! grep -qF "$rule" "$PGDATA/pg_hba.conf"; then
+        echo "$rule" >> "$PGDATA/pg_hba.conf"
+        log "appended missing pg_hba rule: $rule"
+      fi
+    done
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Guards — exit 0 (no-op) unless a real migration is needed.
 # ---------------------------------------------------------------------------
@@ -70,6 +86,7 @@ touch "$LOG"
 
 if [ -f "$MARKER" ]; then
   log "already fixed previously (.collation_fixed present), skipping"
+  ensure_host_auth
   exit 0
 fi
 
@@ -186,11 +203,7 @@ as_pg env LANG=C.UTF-8 LC_ALL=C.UTF-8 LC_COLLATE=C.UTF-8 LC_CTYPE=C.UTF-8 \
 # initdb only allows local + localhost TCP; the official entrypoint appends
 # host rules for remote containers right after initdb. Without this, backend/
 # worker containers cannot connect ("no pg_hba.conf entry ... no encryption").
-log "adding host auth rules to pg_hba.conf (mirrors the official entrypoint)"
-{
-  echo "host all all 0.0.0.0/0 $PGAUTH"
-  echo "host all all ::/0 $PGAUTH"
-} >> "$PGDATA/pg_hba.conf"
+ensure_host_auth
 
 start_server
 if [ "$(psql_db "SELECT 1 FROM pg_database WHERE datname='$PGDB'")" != "1" ]; then
