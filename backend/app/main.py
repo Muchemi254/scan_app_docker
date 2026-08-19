@@ -74,6 +74,32 @@ async def lifespan(app: FastAPI):
         logger.error(f"Failed to initialize PostgreSQL pool: {e}")
         raise
 
+    # Collation sanity check — under glibc postgres any non-C.UTF-8 datcollate
+    # silently invalidates text btree indexes (rows exist, index lookups miss →
+    # spurious 401 "User no longer exists"). The postgres-collation-fix one-shot
+    # should have repaired this on pull; this warning is the last line of
+    # defense for installs that disabled or skipped it.
+    try:
+        from app.core.database import get_pool
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT datcollate, datctype FROM pg_database WHERE datname = current_database()"
+            )
+        collate, ctype = (row[0], row[1]) if row else ("unknown", "unknown")
+        if collate not in ("C", "C.UTF-8"):
+            logger.warning(
+                "Database collation is '%s' (ctype '%s') — NOT byte-order C.UTF-8. "
+                "Text btree indexes may be stale under glibc postgres (missing rows, "
+                "401 'User no longer exists'). Expected the postgres-collation-fix "
+                "one-shot to have repaired this; check `docker compose logs postgres-collation-fix`.",
+                collate, ctype,
+            )
+        else:
+            logger.info("Database collation: %s (byte-order safe)", collate)
+    except Exception as e:
+        logger.warning(f"Could not verify database collation: {e}")
+
     # Load admin-managed trusted hosts (persisted) into the request middleware
     try:
         from app.core import trusted_hosts

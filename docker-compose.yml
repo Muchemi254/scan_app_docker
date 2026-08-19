@@ -18,6 +18,39 @@ services:
       - data-network
 
   # ========================================================================
+  # Postgres collation auto-fix — one-shot, runs BEFORE postgres.
+  # ========================================================================
+  # Self-heals installs whose existing cluster was initdb'd by the old
+  # postgres:16-alpine image (musl): glibc serves that cluster's en_US.utf8 as a
+  # REAL locale, silently invalidating every text btree index (index lookups
+  # miss existing rows → the app 401s everything with "User no longer exists").
+  # The fix dumps the cluster, re-initdb's it as C.UTF-8, restores, and keeps
+  # the old data + dump for rollback. Idempotent — no-op on healthy clusters.
+  # Requires Compose v2 (`condition: service_completed_successfully`).
+  postgres-collation-fix:
+    build:
+      context: ./docker/postgres
+      dockerfile: Dockerfile.fix
+    container_name: scan-app-collation-fix
+    user: "0:0"  # root — script gosu's to postgres; also chowns the volume
+    restart: "no"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Old cluster snapshot (kept for rollback; see collation_fix.sh)
+      - pgdata-old:/fix/old
+      - collation-fix-backups:/fix-backups
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set in .env}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set in .env}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
+      POSTGRES_HOST_AUTH_METHOD: ${POSTGRES_HOST_AUTH_METHOD:-scram-sha-256}
+      # New cluster must initdb under byte-order collation (see AGENTS.md)
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
+    networks:
+      - data-network
+
+  # ========================================================================
   # PostgreSQL — primary database (rebuilt with Wal-G for WAL archiving)
   # ========================================================================
   postgres:
@@ -31,6 +64,9 @@ services:
       # it over data-network; host tools can use 127.0.0.1:5432.
       - "127.0.0.1:5432:5432"
     restart: unless-stopped
+    depends_on:
+      postgres-collation-fix:
+        condition: service_completed_successfully
     # Continuous WAL archiving to the encrypted backup store (§ system backups).
     command:
       - -c
@@ -291,6 +327,10 @@ networks:
 # ============================================================================
 volumes:
   pgdata:
+    driver: local
+  pgdata-old:
+    driver: local
+  collation-fix-backups:
     driver: local
   image_data:
     driver: local

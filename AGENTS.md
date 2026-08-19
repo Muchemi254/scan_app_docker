@@ -83,6 +83,40 @@ The suite requires `AUTH_MODE=local` and a writable test DB; `conftest.py` force
 
 Manual testing via Swagger UI (`/docs`) and curl. Frontend testing via browser DevTools.
 
+## Postgres Collation Auto-Fix (one-shot)
+
+Clusters initdb'd by the old `postgres:16-alpine` (musl) image carry `datcollate=en_US.utf8`,
+which musl treated as byte-order (like C). Served by glibc postgres, that SAME datcollate is a
+real locale — so every btree index on a text column silently disagrees with query-time
+collation: **index lookups return 0 rows while the rows exist**, and the app 401s everything
+with "User no longer exists" (`get_user_by_uid` misses through the unique index).
+
+The `postgres-collation-fix` one-shot service (build `docker/postgres`, `Dockerfile.fix` +
+`collation_fix.sh`) runs BEFORE postgres (`depends_on: service_completed_successfully`, requires
+**Compose v2**). On every boot it checks `datcollate`; for a non-`C.UTF-8` cluster it:
+
+1. dumps the DB (custom format, `--exit-on-error` restore later)
+2. snapshots the old data dir to the **pgdata-old volume** (`/fix/old/pre_collation_fix`)
+3. initdb's a fresh `C.UTF-8` cluster, restores the dump, verifies, writes `.collation_fixed`
+
+Nothing is deleted: old cluster snapshot + dump + log live in `pgdata-old` and
+`collation-fix-backups` volumes. Any failure exits non-zero → `docker compose up` aborts before
+postgres boots on partial data. Idempotent: healthy `C.UTF-8` clusters skip in ~1s. A failed
+run leaves a guard that refuses to auto-continue until the operator restores the snapshot.
+
+```bash
+docker compose logs -f postgres-collation-fix   # what it did / skipped
+docker compose exec postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SHOW lc_collate"
+```
+
+- Opt out on an install: `POSTGRES_COLLATION_FIX_DISABLED=1` in `.env` (not recommended).
+- Rollback: stop postgres, `docker compose exec` a `postgres:16` one-shot to
+  `cp -a /fix/old/pre_collation_fix/. /var/lib/postgresql/data/` (mount both volumes), then
+  remove the marker (`rm /fix-backups/.collation_fixed` on the `collation-fix-backups`
+  volume) and `docker compose rm -f postgres-collation-fix && docker compose up -d postgres`.
+- Backend also logs a boot-time `logger.warning` if the connected DB's `datcollate` isn't
+  byte-order — the last line of defense on installs that skipped/disabled the fix.
+
 ## System Backups (Wal-G + pg_dump + images)
 
 Whole-cluster backups run automatically from the `backup` sidecar (build `./backup`,
