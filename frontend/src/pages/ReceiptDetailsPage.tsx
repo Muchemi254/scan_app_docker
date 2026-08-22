@@ -4,6 +4,7 @@ import { ArrowLeft } from 'lucide-react';
 import { receiptApi, locationsApi, settingsApi } from '../services/api';
 import { useReceiptStore } from '../stores/receiptStore';
 import ReceiptForm from '../components/ReceiptForm';
+import { lineTotalOf, sumItemTotals } from '../utils/itemTotals';
 import AuditTrail from '../components/AuditTrail';
 import ImageViewer from '../components/ImageViewer';
 
@@ -198,15 +199,12 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
                     </thead>
                     <tbody className="divide-y">
                       {receipt.items.map((item: any, idx: number) => {
-                        const qty = Number(item.quantity) || 1;
-                        const price = Number(item.price) || 0;
-                        const tax = Number(item.tax) || 0;
-                        const lineTotal = qty * (price + tax);
+                        const lineTotal = lineTotalOf(item);
                         return (
                           <tr key={idx}>
                             <td className="px-3 py-2">{idx + 1}</td>
                             <td className="px-3 py-2">{item.name}</td>
-                            <td className="px-3 py-2 text-right">{qty}</td>
+                            <td className="px-3 py-2 text-right">{item.quantity}</td>
                             <td className="px-3 py-2 text-right">{item.price}</td>
                             <td className="px-3 py-2 text-right">{item.tax || '-'}</td>
                             <td className="px-3 py-2 text-right font-medium">{lineTotal.toFixed(2)}</td>
@@ -214,6 +212,18 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
                         );
                       })}
                     </tbody>
+                    {(() => {
+                      const totals = sumItemTotals(receipt.items);
+                      return (
+                        <tfoot className="bg-gray-50 border-t-2 border-gray-300">
+                          <tr className="text-xs font-semibold text-gray-700">
+                            <td colSpan={4} className="px-3 py-2 text-right">Totals</td>
+                            <td className="px-3 py-2 text-right font-mono tabular-nums">{totals.tax.toFixed(2)}</td>
+                            <td className="px-3 py-2 text-right font-mono tabular-nums">{totals.total.toFixed(2)}</td>
+                          </tr>
+                        </tfoot>
+                      );
+                    })()}
                   </table>
                 </div>
               </div>

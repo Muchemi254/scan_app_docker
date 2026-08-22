@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { cleaningApi } from '../services/api';
+import { lineTaxOf } from '../utils/itemTotals';
 import { Sparkles, Merge, GitBranch, Copy, Trash2, CheckCircle, Loader2, AlertTriangle, Search, X, ChevronDown, ChevronRight, Image, Scale, ExternalLink } from 'lucide-react';
 import ImageViewer from '../components/ImageViewer';
 
@@ -648,6 +649,12 @@ const DataCleaningPage = ({ userId }: { userId: string | null }) => {
                                   <td className="px-2 py-1 text-right font-mono font-semibold">{fmt(it.line_total)}</td>
                                 </tr>
                               ))}
+                              <tr className="bg-gray-50">
+                                <td colSpan={5} className="px-2 py-1.5 text-right text-gray-600">Total tax (from items)</td>
+                                <td className="px-2 py-1.5 text-right font-mono">
+                                  {fmt((m.items || []).reduce((s: number, it: any) => s + lineTaxOf(it), 0))}
+                                </td>
+                              </tr>
                               <tr className="bg-gray-50 font-semibold">
                                 <td colSpan={5} className="px-2 py-1.5 text-right text-gray-600">Items total</td>
                                 <td className="px-2 py-1.5 text-right font-mono">{fmt(m.items_total)}</td>

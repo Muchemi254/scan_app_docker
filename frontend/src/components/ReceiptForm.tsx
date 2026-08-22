@@ -236,6 +236,18 @@ const ReceiptForm = ({
     }, new Decimal(0)).toNumber();
   }, [formData.items]);
 
+  const taxTotal = useMemo(() => {
+    return formData.items.reduce((sum, item) => {
+      const quantity = new Decimal(item.quantity || 0);
+      const tax = new Decimal(parseCurrencyToNumber(item.tax));
+      const discountPct = new Decimal(parseCurrencyToNumber(item.discount));
+      const discountFactor = discountPct.gt(0)
+        ? new Decimal(1).minus(discountPct.div(100))
+        : new Decimal(1);
+      return sum.plus(quantity.mul(tax).mul(discountFactor).toDecimalPlaces(3));
+    }, new Decimal(0)).toNumber();
+  }, [formData.items]);
+
   const numericTotalAmount = parseCurrencyToNumber(formData.totalAmount);
   const variance = new Decimal(numericTotalAmount).minus(itemsTotal).toDecimalPlaces(3).toNumber();
 
@@ -763,6 +775,18 @@ const ReceiptForm = ({
           );
         })}
 
+        {/* Totals bottom row — aligned under the Tax and Total columns */}
+        {itemCount > 0 && (
+          <div className={`grid ${gridCols} gap-1 px-1.5 py-1 mt-1 border-t-2 border-gray-300 bg-gray-50 rounded text-xs font-semibold text-gray-700`}>
+            <span className="col-span-2 text-right">Totals</span>
+            <span />
+            <span className="text-right font-mono tabular-nums">{taxTotal.toFixed(2)}</span>
+            <span />
+            <span className="text-right font-mono tabular-nums">{itemsTotal.toFixed(2)}</span>
+            <span />
+          </div>
+        )}
+
         <button
           type="button"
           onClick={handleAddItem}
@@ -779,6 +803,13 @@ const ReceiptForm = ({
               <span><strong>Form Total:</strong> {formData.totalAmount || '—'}</span>
               <span className={Math.abs(Number(variance)) > 0.005 ? 'text-red-600' : 'text-green-600'}>
                 <strong>Variance:</strong> {variance.toFixed(3)}
+              </span>
+            </div>
+            <div className="flex justify-between gap-4 mt-1">
+              <span>
+                <strong>Calculated Tax:</strong> {taxTotal.toFixed(3)}
+                <span className="text-gray-400"> vs form </span>
+                <strong>Tax:</strong> {formData.taxAmount || '—'}
               </span>
             </div>
           </div>

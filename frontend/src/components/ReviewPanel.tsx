@@ -7,6 +7,7 @@ import AuditTrail from './AuditTrail';
 import type { ReceiptData } from '../types/gemini';
 import ImageViewer from './ImageViewer';
 import { parseCurrencyToNumber } from '../utils/helpers';
+import { lineTotalOf, sumItemTotals } from '../utils/itemTotals';
 import { receiptStatusLabel } from '../utils/receiptStatus';
 
 /* Shared read-only summary of a receipt (used by the main panel and the
@@ -107,12 +108,25 @@ const ReceiptSummary = ({ data, showImage = true }: { data: ReceiptData; showIma
                       {item.discount ? `${item.discount}%` : '—'}
                     </td>
                     <td className="text-right px-2 py-1.5 font-medium">
-                      {(qty * (price + tax)).toFixed(2)}
+                      {lineTotalOf(item).toFixed(2)}
                     </td>
                   </tr>
                 );
               })}
             </tbody>
+            {(() => {
+              const totals = sumItemTotals(data.items);
+              return (
+                <tfoot className="border-t-2 border-gray-300 bg-gray-50">
+                  <tr className="text-xs font-semibold text-gray-700">
+                    <td colSpan={3} className="px-2 py-1.5 text-right">Totals</td>
+                    <td className="text-right px-2 py-1.5 font-mono tabular-nums">{totals.tax.toFixed(2)}</td>
+                    <td />
+                    <td className="text-right px-2 py-1.5 font-mono tabular-nums">{totals.total.toFixed(2)}</td>
+                  </tr>
+                </tfoot>
+              );
+            })()}
           </table>
         </div>
       </div>
