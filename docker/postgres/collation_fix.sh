@@ -95,6 +95,25 @@ if [ ! -d "$PGDATA" ] || [ ! -s "$PGDATA/PG_VERSION" ]; then
   exit 0
 fi
 
+# The postgres service may ALREADY be running in another container (a re-up on
+# a live stack). The fix only ever runs on a clean boot, so detect that case
+# first: a naive PID check is useless here because postmaster.pid holds the PID
+# from the postgres container's PID namespace, which collides with our own PID 1.
+if pg_isready -h postgres -p 5432 -t 5 >/dev/null 2>&1; then
+  log "postgres is ALREADY RUNNING in another container — evaluating whether the fix is still needed"
+  LIVE_COLLATE="$(env PGPASSWORD="$PGPASSWORD" psql -h postgres -p 5432 -U "$PGUSER" -d postgres -X -A -t -v ON_ERROR_STOP=1 -c "SELECT datcollate FROM pg_database WHERE datname='$PGDB'" 2>/dev/null || true)"
+  if [ -z "$LIVE_COLLATE" ]; then
+    log "could not query the running server (host pg_hba may still block TCP) — leaving a running cluster alone"
+    exit 0
+  fi
+  case "$LIVE_COLLATE" in
+    C | C.UTF-8) log "cluster already byte-order collated ($LIVE_COLLATE) — nothing to do"; exit 0 ;;
+  esac
+  log "ERROR: cluster datcollate='$LIVE_COLLATE' but postgres is already running — cannot migrate a live server."
+  log "Run: docker compose stop postgres && docker compose up -d postgres (this fix migrates on that clean boot)"
+  exit 1
+fi
+
 # The previous postgres container may still be shutting down while we start.
 if [ -f "$PGDATA/postmaster.pid" ]; then
   PID="$(sed -n 1p "$PGDATA/postmaster.pid" 2>/dev/null || true)"
