@@ -9,6 +9,8 @@ import ImageViewer from './ImageViewer';
 import { parseCurrencyToNumber } from '../utils/helpers';
 import { lineTotalOf, sumItemTotals } from '../utils/itemTotals';
 import { receiptStatusLabel } from '../utils/receiptStatus';
+import { useConfirmDelete } from '../hooks/useConfirmDelete';
+import { toast } from '../stores/toastStore';
 
 /* Shared read-only summary of a receipt (used by the main panel and the
    approve modal so both always show identical data). */
@@ -170,8 +172,8 @@ const ReviewPanel = ({
   const [approveDraftImage, setApproveDraftImage] = useState<File | null>(null);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectNote, setRejectNote] = useState('');
-  const [deleteOpen, setDeleteOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const { confirm, dialog: deleteDialog } = useConfirmDelete();
 
   // Reference data + the user's personal tax default for the editor.
   useEffect(() => {
@@ -223,16 +225,24 @@ const ReviewPanel = ({
 
   const handleDelete = async () => {
     if (!receipt.id) return;
+    if (!(await confirm({
+      title: 'Delete receipt?',
+      message: (
+        <>
+          Delete <strong>{receipt.supplier || 'this receipt'}</strong>? This cannot be undone.
+        </>
+      ),
+    }))) return;
     try {
       setLoading(true);
       await receiptApi.delete(receipt.id, userId);
       if (useStore) remove(receipt.id);
-      setDeleteOpen(false);
+      toast.success('Receipt deleted', receipt.supplier || 'The receipt was removed.');
       onDeleted?.(receipt.id);
     } catch (error) {
       console.error('Delete failed', error);
       setActionError(error instanceof Error ? error.message : 'Delete failed');
-      setDeleteOpen(false);
+      toast.error('Delete failed', error instanceof Error ? error.message : 'Something went wrong.');
     } finally {
       setLoading(false);
     }
@@ -334,6 +344,7 @@ const ReviewPanel = ({
 
   return (
     <div className="h-full flex flex-col bg-white">
+      {deleteDialog}
       {showUnsavedModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-lg shadow-xl w-full max-w-sm p-6 space-y-4">
@@ -500,39 +511,6 @@ const ReviewPanel = ({
                 className="px-4 py-2 text-white bg-amber-500 rounded hover:bg-amber-600 disabled:opacity-50"
               >
                 {actionLoading ? 'Rejecting…' : 'Reject'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Delete confirm modal (replaces browser confirm) ── */}
-      {deleteOpen && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-sm p-5 space-y-4">
-            <h3 className="text-lg font-bold text-gray-900">Delete Receipt</h3>
-            <p className="text-sm text-gray-600">
-              Delete <strong>{receipt.supplier || 'this receipt'}</strong>? This cannot be undone.
-            </p>
-            {actionError && (
-              <div className="px-3 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">
-                {actionError}
-              </div>
-            )}
-            <div className="flex justify-end gap-3 pt-2">
-              <button
-                onClick={() => setDeleteOpen(false)}
-                disabled={loading}
-                className="px-4 py-2 text-gray-700 bg-gray-100 rounded hover:bg-gray-200 disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleDelete}
-                disabled={loading}
-                className="px-4 py-2 text-white bg-red-600 rounded hover:bg-red-700 disabled:opacity-50"
-              >
-                {loading ? 'Deleting…' : 'Delete'}
               </button>
             </div>
           </div>

@@ -197,6 +197,18 @@ const ReviewBatchDetailPage = ({ userId }: { userId: string | null }) => {
     }
   };
 
+  // Receipt deleted from the detail panel: drop it from the batch list and
+  // move the panel to the next receipt instead of leaving stale details.
+  const handleReceiptDeleted = (receiptId: string) => {
+    setSelectedId(null);
+    setBatch(prev => {
+      if (!prev) return prev;
+      const items = prev.items?.filter(item => item.receipt_id !== receiptId) || [];
+      if (items.length > 0) setSelectedId(items[0].receipt_id);
+      return { ...prev, items };
+    });
+  };
+
   // ── Review status update ──
   const updateStatus = async (receiptId: string, status: string) => {
     if (!batchId) return;
@@ -508,6 +520,7 @@ const ReviewBatchDetailPage = ({ userId }: { userId: string | null }) => {
                   userId={userId!}
                   receipt={selected.receipt}
                   setIsEditing={setIsEditing}
+                  onDeleted={handleReceiptDeleted}
                 />
               </div>
             </div>

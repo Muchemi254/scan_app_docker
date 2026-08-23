@@ -102,6 +102,14 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
     if (window.innerWidth < 1024) setSidebarOpen(false);
   };
 
+  // After a delete, immediately move the panel to the next receipt instead of
+  // leaving the deleted receipt's details on screen.
+  const handleDeleted = (id: string) => {
+    setSelectedId(null);
+    const remaining = receipts.filter(r => r.id !== id);
+    if (remaining.length > 0) setSelectedId(remaining[0].id);
+  };
+
   const batchParam = new URLSearchParams(window.location.search).get('batch');
 
   const filteredReceipts = useMemo(() => {
@@ -402,6 +410,7 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
               receipt={selected}
               setIsEditing={setIsEditing}
               isAdmin={isAdmin}
+              onDeleted={handleDeleted}
             />
           ) : (
             <div className="flex items-center justify-center h-full text-gray-400 text-sm">

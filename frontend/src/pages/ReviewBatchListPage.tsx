@@ -1,6 +1,8 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { reviewBatchApi, type ReviewBatch } from '../services/reviewBatchApi';
+import { useConfirmDelete } from '../hooks/useConfirmDelete';
+import { toast } from '../stores/toastStore';
 import { Upload, Trash2, Eye, FileText, CheckCircle, Clock, Flag, AlertCircle } from 'lucide-react';
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: typeof CheckCircle }> = {
@@ -15,6 +17,7 @@ const ReviewBatchListPage = ({ userId }: { userId: string | null }) => {
   const [batches, setBatches] = useState<ReviewBatch[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
+  const { confirm, dialog: deleteDialog } = useConfirmDelete();
   const [uploading, setUploading] = useState(false);
   const [batchName, setBatchName] = useState('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -57,12 +60,20 @@ const ReviewBatchListPage = ({ userId }: { userId: string | null }) => {
   };
 
   const handleDelete = async (batchId: string, name: string) => {
-    if (!confirm(`Delete review batch "${name}"? This won't delete the receipts themselves.`)) return;
+    if (!(await confirm({
+      title: 'Delete review batch?',
+      message: (
+        <>
+          Delete <strong>{name}</strong>? This won't delete the receipts themselves.
+        </>
+      ),
+    }))) return;
     try {
       await reviewBatchApi.delete(batchId);
       setBatches(prev => prev.filter(b => b.id !== batchId));
+      toast.success('Batch deleted', `"${name}" was removed.`);
     } catch (e) {
-      alert(e instanceof Error ? e.message : 'Delete failed');
+      toast.error('Delete failed', e instanceof Error ? e.message : 'Something went wrong.');
     }
   };
 
@@ -80,6 +91,7 @@ const ReviewBatchListPage = ({ userId }: { userId: string | null }) => {
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
+      {deleteDialog}
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Review Batches</h1>
         <p className="text-sm text-gray-500 mt-1">

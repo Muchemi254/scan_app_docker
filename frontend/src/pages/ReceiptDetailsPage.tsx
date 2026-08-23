@@ -5,6 +5,8 @@ import { receiptApi, locationsApi, settingsApi } from '../services/api';
 import { useReceiptStore } from '../stores/receiptStore';
 import ReceiptForm from '../components/ReceiptForm';
 import { lineTotalOf, sumItemTotals } from '../utils/itemTotals';
+import { useConfirmDelete } from '../hooks/useConfirmDelete';
+import { toast } from '../stores/toastStore';
 import AuditTrail from '../components/AuditTrail';
 import ImageViewer from '../components/ImageViewer';
 
@@ -14,6 +16,7 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
   const [searchParams] = useSearchParams();
   const returnTo = searchParams.get('returnTo');
   const { upsert, remove } = useReceiptStore();
+  const { confirm, dialog: deleteDialog } = useConfirmDelete();
   const [receipt, setReceipt] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
@@ -69,17 +72,25 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
   };
 
   const handleDelete = async () => {
-    if (!window.confirm('Delete this receipt?')) return;
     if (!id) return;
+    if (!(await confirm({
+      title: 'Delete receipt?',
+      message: (
+        <>
+          Delete <strong>{receipt?.supplier || 'this receipt'}</strong>? This cannot be undone.
+        </>
+      ),
+    }))) return;
 
     try {
       setLoading(true);
       await receiptApi.delete(id);
       remove(id); // drop from cache
+      toast.success('Receipt deleted', receipt?.supplier || 'The receipt was removed.');
       navigate('/receipts');
     } catch (error) {
       console.error("Error deleting receipt:", error);
-      alert(error instanceof Error ? error.message : "Delete failed");
+      toast.error('Delete failed', error instanceof Error ? error.message : 'Something went wrong.');
     } finally {
       setLoading(false);
     }
@@ -92,6 +103,7 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
 
   return (
     <div className="w-full px-4 py-4 sm:py-6">
+      {deleteDialog}
       <div className="bg-white p-4 sm:p-6 rounded-lg shadow">
         <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 mb-4 sm:mb-6">
           <div className="flex items-center gap-3 min-w-0">

@@ -1,6 +1,8 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { backupApi, type BackupEntry, type BackupPreview, type BackupQuota, type ImportResult, ExternalConflictError } from '../services/backupApi';
+import { useConfirmDelete } from '../hooks/useConfirmDelete';
+import { toast } from '../stores/toastStore';
 import { opsApi, type OpProgress } from '../services/opsApi';
 import { settingsApi } from '../services/api';
 import { useAuthStore } from '../stores/authStore';
@@ -99,6 +101,7 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
   const [importStep, setImportStep] = useState<string>('');
   const [error, setError] = useState('');
+  const { confirm, dialog: deleteDialog } = useConfirmDelete();
   const [showDetail, setShowDetail] = useState(false);
   const [opProgress, setOpProgress] = useState<OpProgress | null>(null);
   const [resumingImport, setResumingImport] = useState(false);
@@ -410,10 +413,19 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
   };
 
   const handleDeleteBackup = async (backupId: string) => {
-    if (!confirm('Delete this backup?')) return;
+    if (!(await confirm({
+      title: 'Delete backup?',
+      message: (
+        <>
+          Delete this backup file? It will be removed from the server — other
+          devices will no longer be able to download it.
+        </>
+      ),
+    }))) return;
     try { await backupApi.deleteBackup(backupId); await loadBackups();
-      backupApi.getBackupQuota().then(setQuota).catch(() => {}); }
-    catch (e) { setError(e instanceof Error ? e.message : 'Delete failed'); }
+      backupApi.getBackupQuota().then(setQuota).catch(() => {});
+      toast.success('Backup deleted'); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Delete failed'); toast.error('Delete failed', e instanceof Error ? e.message : 'Something went wrong.'); }
   };
 
   const toggleReceipt = (id: string) => setSelectedIds(prev => {
@@ -453,6 +465,7 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
+      {deleteDialog}
       <h1 className="text-2xl font-bold text-gray-900">Settings</h1>
 
       {/* Tabs */}

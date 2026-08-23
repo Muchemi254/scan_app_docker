@@ -14,6 +14,7 @@ import {
   type ScanError,
 } from '../services/api';
 import { toast } from '../stores/toastStore';
+import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import {
   Bell, CheckCheck, Inbox, ListChecks, Trash2,
   CircleAlert, CircleX, Info,
@@ -59,6 +60,7 @@ const NotificationsPage = ({ userId }: { userId: string | null }) => {
   const [loading, setLoading] = useState(true);
   const [unread, setUnread] = useState(0);
   const [busy, setBusy] = useState(false);
+  const { confirm, dialog: deleteDialog } = useConfirmDelete();
 
   const load = useCallback(async () => {
     if (!userId) return;
@@ -118,7 +120,10 @@ const NotificationsPage = ({ userId }: { userId: string | null }) => {
 
   const doClearAll = async () => {
     if (busy || errors.length === 0) return;
-    if (!window.confirm('Clear the entire notification log?')) return;
+    if (!(await confirm({
+      title: 'Clear notification log?',
+      message: 'Clear the entire notification log? This cannot be undone.',
+    }))) return;
     setBusy(true);
     try {
       await scanErrorApi.clearAll();
@@ -141,6 +146,7 @@ const NotificationsPage = ({ userId }: { userId: string | null }) => {
 
   return (
     <div className="w-full p-4 sm:p-8">
+      {deleteDialog}
       <div className="space-y-4 w-full max-w-3xl mx-auto">
         {/* Header */}
         <div className="flex flex-wrap items-center justify-between gap-3">

@@ -15,6 +15,8 @@ import {
 } from '../services/auth';
 import { opsApi } from '../services/opsApi';
 import { settingsApi, locationsApi } from '../services/api';
+import { useConfirmDelete } from '../hooks/useConfirmDelete';
+import { toast } from '../stores/toastStore';
 import {
   ShieldAlert, Plus, Trash2, RefreshCw, User as UserIcon, Globe, X, Key,
   Eye, EyeOff, CheckCircle, Shield, AlertCircle, MapPin, Database,
@@ -56,6 +58,7 @@ const AdminPage = ({ userId }: Props) => {
   const [loadingUsers, setLoadingUsers] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const { confirm, dialog: deleteDialog } = useConfirmDelete();
 
   // Create form
   const [email, setEmail] = useState('');
@@ -116,8 +119,10 @@ const AdminPage = ({ userId }: Props) => {
           if (op.status === 'completed') {
             const c = op.counts;
             setNotice(`Deleted ${email} — ${c.rows ?? 0} rows, ${c.images ?? 0} image files removed`);
+            toast.success('Account deleted', `Purging of ${email} finished — ${c.rows ?? 0} rows, ${c.images ?? 0} image files removed.`);
           } else {
             setError(op.message || `Deletion of ${email} failed`);
+            toast.error('Delete failed', op.message || `Deletion of ${email} failed`);
           }
           setTimeout(() => setDeleting(prev => { const n = { ...prev }; delete n[uid]; return n; }), 400);
           loadUsers();
@@ -223,16 +228,25 @@ const AdminPage = ({ userId }: Props) => {
   };
 
   const deleteLocation = async (loc: { id: string; name: string; is_active: boolean }) => {
-    if (!window.confirm(`Delete location "${loc.name}"? Receipts keep their stored location text.`)) return;
+    if (!(await confirm({
+      title: 'Delete location?',
+      message: (
+        <>
+          Delete <strong>{loc.name}</strong>? Receipts keep their stored location text.
+        </>
+      ),
+    }))) return;
     setSavingLocations(true);
     setError('');
     setNotice('');
     try {
       await locationsApi.remove(loc.id);
       setNotice(`Deleted "${loc.name}"`);
+      toast.success('Location deleted', `"${loc.name}" was removed.`);
       await loadLocations();
     } catch (err: any) {
       setError(err?.message || 'Failed to delete location');
+      toast.error('Delete failed', err?.message || 'Failed to delete location');
     } finally {
       setSavingLocations(false);
     }
@@ -261,9 +275,18 @@ const AdminPage = ({ userId }: Props) => {
   const handleDelete = async (user: AuthUser) => {
     if (user.uid === userId) {
       setError('You cannot delete your own account');
+      toast.error('Cannot delete your own account');
       return;
     }
-    if (!window.confirm(`Delete ${user.email}? This permanently removes their account and ALL their data (receipts, sessions, backups, images).`)) return;
+    if (!(await confirm({
+      title: 'Delete account?',
+      message: (
+        <>
+          Delete <strong>{user.email}</strong>? This permanently removes their account
+          and ALL their data (receipts, sessions, backups, images). This cannot be undone.
+        </>
+      ),
+    }))) return;
     setError('');
     setNotice('');
     try {
@@ -272,11 +295,13 @@ const AdminPage = ({ userId }: Props) => {
       await adminDeleteUser(user.uid, opId);
       pollDeleteOp(user.uid, opId, user.email);
       setNotice(`Deleting ${user.email}…`);
+      toast.success('Account deletion started', `Purging ${user.email}'s data in the background.`);
       await loadUsers();
     } catch (err: any) {
       stopDeletePoll(user.uid);
       setDeleting(prev => { const n = { ...prev }; delete n[user.uid]; return n; });
       setError(err?.message || 'Failed to delete user');
+      toast.error('Delete failed', err?.message || 'Failed to delete user');
     }
   };
 
@@ -412,6 +437,7 @@ const AdminPage = ({ userId }: Props) => {
 
   return (
     <div className="min-h-screen bg-gray-50 px-4 py-6 sm:py-8">
+      {deleteDialog}
       <div className="max-w-4xl mx-auto space-y-6">
         <div className="flex items-center justify-between">
           <div>
