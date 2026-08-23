@@ -12,6 +12,13 @@ SIMILARITY_THRESHOLD = 0.80
 
 PROPAGATABLE_FIELDS = ["kraPin", "category"]
 
+# Total-mismatch rounding noise: a mismatch is skipped when its absolute
+# difference is below BOTH-the absolute floor AND the percentage of the
+# receipt total (e.g. total 1500 vs calculated 1498.98 is 0.07% — that is
+# rounding, not an error; the same 1.02 on a 5 KSh receipt is 20% and real).
+TOTAL_MISMATCH_TOLERANCE = 1.0  # KSh absolute floor
+TOTAL_MISMATCH_PCT_TOLERANCE = 0.5  # % of receipt total treated as rounding noise
+
 
 # ─── Fuzzy helpers ────────────────────────────────────────────────────────
 
@@ -89,11 +96,43 @@ def suggest_supplier_merges(receipts: List[dict]) -> List[dict]:
             cluster["variants"] = [p[0] for p in paired]
             cluster["scores"] = [p[2] for p in paired]
             cluster["receipt_ids"] = [rid for p in paired for rid in (supplier_map.get(p[0]) or [])]
+            # Per-variant receipt ids so the UI can exclude a wrong variant
+            # without renaming its receipts.
+            cluster["variant_receipt_ids"] = {
+                p[0]: list(supplier_map.get(p[0]) or []) for p in paired
+            }
             clusters.append(cluster)
             merged.add(name_a)
 
     clusters.sort(key=lambda c: -len(c["receipt_ids"]))
     return clusters
+
+
+def _exclude_merge_variants(clusters: List[dict], ignored: set) -> List[dict]:
+    """Drop supplier-merge variants the user marked as 'keep separate'.
+
+    Each excluded variant is removed from the cluster; if the existing
+    canonical was excluded, the most-frequent remaining variant becomes the
+    new canonical. Clusters left with a single variant are dropped.
+    """
+    out = []
+    for cluster in clusters:
+        orig_variants = cluster["variants"]
+        score_map = dict(zip(orig_variants, cluster["scores"]))
+        vrids = cluster.get("variant_receipt_ids") or {}
+        kept = [v for v in orig_variants if f"mergex|{v}" not in ignored]
+        if len(kept) < 2:
+            continue
+        kept_paired = sorted(kept, key=lambda v: -len(vrids.get(v, [])))
+        canonical = cluster["canonical"] if cluster["canonical"] in kept else kept_paired[0]
+        kept_paired = [canonical] + [v for v in kept_paired if v != canonical]
+        cluster["canonical"] = canonical
+        cluster["variants"] = kept_paired
+        cluster["scores"] = [score_map[v] for v in kept_paired]
+        cluster["receipt_ids"] = [rid for v in kept_paired for rid in (vrids.get(v) or [])]
+        cluster["variant_receipt_ids"] = {v: list(vrids.get(v) or []) for v in kept_paired}
+        out.append(cluster)
+    return out
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -223,12 +262,20 @@ def _line_total(item: dict) -> float:
     return qty * (price + tax) * factor
 
 
-def suggest_total_mismatches(receipts: List[dict], tolerance: float = TOTAL_MISMATCH_TOLERANCE) -> List[dict]:
+def suggest_total_mismatches(
+    receipts: List[dict],
+    tolerance: float = TOTAL_MISMATCH_TOLERANCE,
+    pct_tolerance: float = TOTAL_MISMATCH_PCT_TOLERANCE,
+) -> List[dict]:
     """Find receipts where the stored totalAmount disagrees with the sum of line items.
 
     These usually indicate Gemini extraction errors (e.g. unit price misread as
-    line total or vice versa). Sorted by largest absolute variance first so the
-    user can disposition outliers quickly.
+    line total or vice versa). A mismatch is skipped when the absolute
+    difference is within the greater of the absolute floor (KSh) or the
+    percentage of the receipt total — so large totals with tiny decimal drift
+    (1500 vs 1498.98) are treated as rounding noise, while the same KSh
+    difference on a small receipt remains a real error. Sorted by largest
+    relative deviation first so outliers surface quickly.
     """
     out = []
     for r in receipts:
@@ -238,8 +285,10 @@ def suggest_total_mismatches(receipts: List[dict], tolerance: float = TOTAL_MISM
         receipt_total = _to_float(r.get("totalAmount"))
         items_total = round(sum(_line_total(i) for i in items), 2)
         variance = round(items_total - receipt_total, 2)
-        if abs(variance) < tolerance:
+        if abs(variance) < max(tolerance, abs(receipt_total) * pct_tolerance / 100):
             continue
+        denom = max(abs(receipt_total), abs(items_total), 1e-9)
+        variance_pct = round(variance / denom * 100, 3)
         out.append({
             "id": r["id"],
             "supplier": r.get("supplier") or "Unknown",
@@ -248,6 +297,7 @@ def suggest_total_mismatches(receipts: List[dict], tolerance: float = TOTAL_MISM
             "receipt_total": receipt_total,
             "items_total": items_total,
             "variance": variance,
+            "variance_pct": variance_pct,
             "n_items": len(items),
             "imageUrl": r.get("imageUrl") or "",
             "thumbnailUrl": r.get("thumbnailUrl") or r.get("imageUrl") or "",
@@ -263,7 +313,7 @@ def suggest_total_mismatches(receipts: List[dict], tolerance: float = TOTAL_MISM
                 for i in items
             ],
         })
-    out.sort(key=lambda m: -abs(m["variance"]))
+    out.sort(key=lambda m: (-abs(m["variance_pct"]), -abs(m["variance"])))
     return out
 
 
@@ -280,6 +330,9 @@ def _ignore_key(suggestion: dict) -> str:
     if stype == "supplier_merge":
         variants = sorted(suggestion.get("variants", []))
         return f"merge|{'|'.join(variants)}"
+    if stype == "merge_variant":
+        # 'value' carries the exact supplier spelling to keep separate.
+        return f"mergex|{suggestion.get('value', '')}"
     if stype == "field_propagation":
         return f"prop|{suggestion.get('field','')}|{suggestion.get('supplier','')}"
     if stype == "total_mismatch":
@@ -324,7 +377,9 @@ def generate_all_suggestions(receipts: List[dict], ignored: Optional[set] = None
     # total_mismatches uses {id} not {type}; filter manually.
     mismatches = [m for m in raw["total_mismatches"] if f"mismatch|{m['id']}" not in ignored]
     return {
-        "supplier_merges": _filter_ignored(raw["supplier_merges"], ignored),
+        "supplier_merges": _exclude_merge_variants(
+            _filter_ignored(raw["supplier_merges"], ignored), ignored
+        ),
         "field_propagations": _filter_ignored(raw["field_propagations"], ignored),
         "duplicates": _filter_ignored(raw["duplicates"], ignored),
         "total_mismatches": mismatches,

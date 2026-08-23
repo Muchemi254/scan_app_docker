@@ -75,6 +75,17 @@ const DataCleaningPage = ({ userId }: { userId: string | null }) => {
     }
   };
 
+  // Keep ONE supplier spelling separate from a merge cluster, so a wrong
+  // variant in an otherwise-correct suggestion never blocks the rest.
+  const excludeMergeVariant = async (variant: string) => {
+    try {
+      await cleaningApi.ignoreSuggestion({ type: 'merge_variant', value: variant });
+      await fetchSuggestions();
+    } catch (err: any) {
+      alert(err.message || 'Failed to exclude this variant');
+    }
+  };
+
   const toggleAction = (id: string) => {
     setSelectedActions(prev => {
       const next = new Set(prev);
@@ -356,9 +367,19 @@ const DataCleaningPage = ({ userId }: { userId: string | null }) => {
                                 {v}
                               </span>
                               {v !== cluster.canonical && <span className="text-gray-400">→ {cluster.canonical}</span>}
+                              <button
+                                onClick={(e) => { e.stopPropagation(); excludeMergeVariant(v); }}
+                                className="ml-auto p-0.5 rounded hover:bg-red-50 text-gray-300 hover:text-red-500 flex-shrink-0"
+                                title="Keep separate — this spelling is NOT the same supplier"
+                              >
+                                <X className="h-3 w-3" />
+                              </button>
                             </div>
                           ))}
                         </div>
+                        <p className="text-[10px] text-gray-400 mt-2">
+                          Click <X className="h-2.5 w-2.5 inline text-gray-400" /> on a variant to keep it separate, then select and apply the remaining merge.
+                        </p>
                       </div>
                     )}
                   </div>
@@ -554,8 +575,11 @@ const DataCleaningPage = ({ userId }: { userId: string | null }) => {
               </div>
             </div>
             <p className="px-5 py-2 text-xs text-gray-500 bg-amber-50/50 border-b border-amber-100">
-              These receipts have a stored total that disagrees with the sum of their line items.
-              Selecting one replaces <code>totalAmount</code> with the computed item-total — only approve when the items look right (large variances often mean a misread unit price).
+              These receipts have a stored total that disagrees with the sum of their line items
+              beyond rounding noise (deviation is shown as amount and % of the total — decimal drift
+              like 1500 vs 1498.98 is ignored). Selecting one replaces <code>totalAmount</code> with
+              the computed item-total — only approve when the items look right (large percentages
+              often mean a misread unit price).
             </p>
             <div className="divide-y">
               {suggestions.total_mismatches.map((m: any, idx: number) => {
@@ -596,6 +620,9 @@ const DataCleaningPage = ({ userId }: { userId: string | null }) => {
                           <span className="text-gray-500">Items: <span className="font-mono text-gray-800">{fmt(m.items_total)}</span></span>
                           <span className={`font-mono font-semibold ${m.variance > 0 ? 'text-red-600' : 'text-blue-600'}`}>
                             {sign}{fmt(m.variance)}
+                            {typeof m.variance_pct === 'number' && (
+                              <span className="text-gray-400 font-normal"> ({Math.abs(m.variance_pct).toFixed(2)}%)</span>
+                            )}
                           </span>
                         </div>
                       </div>
@@ -665,7 +692,12 @@ const DataCleaningPage = ({ userId }: { userId: string | null }) => {
                               </tr>
                               <tr className={m.variance > 0 ? 'bg-red-50' : 'bg-blue-50'}>
                                 <td colSpan={5} className="px-2 py-1.5 text-right font-semibold text-gray-700">Variance</td>
-                                <td className={`px-2 py-1.5 text-right font-mono font-bold ${m.variance > 0 ? 'text-red-700' : 'text-blue-700'}`}>{sign}{fmt(m.variance)}</td>
+                                <td className={`px-2 py-1.5 text-right font-mono font-bold ${m.variance > 0 ? 'text-red-700' : 'text-blue-700'}`}>
+                                  {sign}{fmt(m.variance)}
+                                  {typeof m.variance_pct === 'number' && (
+                                    <span className="text-gray-500 font-normal"> ({Math.abs(m.variance_pct).toFixed(2)}%)</span>
+                                  )}
+                                </td>
                               </tr>
                             </tbody>
                           </table>
