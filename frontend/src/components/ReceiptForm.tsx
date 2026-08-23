@@ -56,6 +56,7 @@ const ReceiptForm = ({
 
   const [taxAdded, setTaxAdded] = useState(false);
   const [taxSplit, setTaxSplit] = useState(false);
+  const [zeroTaxAll, setZeroTaxAll] = useState(false);
   const [originalItems, setOriginalItems] = useState<any[]>([]);
   const [itemOriginalStates, setItemOriginalStates] = useState<{[key: number]: any}>({});
   const [openActionIndex, setOpenActionIndex] = useState<number | null>(null);
@@ -297,6 +298,8 @@ const ReceiptForm = ({
   };
 
   const handleBulkZeroTax = () => {
+    if (!zeroTaxAll) setOriginalItems([...formData.items]);
+
     const updatedItems = formData.items.map((item) => ({
       ...item,
       tax: '0',
@@ -304,6 +307,11 @@ const ReceiptForm = ({
     }));
 
     setFormData({ ...formData, items: updatedItems });
+    setZeroTaxAll(!zeroTaxAll);
+
+    if (zeroTaxAll) {
+      setFormData({ ...formData, items: originalItems });
+    }
   };
 
   const handleBulkDiscount = () => {
@@ -342,7 +350,6 @@ const ReceiptForm = ({
 
   const handleIndividualAddTax = (index: number) => {
     const item = formData.items[index];
-    if (item.isZeroRated) return;
 
     saveItemOriginalState(index);
 
@@ -350,7 +357,7 @@ const ReceiptForm = ({
     const tax = addTax(price, bulkTaxRate);
 
     const newItems = [...formData.items];
-    newItems[index] = { ...newItems[index], tax: tax.toString(), taxRate: bulkTaxRate.toString() };
+    newItems[index] = { ...newItems[index], tax: tax.toString(), taxRate: bulkTaxRate.toString(), isZeroRated: false };
 
     setFormData({ ...formData, items: newItems });
     setOpenActionIndex(null);
@@ -358,7 +365,6 @@ const ReceiptForm = ({
 
   const handleIndividualSplitTax = (index: number) => {
     const item = formData.items[index];
-    if (item.isZeroRated) return;
 
     saveItemOriginalState(index);
 
@@ -371,6 +377,7 @@ const ReceiptForm = ({
       price: priceWithoutTax.toString(),
       tax: tax.toString(),
       taxRate: bulkTaxRate.toString(),
+      isZeroRated: false,
     };
 
     setFormData({ ...formData, items: newItems });
@@ -379,7 +386,6 @@ const ReceiptForm = ({
 
   const handleCustomAddTax = (index: number) => {
     const item = formData.items[index];
-    if (item.isZeroRated) return;
 
     setPrompt({
       title: `Add tax at what rate %? (price is tax-exclusive, default ${bulkTaxRate}%)`,
@@ -390,7 +396,7 @@ const ReceiptForm = ({
         const price = parseCurrencyToNumber(item.price);
         const tax = addTax(price, rate);
         const newItems = [...formData.items];
-        newItems[index] = { ...newItems[index], tax: tax.toString(), taxRate: rate.toString() };
+        newItems[index] = { ...newItems[index], tax: tax.toString(), taxRate: rate.toString(), isZeroRated: false };
         setFormData({ ...formData, items: newItems });
         setOpenActionIndex(null);
       },
@@ -401,7 +407,6 @@ const ReceiptForm = ({
 
   const handleCustomSplitTax = (index: number) => {
     const item = formData.items[index];
-    if (item.isZeroRated) return;
 
     setPrompt({
       title: `Split tax at what rate %? (price is tax-inclusive, default ${bulkTaxRate}%)`,
@@ -417,6 +422,7 @@ const ReceiptForm = ({
           price: priceWithoutTax.toString(),
           tax: tax.toString(),
           taxRate: rate.toString(),
+          isZeroRated: false,
         };
         setFormData({ ...formData, items: newItems });
         setOpenActionIndex(null);
@@ -434,6 +440,23 @@ const ReceiptForm = ({
       ...newItems[index],
       tax: '0',
       isZeroRated: true
+    };
+
+    setFormData({ ...formData, items: newItems });
+    setOpenActionIndex(null);
+  };
+
+  // Undo an individual zero-tax: re-enable tax and restore the value it had
+  // before it was zeroed (falls back to an empty editable tax).
+  const handleIndividualUndoZeroTax = (index: number) => {
+    const originalState = itemOriginalStates[index];
+    const wasTaxable = !!(originalState && !originalState.isZeroRated);
+    const newItems = [...formData.items];
+    newItems[index] = {
+      ...newItems[index],
+      isZeroRated: false,
+      tax: wasTaxable ? originalState.tax : '',
+      taxRate: wasTaxable ? originalState.taxRate : newItems[index].taxRate,
     };
 
     setFormData({ ...formData, items: newItems });
@@ -596,9 +619,9 @@ const ReceiptForm = ({
             <button
               type="button"
               onClick={handleBulkZeroTax}
-              className="text-xs px-2 py-0.5 rounded border bg-white border-gray-300 hover:bg-yellow-100"
+              className={`text-xs px-2 py-0.5 rounded border ${zeroTaxAll ? 'bg-yellow-500 text-white border-yellow-500' : 'bg-white border-gray-300 hover:bg-yellow-100'}`}
             >
-              Bulk: Zero Tax
+              {zeroTaxAll ? 'Undo Zero Tax' : 'Bulk: Zero Tax'}
             </button>
             <button
               type="button"
@@ -698,44 +721,42 @@ const ReceiptForm = ({
 
                 {openActionIndex === index && (
                   <div className="absolute right-0 top-full mt-0.5 z-20 bg-white border rounded shadow-lg py-1 w-36 text-xs">
-                    {!item.isZeroRated && (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => handleIndividualAddTax(index)}
-                          className="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-blue-700"
-                        >
-                          Add Tax ({bulkTaxRate}%)
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleIndividualSplitTax(index)}
-                          className="w-full text-left px-3 py-1.5 hover:bg-green-50 text-green-700"
-                        >
-                          Split Tax
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleCustomAddTax(index)}
-                          className="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-blue-700 border-t"
-                        >
-                          Custom Add Tax…
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleCustomSplitTax(index)}
-                          className="w-full text-left px-3 py-1.5 hover:bg-green-50 text-green-700"
-                        >
-                          Custom Split Tax…
-                        </button>
-                      </>
-                    )}
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => handleIndividualAddTax(index)}
+                        className="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-blue-700"
+                      >
+                        Add Tax ({bulkTaxRate}%)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleIndividualSplitTax(index)}
+                        className="w-full text-left px-3 py-1.5 hover:bg-green-50 text-green-700"
+                      >
+                        Split Tax
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleCustomAddTax(index)}
+                        className="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-blue-700 border-t"
+                      >
+                        Custom Add Tax…
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleCustomSplitTax(index)}
+                        className="w-full text-left px-3 py-1.5 hover:bg-green-50 text-green-700"
+                      >
+                        Custom Split Tax…
+                      </button>
+                    </>
                     <button
                       type="button"
-                      onClick={() => handleIndividualZeroTax(index)}
-                      className="w-full text-left px-3 py-1.5 hover:bg-yellow-50 text-yellow-700"
+                      onClick={() => item.isZeroRated ? handleIndividualUndoZeroTax(index) : handleIndividualZeroTax(index)}
+                      className={`w-full text-left px-3 py-1.5 border-t hover:bg-yellow-50 text-yellow-700 ${item.isZeroRated ? 'bg-yellow-50' : ''}`}
                     >
-                      Zero Tax
+                      {item.isZeroRated ? 'Undo Zero Tax' : 'Zero Tax'}
                     </button>
                     <button
                       type="button"
