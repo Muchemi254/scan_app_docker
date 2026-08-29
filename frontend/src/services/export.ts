@@ -127,21 +127,38 @@ function flattenToItems(receipts: any[]): FlatItem[] {
 // ─── Report data generators ──────────────────────────────────────────────
 
 function detailedRows(receipts: any[]): any[] {
-  return flattenToItems(receipts).map(i => ({
-    'Receipt ID': i.receiptId,
-    Date: parseDateMDY(i.receiptDate) || i.receiptDate,
-    Supplier: i.supplier,
-    Category: i.category,
-    Invoice: i.invoiceNumber,
-    Item: i.itemName,
-    Qty: i.quantity,
-    Price: i.price,
-    Tax: i.tax,
-    'Disc%': i.discount || '',
-    'Zero Rated': i.isZeroRated ? 'Yes' : 'No',
-    'Item Total': i.itemTotal,
-    'Receipt Total': i.totalAmount,
-    Status: i.status,
+  const rows: any[] = [];
+  for (const receipt of receipts) {
+    const flattened = flattenToItems([receipt]);
+    flattened.forEach((i, index) => rows.push({
+      'Receipt ID': i.receiptId,
+      Date: parseDateMDY(i.receiptDate) || i.receiptDate,
+      Supplier: i.supplier,
+      Category: i.category,
+      Invoice: i.invoiceNumber,
+      Item: i.itemName,
+      Qty: i.quantity,
+      Price: i.price,
+      Tax: i.tax,
+      'Disc%': i.discount || '',
+      'Zero Rated': i.isZeroRated ? 'Yes' : 'No',
+      'Calculated Item Total': i.itemTotal,
+      // Emit the authoritative receipt total once so summing this column reconciles.
+      'Receipt Total': index === 0 ? i.totalAmount : '',
+      Status: i.status,
+    }));
+  }
+  return rows;
+}
+
+function receiptTotalRows(receipts: any[]): any[] {
+  return receipts.map(r => ({
+    'Receipt ID': r.id || '',
+    Date: parseDateMDY(r.receiptDate || '') || r.receiptDate || '',
+    Supplier: r.supplier || '',
+    Category: r.category || 'Other',
+    Invoice: r.invoiceNumber || '',
+    'Receipt Total': sanitizeNumeric(r.totalAmount),
   }));
 }
 
@@ -391,6 +408,7 @@ export function exportMultiSheetExcel(receipts: any[], opts: ReportOptions) {
 
   // Static reports
   _sheet(wb, 'Detailed', cleanRows(detailedRows(receipts)));
+  _sheet(wb, 'Receipt Totals', cleanRows(receiptTotalRows(receipts)));
   _sheet(wb, 'By Category', cleanRows(categorySummary(receipts)));
   _sheet(wb, 'By Supplier', cleanRows(supplierSummary(receipts)));
 
@@ -420,6 +438,9 @@ export function exportToExcel(receipts: any[], type: ReportType, opts: ReportOpt
     _sheet(wb, 'Pivot', cleanRows(reportData(type, receipts, pc)));
   } else {
     _sheet(wb, reportTitle(type).slice(0, 31), cleanRows(reportData(type, receipts, pc)));
+    if (type === 'detailed') {
+      _sheet(wb, 'Receipt Totals', cleanRows(receiptTotalRows(receipts)));
+    }
   }
   writeFile(wb, `${opts.title}.xlsx`);
 }

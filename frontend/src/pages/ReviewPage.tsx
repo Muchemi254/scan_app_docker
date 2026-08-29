@@ -18,6 +18,8 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
 
   // Search
   const [searchResults, setSearchResults] = useState<any[] | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchTotal, setSearchTotal] = useState(0);
 
   const receipts = useMemo(() => {
     if (searchResults !== null) {
@@ -26,14 +28,31 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
     return allReceipts.filter(r => r.status === 'needs_review') as ReceiptData[];
   }, [allReceipts, searchResults]);
 
-  const onSearchResults = (results: any[], _total: number) => {
+  const onSearchResults = (results: any[], total: number) => {
     setSearchResults(results);
+    setSearchTotal(total);
     setPage(1);
   };
 
   const onSearchClear = () => {
     setSearchResults(null);
+    setSearchTotal(0);
+    setSearchQuery('');
     setPage(1);
+  };
+
+  const loadSearchPage = async (pageNum: number) => {
+    if (!searchQuery.trim()) return;
+    try {
+      const result = await receiptApi.search(searchQuery.trim(), PAGE_SIZE, (pageNum - 1) * PAGE_SIZE, {
+        status: 'needs_review',
+      });
+      setSearchResults(result.results || []);
+      setSearchTotal(result.total || 0);
+    } catch {
+      setSearchResults([]);
+      setSearchTotal(0);
+    }
   };
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -46,6 +65,13 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
     if (!userId) return;
     load(userId);
   }, [userId, load]);
+
+  useEffect(() => {
+    setSearchResults(null);
+    setSearchTotal(0);
+    setSearchQuery('');
+    setPage(1);
+  }, [userId]);
 
   // Collapse sidebar when editing; restore on desktop when done
   useEffect(() => {
@@ -113,9 +139,11 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
     fetchFull();
   }, [selectedId]);
 
-  const totalPages = Math.max(1, Math.ceil(receipts.length / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil((searchResults !== null ? searchTotal : receipts.length) / PAGE_SIZE));
   const clampedPage = Math.min(page, totalPages);
-  const pageReceipts = receipts.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);
+  const pageReceipts = searchResults !== null
+    ? receipts
+    : receipts.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);
   const selected = selectedReceipt || receipts.find(r => r.id === selectedId) || null;
 
   if (loading && receipts.length === 0) {
@@ -147,8 +175,8 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
       {/* Sidebar header */}
       <div className="flex-shrink-0 flex items-center justify-between gap-2 px-3 py-2 border-b bg-gray-50">
         <span className="text-sm font-semibold text-gray-700 truncate">
-          Needs Review
-          <span className="ml-1.5 text-xs font-normal text-gray-400">{searchResults !== null ? searchResults.filter((r: any) => r.status === 'needs_review').length : allReceipts.filter(r => r.status === 'needs_review').length}</span>
+           Needs Review
+           <span className="ml-1.5 text-xs font-normal text-gray-400">{searchResults !== null ? searchTotal : allReceipts.filter(r => r.status === 'needs_review').length}</span>
         </span>
         <button
           onClick={() => setSidebarOpen(false)}
@@ -162,8 +190,11 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
       {/* Search */}
       <div className="flex-shrink-0 px-3 py-2 border-b bg-white">
         <SearchBar
-          onResults={onSearchResults}
-          onClear={onSearchClear}
+          key={userId || 'review-search'}
+            onResults={onSearchResults}
+            onClear={onSearchClear}
+            onQueryChange={setSearchQuery}
+            searchFn={(q, limit, offset) => receiptApi.search(q, limit, offset, { status: 'needs_review' })}
         />
       </div>
 
@@ -195,18 +226,18 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
       {/* Pagination */}
       <div className="flex-shrink-0 border-t px-3 py-2 flex items-center justify-between text-xs text-gray-500 bg-gray-50">
         <span>
-          {`${(clampedPage - 1) * PAGE_SIZE + 1}–${Math.min(clampedPage * PAGE_SIZE, receipts.length)}`}
-          {' '}/ {receipts.length}
+           {`${(clampedPage - 1) * PAGE_SIZE + 1}–${Math.min(clampedPage * PAGE_SIZE, searchResults !== null ? searchTotal : receipts.length)}`}
+           {' '}/ {searchResults !== null ? searchTotal : receipts.length}
         </span>
         <div className="flex gap-1">
           <button
-            onClick={() => setPage(p => Math.max(1, p - 1))}
+            onClick={() => { const next = Math.max(1, page - 1); setPage(next); if (searchResults !== null) loadSearchPage(next); }}
             disabled={clampedPage === 1}
             className="px-2 py-0.5 border rounded disabled:opacity-30 hover:bg-gray-100"
           >‹</button>
           <span className="px-1">{clampedPage}/{totalPages}</span>
           <button
-            onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+            onClick={() => { const next = Math.min(totalPages, page + 1); setPage(next); if (searchResults !== null) loadSearchPage(next); }}
             disabled={clampedPage >= totalPages}
             className="px-2 py-0.5 border rounded disabled:opacity-30 hover:bg-gray-100"
           >›</button>

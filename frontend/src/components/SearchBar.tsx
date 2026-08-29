@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Search, X } from 'lucide-react';
 import { receiptApi } from '../services/api';
 
@@ -8,6 +8,7 @@ interface SearchBarProps {
   onResults: (results: any[], total: number) => void;
   onClear: () => void;
   onQueryChange?: (query: string) => void;
+  searchKey?: string;
   /** Override the search backend (defaults to the user-scoped receipt search).
    *  Used e.g. by the admin approval center to search a cross-tenant list. */
   searchFn?: (q: string, limit: number, offset: number) => Promise<any>;
@@ -19,42 +20,72 @@ const SearchBar = ({
   onResults,
   onClear,
   onQueryChange,
+  searchKey = '',
   searchFn,
 }: SearchBarProps) => {
   const [inputValue, setInputValue] = useState('');
   const [isSearching, setIsSearching] = useState(false);
   const [total, setTotal] = useState(0);
+  const [error, setError] = useState('');
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestId = useRef(0);
+  const hadQuery = useRef(false);
+  const searchFnRef = useRef(searchFn);
+  const onResultsRef = useRef(onResults);
+  const onClearRef = useRef(onClear);
+
+  useEffect(() => { searchFnRef.current = searchFn; }, [searchFn]);
+  useEffect(() => { onResultsRef.current = onResults; }, [onResults]);
+  useEffect(() => { onClearRef.current = onClear; }, [onClear]);
+
+  useEffect(() => {
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    const q = inputValue.trim();
+    setError('');
+    if (!q) {
+      setTotal(0);
+      setIsSearching(false);
+      if (hadQuery.current) onClearRef.current();
+      hadQuery.current = false;
+      return undefined;
+    }
+    hadQuery.current = true;
+    setIsSearching(true);
+    searchTimer.current = setTimeout(async () => {
+      const currentRequest = ++requestId.current;
+      try {
+        const r = await (searchFnRef.current || receiptApi.search)(q, pageSize, 0);
+        if (currentRequest !== requestId.current) return;
+        onResultsRef.current(r.results || r.items || [], r.total || 0);
+        setTotal(r.total || 0);
+        setIsSearching(false);
+      } catch (e) {
+        if (currentRequest !== requestId.current) return;
+        onResultsRef.current([], 0);
+        setError(e instanceof Error ? e.message : 'Search failed');
+        setIsSearching(false);
+      }
+    }, 300);
+    return () => {
+      if (searchTimer.current) clearTimeout(searchTimer.current);
+      requestId.current += 1;
+    };
+  }, [inputValue, pageSize, searchKey]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const q = e.target.value;
     setInputValue(q);
     onQueryChange?.(q);
-    if (searchTimer.current) clearTimeout(searchTimer.current);
-    if (!q.trim()) {
-      setTotal(0);
-      setIsSearching(false);
-      onClear();
-      return;
-    }
-    setIsSearching(true);
-    searchTimer.current = setTimeout(async () => {
-      try {
-        const r = await (searchFn || receiptApi.search)(q.trim(), pageSize, 0);
-        onResults(r.results || r.items || [], r.total || 0);
-        setTotal(r.total || 0);
-        setIsSearching(false);
-      } catch (_) {
-        setIsSearching(false);
-      }
-    }, 300);
   };
 
   const clear = () => {
     setInputValue('');
     setTotal(0);
+    setError('');
     setIsSearching(false);
-    onClear();
+    hadQuery.current = false;
+    requestId.current += 1;
+    onClearRef.current();
   };
 
   return (
@@ -76,9 +107,8 @@ const SearchBar = ({
         )}
       </div>
       {inputValue.trim() && !isSearching && (
-        <p className="text-xs text-gray-500 mt-1">
-          {total} match{total !== 1 ? 'es' : ''}
-          {total > 0 && <span className="text-blue-500"> · ranked</span>}
+        <p className={`text-xs mt-1 ${error ? 'text-red-500' : 'text-gray-500'}`}>
+          {error || <>{total} match{total !== 1 ? 'es' : ''}{total > 0 && <span className="text-blue-500"> · ranked</span>}</>}
         </p>
       )}
     </>

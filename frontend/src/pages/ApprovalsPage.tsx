@@ -29,6 +29,7 @@ const ApprovalsPage = () => {
   // Search (reuses the indexed search) + client-side filters
   const [searchResults, setSearchResults] = useState<any[] | null>(null);
   const [searchTotal, setSearchTotal] = useState(0);
+  const [searchQuery, setSearchQuery] = useState('');
   const [filters, setFilters] = useState({ category: '', batch: '' });
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -63,9 +64,28 @@ const ApprovalsPage = () => {
   const onSearchClear = () => {
     setSearchResults(null);
     setSearchTotal(0);
+    setSearchQuery('');
     setPage(1);
     load();
   };
+
+  const searchFilters = {
+    category: filters.category || undefined,
+    batchTitle: filters.batch || undefined,
+  };
+  async function loadSearchPage(pageNum: number) {
+    if (!searchQuery.trim()) return;
+    try {
+      const result = await receiptApi.listPendingApproval(
+        searchQuery.trim(), PAGE_SIZE, (pageNum - 1) * PAGE_SIZE, searchFilters,
+      );
+      setSearchResults(result.items || []);
+      setSearchTotal(result.total || 0);
+    } catch {
+      setSearchResults([]);
+      setSearchTotal(0);
+    }
+  }
 
   // Collapse sidebar when editing; restore on desktop when done
   useEffect(() => {
@@ -92,7 +112,9 @@ const ApprovalsPage = () => {
     }
   }, [deepLinkId, items, selectedId]);
 
-  const selectedRow = items.find((r: any) => r.id === selectedId) || null;
+  const selectedRow = searchResults?.find((r: any) => r.id === selectedId)
+    || items.find((r: any) => r.id === selectedId)
+    || null;
 
   // Fetch the full receipt (with items + image) cross-tenant when selectio changes
   useEffect(() => {
@@ -214,9 +236,11 @@ const ApprovalsPage = () => {
     );
   }
 
-  const totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil((searchResults !== null ? searchTotal : filteredRows.length) / PAGE_SIZE));
   const clampedPage = Math.min(page, totalPages);
-  const pageItems = filteredRows.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);
+  const pageItems = searchResults !== null
+    ? filteredRows
+    : filteredRows.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);
 
   /* ── Sidebar contents (shared between desktop inline & mobile overlay) ── */
   const SidebarBody = (
@@ -239,10 +263,13 @@ const ApprovalsPage = () => {
       {/* Indexed search + filters */}
       <div className="flex-shrink-0 px-3 py-2 border-b bg-white space-y-2">
         <SearchBar
-          searchFn={receiptApi.listPendingApproval}
+          key={user?.uid || 'approvals-search'}
           placeholder="Search pending approvals…"
           onResults={onSearchResults}
           onClear={onSearchClear}
+          onQueryChange={setSearchQuery}
+          searchKey={JSON.stringify(filters)}
+          searchFn={(q, limit, offset) => receiptApi.listPendingApproval(q, limit, offset, searchFilters)}
         />
         <div className="flex gap-2">
           <select value={filters.category} onChange={e => setFilters(f => ({ ...f, category: e.target.value }))} className="px-2 py-1 text-xs border rounded bg-white flex-1 min-w-0">
@@ -307,18 +334,18 @@ const ApprovalsPage = () => {
       {/* Pagination */}
       <div className="flex-shrink-0 border-t px-3 py-2 flex items-center justify-between text-xs text-gray-500 bg-gray-50">
         <span>
-          {`${(clampedPage - 1) * PAGE_SIZE + 1}–${Math.min(clampedPage * PAGE_SIZE, filteredRows.length)}`}
-          {' '}/ {filteredRows.length}
+          {`${(clampedPage - 1) * PAGE_SIZE + 1}–${Math.min(clampedPage * PAGE_SIZE, searchResults !== null ? searchTotal : filteredRows.length)}`}
+          {' '}/ {searchResults !== null ? searchTotal : filteredRows.length}
         </span>
         <div className="flex gap-1">
           <button
-            onClick={() => setPage(p => Math.max(1, p - 1))}
+            onClick={() => { const next = Math.max(1, page - 1); setPage(next); if (searchResults !== null) loadSearchPage(next); }}
             disabled={clampedPage === 1}
             className="px-2 py-0.5 border rounded disabled:opacity-30 hover:bg-gray-100"
           >‹</button>
           <span className="px-1">{clampedPage}/{totalPages}</span>
           <button
-            onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+            onClick={() => { const next = Math.min(totalPages, page + 1); setPage(next); if (searchResults !== null) loadSearchPage(next); }}
             disabled={clampedPage >= totalPages}
             className="px-2 py-0.5 border rounded disabled:opacity-30 hover:bg-gray-100"
           >›</button>

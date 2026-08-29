@@ -60,15 +60,34 @@ const ReviewBatchDetailPage = ({ userId }: { userId: string | null }) => {
 
   // Search
   const [searchResults, setSearchResults] = useState<any[] | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchTotal, setSearchTotal] = useState(0);
 
-  const onSearchResults = (results: any[], _total: number) => {
+  const onSearchResults = (results: any[], total: number) => {
     setSearchResults(results);
+    setSearchTotal(total);
     setPage(1);
   };
 
   const onSearchClear = () => {
     setSearchResults(null);
+    setSearchTotal(0);
+    setSearchQuery('');
     setPage(1);
+  };
+
+  const loadSearchPage = async (pageNum: number) => {
+    if (!searchQuery.trim() || batchReceiptIds.length === 0) return;
+    try {
+      const result = await receiptApi.search(searchQuery.trim(), PAGE_SIZE, (pageNum - 1) * PAGE_SIZE, {
+        ids: batchReceiptIds,
+      });
+      setSearchResults(result.results || []);
+      setSearchTotal(result.total || 0);
+    } catch {
+      setSearchResults([]);
+      setSearchTotal(0);
+    }
   };
 
   // ── Load store receipts + batch metadata ──
@@ -109,6 +128,8 @@ const ReviewBatchDetailPage = ({ userId }: { userId: string | null }) => {
         : null;
     })
     .filter(Boolean) as BatchReviewItem[];
+
+  const batchReceiptIds = batchItems.map(item => item.receipt.id);
 
   // ── When searching, filter batchItems to matching receipts ──
   const filteredBatchItems = useMemo(() => {
@@ -171,9 +192,11 @@ const ReviewBatchDetailPage = ({ userId }: { userId: string | null }) => {
   }, [selectedId, batch?.id]);
 
   // ── Pagination ──
-  const totalPages = Math.max(1, Math.ceil(filteredBatchItems.length / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil((searchResults !== null ? searchTotal : filteredBatchItems.length) / PAGE_SIZE));
   const clampedPage = Math.min(page, totalPages);
-  const pageItems = filteredBatchItems.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);
+  const pageItems = searchResults !== null
+    ? filteredBatchItems
+    : filteredBatchItems.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);
   const selected = filteredBatchItems.find(bi => bi.receipt.id === selectedId);
 
   // ── Remove item from batch ──
@@ -335,10 +358,13 @@ const ReviewBatchDetailPage = ({ userId }: { userId: string | null }) => {
 
       {/* Search */}
       <div className="flex-shrink-0 px-3 py-2 border-b bg-white">
-        <SearchBar
-          placeholder="Search receipts in this batch..."
-          onResults={onSearchResults}
-          onClear={onSearchClear}
+         <SearchBar
+           placeholder="Search receipts in this batch..."
+           onResults={onSearchResults}
+           onClear={onSearchClear}
+           onQueryChange={setSearchQuery}
+           searchKey={batchReceiptIds.join(',')}
+           searchFn={(q, limit, offset) => receiptApi.search(q, limit, offset, { ids: batchReceiptIds })}
         />
       </div>
 
@@ -398,18 +424,18 @@ const ReviewBatchDetailPage = ({ userId }: { userId: string | null }) => {
       {/* Pagination (same pattern as ReviewPage) */}
       <div className="flex-shrink-0 border-t px-3 py-2 flex items-center justify-between text-xs text-gray-500 bg-gray-50">
         <span>
-          {`${(clampedPage - 1) * PAGE_SIZE + 1}–${Math.min(clampedPage * PAGE_SIZE, filteredBatchItems.length)}`}
-          {' '}/ {filteredBatchItems.length}
+           {`${(clampedPage - 1) * PAGE_SIZE + 1}–${Math.min(clampedPage * PAGE_SIZE, searchResults !== null ? searchTotal : filteredBatchItems.length)}`}
+           {' '}/ {searchResults !== null ? searchTotal : filteredBatchItems.length}
         </span>
         <div className="flex gap-1">
           <button
-            onClick={() => setPage(p => Math.max(1, p - 1))}
+            onClick={() => { const next = Math.max(1, page - 1); setPage(next); if (searchResults !== null) loadSearchPage(next); }}
             disabled={clampedPage === 1}
             className="px-2 py-0.5 border rounded disabled:opacity-30 hover:bg-gray-100"
           >‹</button>
           <span className="px-1">{clampedPage}/{totalPages}</span>
           <button
-            onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+            onClick={() => { const next = Math.min(totalPages, page + 1); setPage(next); if (searchResults !== null) loadSearchPage(next); }}
             disabled={clampedPage >= totalPages}
             className="px-2 py-0.5 border rounded disabled:opacity-30 hover:bg-gray-100"
           >›</button>

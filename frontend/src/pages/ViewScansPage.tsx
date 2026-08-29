@@ -49,6 +49,7 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
   const onSearchClear = () => {
     setSearchResults(null);
     setSearchTotal(0);
+    setSearchQuery('');
     setPage(1);
   };
 
@@ -56,7 +57,19 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
     if (!searchQuery.trim()) return;
     try {
       const offset = (pageNum - 1) * PAGE_SIZE;
-      const r = await receiptApi.search(searchQuery.trim(), PAGE_SIZE, offset);
+      const r = await receiptApi.search(searchQuery.trim(), PAGE_SIZE, offset, {
+        category: filters.category || undefined,
+        supplier: filters.supplier || undefined,
+        batchTitle: batchParam || undefined,
+        dateFrom: filters.dateStart || undefined,
+        dateTo: filters.dateEnd || undefined,
+        complete: filters.status ? filters.status === 'processed' : undefined,
+        zeroRated: filters.isZeroRated !== '' ? filters.isZeroRated === 'true' : undefined,
+        priceMin: filters.priceMin ? Number(filters.priceMin) : undefined,
+        priceMax: filters.priceMax ? Number(filters.priceMax) : undefined,
+        scanDateFrom: filters.scanDateStart || undefined,
+        scanDateTo: filters.scanDateEnd || undefined,
+      });
       setSearchResults(r.results || []);
       setSearchTotal(r.total || 0);
     } catch (_) { /* search failure: fall back to local receipts */ }
@@ -111,11 +124,25 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
   };
 
   const batchParam = new URLSearchParams(window.location.search).get('batch');
+  const searchKey = JSON.stringify({ batchParam, filters });
+  const searchFilters = {
+    category: filters.category || undefined,
+    supplier: filters.supplier || undefined,
+    batchTitle: batchParam || undefined,
+    dateFrom: filters.dateStart || undefined,
+    dateTo: filters.dateEnd || undefined,
+    complete: filters.status ? filters.status === 'processed' : undefined,
+    zeroRated: filters.isZeroRated !== '' ? filters.isZeroRated === 'true' : undefined,
+    priceMin: filters.priceMin ? Number(filters.priceMin) : undefined,
+    priceMax: filters.priceMax ? Number(filters.priceMax) : undefined,
+    scanDateFrom: filters.scanDateStart || undefined,
+    scanDateTo: filters.scanDateEnd || undefined,
+  };
 
   const filteredReceipts = useMemo(() => {
     // If searching, use server results directly
     if (searchResults !== null) {
-      return searchResults.sort((a: any, b: any) => (b._search_rank || 0) - (a._search_rank || 0));
+      return [...searchResults].sort((a: any, b: any) => (b._search_rank || 0) - (a._search_rank || 0));
     }
 
     const result = (receipts as ReceiptData[]).filter(r => {
@@ -164,7 +191,9 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
 
   const totalPages   = Math.max(1, Math.ceil((searchResults !== null ? searchTotal : filteredReceipts.length) / PAGE_SIZE));
   const clampedPage  = Math.min(page, totalPages);
-  const pageReceipts = filteredReceipts.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);
+  const pageReceipts = searchResults !== null
+    ? filteredReceipts
+    : filteredReceipts.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);
   const selected     = filteredReceipts.find(r => r.id === selectedId);
 
   if (loading && receipts.length === 0) {
@@ -186,7 +215,7 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
         <div className="flex items-center justify-between gap-2 px-3 py-2 border-b">
           <span className="text-sm font-semibold text-gray-700 truncate">
             Receipts
-            <span className="ml-1.5 text-xs font-normal text-gray-400">{filteredReceipts.length}</span>
+           <span className="ml-1.5 text-xs font-normal text-gray-400">{searchResults !== null ? searchTotal : filteredReceipts.length}</span>
           </span>
           <button
             onClick={() => setSidebarOpen(false)}
@@ -220,9 +249,12 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
         {/* Search */}
         <div className="flex-shrink-0 px-3 py-2 border-b bg-white">
           <SearchBar
+            key={userId || 'receipts-search'}
             onResults={onSearchResults}
             onClear={onSearchClear}
             onQueryChange={setSearchQuery}
+            searchKey={searchKey}
+            searchFn={(q, limit, offset) => receiptApi.search(q, limit, offset, searchFilters)}
           />
         </div>
 
@@ -251,7 +283,7 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
       </div>
 
       {/* Receipt list */}
-      <div className="flex-1 overflow-y-auto divide-y bg-white">
+       <div className="flex-1 overflow-y-auto divide-y bg-white">
         {pageReceipts.length === 0 ? (
           <p className="p-4 text-sm text-gray-400">No receipts match your filters.</p>
         ) : pageReceipts.map(receipt => (
@@ -291,11 +323,11 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
 
       {/* Pagination */}
       <div className="flex-shrink-0 border-t px-3 py-2 flex items-center justify-between text-xs text-gray-500 bg-gray-50">
-        <span>
-          {filteredReceipts.length === 0
-            ? '0'
-            : `${(clampedPage - 1) * PAGE_SIZE + 1}–${Math.min(clampedPage * PAGE_SIZE, filteredReceipts.length)}`
-          } / {filteredReceipts.length}
+         <span>
+           {(searchResults !== null ? searchTotal : filteredReceipts.length) === 0
+             ? '0'
+             : `${(clampedPage - 1) * PAGE_SIZE + 1}–${Math.min(clampedPage * PAGE_SIZE, searchResults !== null ? searchTotal : filteredReceipts.length)}`
+           } / {searchResults !== null ? searchTotal : filteredReceipts.length}
         </span>
         <div className="flex gap-1">
           <button

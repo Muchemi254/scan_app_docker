@@ -240,6 +240,7 @@ export const receiptApi = {
     if (filters?.category) params.append('category', filters.category);
     if (filters?.batchTitle) params.append('batchTitle', filters.batchTitle);
     if (filters?.rejected) params.append('rejected', String(filters.rejected));
+    if (filters?.hasImage !== undefined) params.append('hasImage', String(filters.hasImage));
 
     return apiRequest('GET', `/receipts?${params.toString()}`);
   },
@@ -262,8 +263,29 @@ export const receiptApi = {
   },
 
   /** Full-text search across receipts + items */
-  async search(q: string, limit = 50, offset = 0): Promise<{ total: number; results: any[] }> {
+  async search(q: string, limit = 50, offset = 0, filters?: {
+    status?: string;
+    category?: string;
+    supplier?: string;
+    batchTitle?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    hasImage?: boolean;
+    complete?: boolean;
+    zeroRated?: boolean;
+    priceMin?: number;
+    priceMax?: number;
+    scanDateFrom?: string;
+    scanDateTo?: string;
+    rejected?: boolean;
+    ids?: string[];
+  }): Promise<{ total: number; results: any[] }> {
     const p = new URLSearchParams({ q, limit: String(limit), offset: String(offset) });
+    for (const [key, value] of Object.entries(filters || {})) {
+      if (key === 'ids') continue;
+      if (value !== undefined && value !== '') p.append(key, String(value));
+    }
+    for (const id of filters?.ids || []) p.append('receiptId', id);
     return apiRequest('GET', `/receipts/search?${p.toString()}`);
   },
 
@@ -336,9 +358,13 @@ export const receiptApi = {
   },
 
   /** Cross-tenant list of every pending-approval receipt (admin only). */
-  async listPendingApproval(q?: string): Promise<any[]> {
+  async listPendingApproval(q?: string, limit = 1000, offset = 0, filters?: { category?: string; batchTitle?: string }): Promise<{ items: any[]; total: number }> {
     const authorization = await getAuthHeader();
-    const url = `${API_BASE_URL}/admin/receipts/pending-approval${q && q.trim() ? `?q=${encodeURIComponent(q.trim())}` : ''}`;
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+    if (q && q.trim()) params.set('q', q.trim());
+    if (filters?.category) params.set('category', filters.category);
+    if (filters?.batchTitle) params.set('batchTitle', filters.batchTitle);
+    const url = `${API_BASE_URL}/admin/receipts/pending-approval?${params.toString()}`;
     const response = await fetch(url, {
       method: 'GET',
       headers: { 'Authorization': authorization, 'Content-Type': 'application/json' },

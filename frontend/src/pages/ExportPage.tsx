@@ -11,7 +11,7 @@ interface ExportPageProps {
 }
 
 const REPORT_TYPES: { value: ReportType; label: string; icon: any; desc: string }[] = [
-  { value: 'detailed', label: 'Detailed Report', icon: Receipt, desc: 'Per-receipt breakdown with line items' },
+  { value: 'detailed', label: 'Detailed Report', icon: Receipt, desc: 'Per-receipt breakdown with line items and receipt totals' },
   { value: 'category', label: 'By Category', icon: BarChart3, desc: 'Spending grouped by category' },
   { value: 'supplier', label: 'By Supplier', icon: Building2, desc: 'Spending grouped by supplier' },
   { value: 'monthly', label: 'Monthly Trend', icon: TrendingUp, desc: 'Spending per month, split by year' },
@@ -261,7 +261,7 @@ const ExportPage = ({ userId, customReceipts, onClose }: ExportPageProps) => {
             {exportMode === 'client' && format === 'xlsx' && reportType === 'detailed' && (
               <p className="text-xs text-gray-500 mt-2 flex items-center gap-1">
                 <FileSpreadsheet className="h-3 w-3" />
-                Multi-sheet workbook with Detailed, Category, Supplier, Monthly & Tax reports
+                 Multi-sheet workbook with Detailed, Receipt Totals, Category, Supplier, Monthly & Tax reports
               </p>
             )}
           </div>

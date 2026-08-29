@@ -33,15 +33,18 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
   // Search
   const [searchResults, setSearchResults] = useState<any[] | null>(null);
   const [searchTotal, setSearchTotal] = useState(0);
+  const [searchQuery, setSearchQuery] = useState('');
 
   const onSearchResults = (results: any[], total: number) => {
     setSearchResults(results);
     setSearchTotal(total);
+    setPage(1);
   };
 
   const onSearchClear = () => {
     setSearchResults(null);
     setSearchTotal(0);
+    setSearchQuery('');
   };
 
   // Selected receipt for fullscreen view
@@ -69,7 +72,7 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
       } else {
         filters.batchTitle = groupTitle;
       }
-      const res = await receiptApi.list(skip, PAGE_SIZE, filters);
+      const res = await receiptApi.list(skip, PAGE_SIZE, { ...filters, hasImage: true });
       setReceipts((res.items || []).filter((r: any) => r.imageUrl));
       setTotal(res.total);
     } catch (err) {
@@ -100,12 +103,32 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
   // Page change
   const goToPage = (newPage: number) => {
     setPage(newPage);
-    if (activeGroup) loadReceipts(activeGroup, newPage);
+    if (searchResults !== null) {
+      loadSearchPage(newPage);
+    } else if (activeGroup) {
+      loadReceipts(activeGroup, newPage);
+    }
   };
+
+  async function loadSearchPage(pageNum: number) {
+    if (!searchQuery.trim() || !activeGroup) return;
+    try {
+      const batchTitle = activeGroup === 'Ungrouped' ? '__ungrouped__' : activeGroup;
+      const result = await receiptApi.search(searchQuery.trim(), PAGE_SIZE, (pageNum - 1) * PAGE_SIZE, {
+        batchTitle,
+        hasImage: true,
+      });
+      setSearchResults(result.results || []);
+      setSearchTotal(result.total || 0);
+    } catch {
+      setSearchResults([]);
+      setSearchTotal(0);
+    }
+  }
 
   // Use search results when available, otherwise loaded receipts
   const displayedReceipts = searchResults !== null
-    ? searchResults.filter((r: any) => r.imageUrl)
+    ? searchResults
     : (activeGroup ? receipts.filter((r: any) => r.imageUrl) : []);
 
   const effectiveTotal = searchResults !== null ? searchTotal : total;
@@ -216,7 +239,7 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
             </h1>
             <p className="text-sm text-gray-500">
               {searchResults !== null
-                ? `${displayedReceipts.length} result${displayedReceipts.length !== 1 ? 's' : ''}`
+                ? `${searchTotal} result${searchTotal !== 1 ? 's' : ''} — Page ${page} of ${totalPages}`
                 : `${total} receipt${total !== 1 ? 's' : ''} — Page ${page} of ${totalPages}`}
             </p>
           </div>
@@ -225,9 +248,16 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
         {/* Search within group */}
         <div className="w-full sm:w-64">
           <SearchBar
+            key={`${userId || 'gallery'}-${activeGroup}`}
             placeholder="Search receipts in gallery..."
             onResults={onSearchResults}
             onClear={onSearchClear}
+            onQueryChange={setSearchQuery}
+            searchKey={activeGroup}
+            searchFn={(q, limit, offset) => receiptApi.search(q, limit, offset, {
+              batchTitle: activeGroup === 'Ungrouped' ? '__ungrouped__' : activeGroup || undefined,
+              hasImage: true,
+            })}
           />
         </div>
       </div>
@@ -277,8 +307,8 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
             ))}
           </div>
 
-          {/* Pagination controls — only when not searching (group mode) */}
-          {searchResults === null && totalPages > 1 && (
+          {/* Pagination controls */}
+          {totalPages > 1 && (
             <div className="flex items-center justify-center gap-2 mt-6">
               <button
                 onClick={() => goToPage(page - 1)}

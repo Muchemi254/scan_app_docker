@@ -14,6 +14,7 @@ POST   /api/v1/users/{userId}/receipts/summary      - Generate AI summary
 
 import logging
 import os
+from datetime import date
 from typing import Optional
 import json
 from fastapi import APIRouter, Depends, File, Form, UploadFile, HTTPException, status, Query
@@ -302,6 +303,7 @@ async def list_receipts(
     category: Optional[str] = Query(None),
     batch_title: Optional[str] = Query(None, alias="batchTitle"),
     rejected: bool = Query(False),
+    has_image: Optional[bool] = Query(None, alias="hasImage"),
     current_user_id: str = Depends(get_current_user_id),
 ):
     """
@@ -326,6 +328,7 @@ async def list_receipts(
         receipts, total = await DataService.list_receipts(
             userId, skip=skip, limit=limit, status=status_filter,
             category=category, batch_title=batch_title, rejected=rejected,
+            has_image=has_image,
         )
 
         return ReceiptList(
@@ -375,9 +378,24 @@ async def list_receipt_groups(
 )
 async def search_receipts_endpoint(
     userId: str,
-    q: str = Query(..., min_length=1, description="Search query"),
+    q: str = Query(..., min_length=1, max_length=200, description="Search query"),
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
+    status_filter: Optional[str] = Query(None, alias="status"),
+    category: Optional[str] = Query(None),
+    supplier: Optional[str] = Query(None),
+    batch_title: Optional[str] = Query(None, alias="batchTitle"),
+    date_from: Optional[str] = Query(None, alias="dateFrom"),
+    date_to: Optional[str] = Query(None, alias="dateTo"),
+    has_image: Optional[bool] = Query(None, alias="hasImage"),
+    complete: Optional[bool] = Query(None),
+    zero_rated: Optional[bool] = Query(None, alias="zeroRated"),
+    price_min: Optional[float] = Query(None, alias="priceMin"),
+    price_max: Optional[float] = Query(None, alias="priceMax"),
+    scan_date_from: Optional[str] = Query(None, alias="scanDateFrom"),
+    scan_date_to: Optional[str] = Query(None, alias="scanDateTo"),
+    rejected: bool = Query(False),
+    receipt_ids: Optional[list[str]] = Query(None, alias="receiptId"),
     current_user_id: str = Depends(get_current_user_id),
 ):
     """
@@ -386,8 +404,39 @@ async def search_receipts_endpoint(
     Returns ranked results with relevance scores.
     """
     await verify_user_access(userId, current_user_id)
+    for field_name, value in (
+        ("dateFrom", date_from),
+        ("dateTo", date_to),
+        ("scanDateFrom", scan_date_from),
+        ("scanDateTo", scan_date_to),
+    ):
+        if value:
+            try:
+                date.fromisoformat(value)
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"{field_name} must be YYYY-MM-DD")
     try:
-        result = await DataService.search_receipts_fulltext(userId, q, limit, offset)
+        result = await DataService.search_receipts_fulltext(
+            userId,
+            q,
+            limit,
+            offset,
+            status=status_filter,
+            category=category,
+            supplier=supplier,
+            batch_title=batch_title,
+            date_from=date_from,
+            date_to=date_to,
+            has_image=has_image,
+            complete=complete,
+            zero_rated=zero_rated,
+            price_min=price_min,
+            price_max=price_max,
+            scan_date_from=scan_date_from,
+            scan_date_to=scan_date_to,
+            rejected=rejected,
+            receipt_ids=receipt_ids,
+        )
         return result
     except Exception as e:
         logger.error(f"Search failed: {e}")

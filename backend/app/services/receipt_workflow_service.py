@@ -35,6 +35,14 @@ from app.schemas.receipt import (
 from app.services.data_adapter import DataService
 from app.services.audit_service import AuditService
 from app.services import auth_service
+from app.services.search_query import (
+    item_index_text,
+    receipt_index_text,
+    item_search_text,
+    item_search_vector,
+    like_pattern,
+    receipt_search_vector,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -336,10 +344,13 @@ _PENDING_SELECT = """
            r.status                                AS status,
            r.scanned_at                            AS scanned_at,
            r.updated_at                            AS updated_at,
-           r.created_at                            AS created_at,
-           (SELECT count(*) FROM line_items li
+            r.created_at                            AS created_at,
+            r.image_filename                        AS image_filename,
+            r.legacy_image_url                      AS legacy_image_url,
+            (SELECT count(*) FROM line_items li
              WHERE li.receipt_id = r.id)           AS item_count,
-           (r.image_filename IS NOT NULL)          AS has_image
+            (NULLIF(BTRIM(r.image_filename), '') IS NOT NULL
+             OR NULLIF(BTRIM(r.legacy_image_url), '') IS NOT NULL) AS has_image
     FROM receipts r
 """
 
@@ -347,23 +358,18 @@ _PENDING_SELECT = """
 def _search_vector() -> str:
     """The tsvector expression searched for a pending-approval query."""
     return f"""
-        to_tsvector('simple',
-            COALESCE(r.supplier,'') || ' ' ||
-            COALESCE(r.category,'') || ' ' ||
-            COALESCE(r.invoice_number,'') || ' ' ||
-            COALESCE(r.kra_pin,'') || ' ' ||
-            COALESCE(r.buyer_kra_pin,'') || ' ' ||
-            COALESCE(r.cu_invoice,'') || ' ' ||
-            COALESCE(r.batch_title,'') || ' ' ||
-            COALESCE(r.receipt_date::text,'') || ' ' ||
-            COALESCE(r.location,'') || ' ' ||
-            COALESCE(r.total_amount::text,'') || ' ' ||
-            COALESCE(li.name,'')
-        ) @@ websearch_to_tsquery('simple', $2)
+        {receipt_search_vector('r')} @@ websearch_to_tsquery('simple', $2)
+        OR {item_search_vector('li')} @@ websearch_to_tsquery('simple', $2)
     """
 
 
-async def list_pending_for_admin(q: Optional[str] = None) -> list:
+async def list_pending_for_admin(
+    q: Optional[str] = None,
+    limit: int = 1000,
+    offset: int = 0,
+    category: Optional[str] = None,
+    batch_title: Optional[str] = None,
+) -> dict:
     """Cross-tenant list of every pending-approval receipt (admin only).
 
     Carries the scalar fields an approver needs to decide at a glance
@@ -375,48 +381,60 @@ async def list_pending_for_admin(q: Optional[str] = None) -> list:
     receipt search, scoped to pending approvals across all users.
     """
     query = (q or "").strip()
+    receipt_index = receipt_index_text("r")
+    item_index = item_index_text("li")
+    item_text = item_search_text("li")
+    where = ["r.status = $1"]
+    args = [ReceiptStatus.PENDING_APPROVAL.value]
+    if query:
+        where.append(f"""(
+            ({_search_vector()})
+            OR {receipt_index} ILIKE '%' || $3 || '%' ESCAPE '\\'
+            OR {item_index} ILIKE '%' || $3 || '%' ESCAPE '\\'
+            OR r.receipt_date::text ILIKE '%' || $3 || '%' ESCAPE '\\'
+            OR r.total_amount::text ILIKE '%' || $3 || '%' ESCAPE '\\'
+            OR {item_text} ILIKE '%' || $3 || '%' ESCAPE '\\'
+            OR (SELECT u.email FROM users u WHERE u.uid = r.user_id) ILIKE '%' || $3 || '%' ESCAPE '\\'
+            OR (SELECT u.display_name FROM users u WHERE u.uid = r.user_id) ILIKE '%' || $3 || '%' ESCAPE '\\'
+        )""")
+        args.append(query)
+        args.append(like_pattern(query))
+    if category:
+        args.append(category)
+        where.append(f"r.category = ${len(args)}")
+    if batch_title:
+        args.append(batch_title)
+        where.append(f"r.batch_title = ${len(args)}")
+    limit_index = len(args) + 1
+    offset_index = len(args) + 2
+    args.extend([limit, offset])
     pool = await get_pool()
     async with pool.acquire() as conn:
-        if query:
-            rows = await conn.fetch(
-                _PENDING_SELECT.replace("    FROM receipts r\n", "    FROM receipts r\n") + f"""
-            LEFT JOIN line_items li ON li.receipt_id = r.id
-            WHERE r.status = $1
-              AND (
-                {_search_vector()}
-                OR r.supplier ILIKE '%' || $2 || '%'
-                OR r.category ILIKE '%' || $2 || '%'
-                OR r.invoice_number ILIKE '%' || $2 || '%'
-                OR r.kra_pin ILIKE '%' || $2 || '%'
-                OR r.buyer_kra_pin ILIKE '%' || $2 || '%'
-                OR r.cu_invoice ILIKE '%' || $2 || '%'
-                OR r.batch_title ILIKE '%' || $2 || '%'
-                OR r.location ILIKE '%' || $2 || '%'
-                OR r.receipt_date::text ILIKE '%' || $2 || '%'
-                OR r.total_amount::text ILIKE '%' || $2 || '%'
-                OR (SELECT u.email FROM users u WHERE u.uid = r.user_id) ILIKE '%' || $2 || '%'
-                OR (SELECT u.display_name FROM users u WHERE u.uid = r.user_id) ILIKE '%' || $2 || '%'
-                OR li.name ILIKE '%' || $2 || '%'
-              )
+        join = " LEFT JOIN line_items li ON li.receipt_id = r.id" if query else ""
+        inner_sql = _PENDING_SELECT + f"""
+            {join}
+            WHERE {" AND ".join(where)}
             GROUP BY r.id
-            ORDER BY r.updated_at DESC
+        """ if query else _PENDING_SELECT + f"""
+            WHERE {" AND ".join(where)}
+        """
+        rows = await conn.fetch(
+            f"""SELECT pending.*, COUNT(*) OVER() AS total
+            FROM ({inner_sql}) AS pending
+            ORDER BY pending.updated_at DESC NULLS LAST, pending.id
+            LIMIT ${limit_index} OFFSET ${offset_index}
             """,
-                ReceiptStatus.PENDING_APPROVAL.value,
-                query,
-            )
-        else:
-            rows = await conn.fetch(
-                _PENDING_SELECT + """
-            WHERE r.status = $1
-            ORDER BY r.updated_at DESC
-            """,
-                ReceiptStatus.PENDING_APPROVAL.value,
-            )
+            *args,
+        )
+        total = rows[0]["total"] if rows else 0
         out = []
         for r in rows:
             d = dict(r)
             rid = str(d["id"])
-            image_url = f"/receipt-images/{rid}" if d.pop("has_image") else None
+            if d.pop("has_image"):
+                image_url = f"/receipt-images/{rid}" if d.get("image_filename") else d.get("legacy_image_url")
+            else:
+                image_url = None
             out.append(
                 {
                     "id": rid,
@@ -443,4 +461,4 @@ async def list_pending_for_admin(q: Optional[str] = None) -> list:
                     "imageUrl": image_url,
                 }
             )
-        return out
+        return {"items": out, "total": total}

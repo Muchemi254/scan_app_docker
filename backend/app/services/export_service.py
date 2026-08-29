@@ -235,7 +235,7 @@ def detailed_rows(receipts: List[dict]) -> List[dict]:
             "Receipt Total": sanitize_numeric(r.get("totalAmount")),
         }
         if items:
-            for item in items:
+            for item_index, item in enumerate(items):
                 qty = sanitize_numeric(item.get("quantity", 1)) or 1
                 price = sanitize_numeric(item.get("price"))
                 tax = sanitize_numeric(item.get("tax"))
@@ -248,7 +248,9 @@ def detailed_rows(receipts: List[dict]) -> List[dict]:
                 row["Price"] = price
                 row["Tax"] = tax
                 row["Disc%"] = discount_pct if discount_pct else ""
-                row["Item Total"] = round(subtotal * discount_factor, 2)
+                row["Calculated Item Total"] = round(subtotal * discount_factor, 2)
+                # Emit the authoritative receipt total once so summing this column reconciles.
+                row["Receipt Total"] = base["Receipt Total"] if item_index == 0 else ""
                 rows.append(row)
         else:
             row = dict(base)
@@ -257,9 +259,24 @@ def detailed_rows(receipts: List[dict]) -> List[dict]:
             row["Price"] = 0
             row["Tax"] = 0
             row["Disc%"] = ""
-            row["Item Total"] = 0
+            row["Calculated Item Total"] = 0
             rows.append(row)
     return rows
+
+
+def receipt_total_rows(receipts: List[dict]) -> List[dict]:
+    """One row per receipt for authoritative total reconciliation."""
+    return [
+        {
+            "Receipt ID": r.get("id", ""),
+            "Date": r.get("receiptDate", ""),
+            "Supplier": r.get("supplier", ""),
+            "Category": r.get("category", ""),
+            "Invoice": r.get("invoiceNumber", ""),
+            "Receipt Total": sanitize_numeric(r.get("totalAmount")),
+        }
+        for r in receipts
+    ]
 
 
 def tax_summary(receipts: List[dict]) -> List[dict]:
@@ -375,7 +392,7 @@ def generate_excel(receipts: List[dict], report_type: str, date_from: Optional[s
         _add_excel_sheet(wb, "Receipts", headers, data)
 
     if report_type == "detailed":
-        _detail_headers = ["Receipt ID", "Date", "Supplier", "Category", "Invoice", "Item", "Qty", "Price", "Tax", "Disc%", "Item Total", "Receipt Total"]
+        _detail_headers = ["Receipt ID", "Date", "Supplier", "Category", "Invoice", "Item", "Qty", "Price", "Tax", "Disc%", "Calculated Item Total", "Receipt Total"]
         _detail_data = []
         for r in detailed_rows(filtered):
             row = []
@@ -388,6 +405,12 @@ def generate_excel(receipts: List[dict], report_type: str, date_from: Optional[s
                     row.append(v)
             _detail_data.append(row)
         _add_excel_sheet(wb, "Detailed", _detail_headers, _detail_data, date_cols=[1])
+        _receipt_total_headers = ["Receipt ID", "Date", "Supplier", "Category", "Invoice", "Receipt Total"]
+        _receipt_total_data = [
+            [r.get(h, "") for h in _receipt_total_headers]
+            for r in receipt_total_rows(filtered)
+        ]
+        _add_excel_sheet(wb, "Receipt Totals", _receipt_total_headers, _receipt_total_data, date_cols=[1])
         _add_excel_sheet(wb, "By Category", ["Category", "Total", "Count", "Percentage"],
                          [[r["Category"], r["Total"], r["Count"], r["Pct"]] for r in category_breakdown(filtered)])
         _add_excel_sheet(wb, "By Supplier", ["Supplier", "Total", "Count", "Avg per Receipt"],
@@ -538,7 +561,7 @@ def generate_pdf(receipts: List[dict], report_type: str, date_from: Optional[str
 
     elif report_type == "detailed":
         elements.append(Spacer(1, 4*mm))
-        headers = ["Receipt ID", "Date", "Supplier", "Category", "Invoice", "Item", "Qty", "Price", "Tax", "Disc%", "Item Total"]
+        headers = ["Receipt ID", "Date", "Supplier", "Category", "Invoice", "Item", "Qty", "Price", "Tax", "Disc%", "Calculated Item Total"]
         rows = [[r.get(h, "") for h in headers]
                 for r in detailed_rows(filtered)]
         if rows:
@@ -595,7 +618,7 @@ def generate_csv(receipts: List[dict], report_type: str, date_from: Optional[str
     uses_month = _report_uses_month(report_type, pivot_config)
 
     if report_type == "detailed":
-        _detail_headers = ["Receipt ID", "Date", "Supplier", "Category", "Invoice", "Item", "Qty", "Price", "Tax", "Disc%", "Item Total", "Receipt Total"]
+        _detail_headers = ["Receipt ID", "Date", "Supplier", "Category", "Invoice", "Item", "Qty", "Price", "Tax", "Disc%", "Calculated Item Total", "Receipt Total"]
         writer.writerow(_detail_headers)
         for r in detailed_rows(filtered):
             writer.writerow([r.get(h, "") for h in _detail_headers])

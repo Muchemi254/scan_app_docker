@@ -56,10 +56,11 @@ class DataService:
         cls, user_id: str, skip: int = 0, limit: int = 50,
         status: Optional[str] = None, category: Optional[str] = None,
         batch_title: Optional[str] = None, rejected: bool = False,
+        has_image: Optional[bool] = None,
     ) -> tuple:
         db, _ = cls._backend()
         return await db.list_receipts(
-            user_id, skip, limit, status, category, batch_title, rejected
+            user_id, skip, limit, status, category, batch_title, rejected, has_image
         )
 
     @classmethod
@@ -84,9 +85,10 @@ class DataService:
     @classmethod
     async def search_receipts_fulltext(
         cls, user_id: str, query: str, limit: int = 50, offset: int = 0,
+        **filters: Any,
     ) -> dict:
         db, _ = cls._backend()
-        return await db.search_receipts_fulltext(user_id, query, limit, offset)
+        return await db.search_receipts_fulltext(user_id, query, limit, offset, **filters)
 
     @classmethod
     async def check_duplicate(

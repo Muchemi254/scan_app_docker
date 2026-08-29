@@ -41,6 +41,7 @@ const MyApprovalsPage = () => {
   const [approved, setApproved] = useState<any[]>([]);
   const [rejected, setRejected] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(1);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [recallTarget, setRecallTarget] = useState<any | null>(null);
@@ -48,6 +49,7 @@ const MyApprovalsPage = () => {
   // Indexed search (reused from the receipt search endpoint)
   const [searchResults, setSearchResults] = useState<any[] | null>(null);
   const [searchTotal, setSearchTotal] = useState(0);
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Client-side filters (same pattern as the main receipts list)
   const [filters, setFilters] = useState({
@@ -96,16 +98,19 @@ const MyApprovalsPage = () => {
   useEffect(() => {
     setSearchResults(null);
     setSearchTotal(0);
+    setPage(1);
   }, [effectiveUid]);
 
   const onSearchResults = (results: any[], t: number) => {
     setSearchResults(results);
     setSearchTotal(t);
+    setPage(1);
   };
 
   const onSearchClear = () => {
     setSearchResults(null);
     setSearchTotal(0);
+    setSearchQuery('');
   };
 
   const allLoaded = useMemo(() => [...items, ...approved, ...rejected], [items, approved, rejected]);
@@ -203,6 +208,28 @@ const MyApprovalsPage = () => {
     load();
   };
 
+  const searchFilters = {
+    status: tab === 'pending' ? 'pending_approval' : tab === 'approved' ? 'processed' : 'needs_review',
+    category: filters.category || undefined,
+    supplier: filters.supplier || undefined,
+    dateFrom: filters.dateStart || undefined,
+    dateTo: filters.dateEnd || undefined,
+    rejected: tab === 'rejected' ? true : undefined,
+  };
+  async function loadSearchPage(pageNum: number) {
+    if (!searchQuery.trim()) return;
+    try {
+      const result = await receiptApi.search(searchQuery.trim(), 25, (pageNum - 1) * 25, searchFilters);
+      setSearchResults(result.results || []);
+      setSearchTotal(result.total || 0);
+    } catch {
+      setSearchResults([]);
+      setSearchTotal(0);
+    }
+  }
+
+  const totalPages = Math.max(1, Math.ceil((searchResults !== null ? searchTotal : listForTab.length) / 25));
+
   const TABS: { key: Tab; label: string }[] = [
     { key: 'pending', label: `Pending Approval (${items.length})` },
     { key: 'approved', label: `Approved (${approved.length})` },
@@ -237,8 +264,12 @@ const MyApprovalsPage = () => {
       {/* Indexed search + reused filters */}
       <div className="bg-white rounded-lg shadow p-3 mb-4 space-y-2">
         <SearchBar
+          key={effectiveUid || 'my-approvals-search'}
           onResults={onSearchResults}
           onClear={onSearchClear}
+          onQueryChange={setSearchQuery}
+          searchKey={JSON.stringify({ tab, filters })}
+          searchFn={(q, limit, offset) => receiptApi.search(q, limit, offset, searchFilters)}
         />
         <div className="flex flex-wrap gap-2">
           <select value={filters.category} onChange={(e) => setFilters((f) => ({ ...f, category: e.target.value }))} className="px-2 py-1 text-xs border rounded bg-white">
@@ -372,6 +403,22 @@ const MyApprovalsPage = () => {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {searchResults !== null && totalPages > 1 && (
+        <div className="flex items-center justify-center gap-3 mt-4 text-sm text-gray-500">
+          <button
+            onClick={() => { const next = Math.max(1, page - 1); setPage(next); loadSearchPage(next); }}
+            disabled={page <= 1}
+            className="px-3 py-1 border rounded disabled:opacity-30 hover:bg-gray-100"
+          >Previous</button>
+          <span>{page} / {totalPages}</span>
+          <button
+            onClick={() => { const next = Math.min(totalPages, page + 1); setPage(next); loadSearchPage(next); }}
+            disabled={page >= totalPages}
+            className="px-3 py-1 border rounded disabled:opacity-30 hover:bg-gray-100"
+          >Next</button>
         </div>
       )}
 

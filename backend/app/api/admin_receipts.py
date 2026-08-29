@@ -18,8 +18,11 @@ router = APIRouter(prefix="/admin", tags=["admin-receipts"])
 @router.get("/receipts/pending-approval")
 async def list_pending_approval(
     q: Optional[str] = Query(None, description="Full-text search within pending approvals"),
+    limit: int = Query(1000, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    category: Optional[str] = Query(None),
+    batch_title: Optional[str] = Query(None, alias="batchTitle"),
     _: str = Depends(require_admin),
 ):
     """List every pending_approval receipt across all users (admin only)."""
-    items = await list_pending_for_admin(q)
-    return {"items": items, "total": len(items)}
+    return await list_pending_for_admin(q, limit, offset, category, batch_title)

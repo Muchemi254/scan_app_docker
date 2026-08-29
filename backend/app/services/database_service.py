@@ -24,6 +24,14 @@ from typing import Optional, List, Dict, Any
 from app.core.database import get_pool
 from app.core.config import settings
 from app.schemas.receipt import ReceiptStatus
+from app.services.search_query import (
+    item_index_text,
+    item_search_text,
+    item_search_vector,
+    like_pattern,
+    receipt_index_text,
+    receipt_search_vector,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -342,6 +350,7 @@ class DatabaseService:
         category: Optional[str] = None,
         batch_title: Optional[str] = None,
         rejected: bool = False,
+        has_image: Optional[bool] = None,
     ) -> tuple:
         """List receipts with filters and pagination. Returns (receipts, total)."""
         pool = await get_pool()
@@ -376,6 +385,16 @@ class DatabaseService:
             elif batch_title == "__ungrouped__":
                 conditions.append(
                     "(batch_title IS NULL OR batch_title = '' OR UPPER(batch_title) = 'N/A')"
+                )
+            if has_image is True:
+                conditions.append(
+                    "(NULLIF(BTRIM(image_filename), '') IS NOT NULL OR "
+                    "NULLIF(BTRIM(legacy_image_url), '') IS NOT NULL)"
+                )
+            elif has_image is False:
+                conditions.append(
+                    "(NULLIF(BTRIM(image_filename), '') IS NULL AND "
+                    "NULLIF(BTRIM(legacy_image_url), '') IS NULL)"
                 )
 
             where_clause = " AND ".join(conditions)
@@ -699,6 +718,21 @@ class DatabaseService:
         query: str,
         limit: int = 50,
         offset: int = 0,
+        status: Optional[str] = None,
+        category: Optional[str] = None,
+        supplier: Optional[str] = None,
+        batch_title: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        has_image: Optional[bool] = None,
+        complete: Optional[bool] = None,
+        zero_rated: Optional[bool] = None,
+        price_min: Optional[float] = None,
+        price_max: Optional[float] = None,
+        scan_date_from: Optional[str] = None,
+        scan_date_to: Optional[str] = None,
+        rejected: bool = False,
+        receipt_ids: Optional[List[str]] = None,
     ) -> dict:
         """
         Full-text search across receipts + items. Returns ranked matches.
@@ -712,66 +746,114 @@ class DatabaseService:
             return {"total": 0, "results": []}
 
         q = query.strip()
+        receipt_index = receipt_index_text("r")
+        item_index = item_index_text("li")
+        receipt_vector = receipt_search_vector("r")
+        item_text = item_search_text("li")
+        item_vector = item_search_vector("li")
+        where = [
+            "r.user_id = $1",
+            f"""(
+                {receipt_vector} @@ websearch_to_tsquery('simple', $2)
+                OR {item_vector} @@ websearch_to_tsquery('simple', $2)
+                OR {receipt_index} ILIKE '%' || $3 || '%' ESCAPE '\\'
+                OR {item_index} ILIKE '%' || $3 || '%' ESCAPE '\\'
+                OR r.receipt_date::text ILIKE '%' || $3 || '%' ESCAPE '\\'
+                OR r.total_amount::text ILIKE '%' || $3 || '%' ESCAPE '\\'
+                OR {item_text} ILIKE '%' || $3 || '%' ESCAPE '\\'
+            )""",
+        ]
+        args: List[Any] = [user_id, q, like_pattern(q)]
+
+        def add(value: Any, expression: str) -> None:
+            args.append(value)
+            where.append(expression.format(index=len(args)))
+
+        if status:
+            add(status, "r.status = ${index}")
+        if category:
+            add(category, "r.category = ${index}")
+        if supplier:
+            add(supplier, "r.supplier = ${index}")
+        if batch_title == "__ungrouped__":
+            where.append("(r.batch_title IS NULL OR BTRIM(r.batch_title) = '' OR UPPER(BTRIM(r.batch_title)) = 'N/A')")
+        elif batch_title:
+            add(batch_title, "r.batch_title = ${index}")
+        if date_from:
+            add(date_from, "r.receipt_date >= ${index}::date")
+        if date_to:
+            add(date_to, "r.receipt_date < (${index}::date + interval '1 day')")
+        if has_image is True:
+            where.append("(NULLIF(BTRIM(r.image_filename), '') IS NOT NULL OR NULLIF(BTRIM(r.legacy_image_url), '') IS NOT NULL)")
+        elif has_image is False:
+            where.append("(NULLIF(BTRIM(r.image_filename), '') IS NULL AND NULLIF(BTRIM(r.legacy_image_url), '') IS NULL)")
+        if complete is not None:
+            complete_condition = """(
+                r.status = 'processed'
+                AND r.receipt_date IS NOT NULL
+                AND NULLIF(BTRIM(COALESCE(r.supplier, '')), '') IS NOT NULL
+                AND UPPER(BTRIM(COALESCE(r.supplier, ''))) <> 'N/A'
+                AND NULLIF(BTRIM(COALESCE(r.category, '')), '') IS NOT NULL
+                AND UPPER(BTRIM(COALESCE(r.category, ''))) <> 'N/A'
+                AND r.total_amount IS NOT NULL
+            )"""
+            where.append(complete_condition if complete else f"NOT {complete_condition}")
+        if zero_rated is not None:
+            add(zero_rated, "EXISTS (SELECT 1 FROM line_items zli WHERE zli.receipt_id = r.id AND zli.is_zero_rated = ${index})")
+        if price_min is not None:
+            add(price_min, "r.total_amount >= ${index}")
+        if price_max is not None:
+            add(price_max, "r.total_amount <= ${index}")
+        if scan_date_from:
+            add(scan_date_from, "r.scanned_at >= ${index}::date")
+        if scan_date_to:
+            add(scan_date_to, "r.scanned_at < (${index}::date + interval '1 day')")
+        if rejected:
+            where.append("""(
+                SELECT a.action
+                FROM audit_logs a
+                WHERE a.receipt_id = r.id AND a.user_id = $1
+                ORDER BY a.timestamp DESC, a.id DESC
+                LIMIT 1
+            ) = 'rejected'""")
+        if receipt_ids is not None:
+            if not receipt_ids:
+                where.append("FALSE")
+            else:
+                add(receipt_ids, "r.id = ANY(${index}::text[])")
+
+        limit_index = len(args) + 1
+        offset_index = len(args) + 2
+        args.extend([limit, offset])
         pool = await get_pool()
         async with pool.acquire() as conn:
-            # Build search: full-text rank + ILIKE matches
             rows = await conn.fetch(
-                """
-                WITH ranked AS (
+                f"""
+                WITH search_query AS (
+                    SELECT websearch_to_tsquery('simple', $2) AS query
+                ),
+                ranked AS (
                     SELECT DISTINCT ON (r.id)
                         r.*,
                         GREATEST(
-                            ts_rank(
-                                to_tsvector('simple',
-                                    COALESCE(r.supplier,'') || ' ' ||
-                                    COALESCE(r.category,'') || ' ' ||
-                                    COALESCE(r.invoice_number,'') || ' ' ||
-                                    COALESCE(r.kra_pin,'') || ' ' ||
-                                    COALESCE(r.buyer_kra_pin,'') || ' ' ||
-                                    COALESCE(r.cu_invoice,'') || ' ' ||
-                                    COALESCE(r.batch_title,'') || ' ' ||
-                                    COALESCE(r.total_amount::text,'')
-                                ),
-                                websearch_to_tsquery('simple', $2)
-                            ),
+                            ts_rank({receipt_vector}, sq.query),
+                            COALESCE(MAX(ts_rank({item_vector}, sq.query)), 0),
                             0.01
                         ) AS rank,
                         string_agg(DISTINCT li.name, ', ' ORDER BY li.name) AS item_names
                     FROM receipts r
                     LEFT JOIN line_items li ON li.receipt_id = r.id
-                    WHERE r.user_id = $1
-                      AND (
-                        to_tsvector('simple',
-                            COALESCE(r.supplier,'') || ' ' ||
-                            COALESCE(r.category,'') || ' ' ||
-                            COALESCE(r.invoice_number,'') || ' ' ||
-                            COALESCE(r.kra_pin,'') || ' ' ||
-                            COALESCE(r.buyer_kra_pin,'') || ' ' ||
-                            COALESCE(r.cu_invoice,'') || ' ' ||
-                            COALESCE(r.batch_title,'') || ' ' ||
-                            COALESCE(r.total_amount::text,'') || ' ' ||
-                            COALESCE(li.name,'')
-                        ) @@ websearch_to_tsquery('simple', $2)
-                        OR r.supplier ILIKE '%' || $2 || '%'
-                        OR r.category ILIKE '%' || $2 || '%'
-                        OR r.invoice_number ILIKE '%' || $2 || '%'
-                        OR r.kra_pin ILIKE '%' || $2 || '%'
-                        OR r.buyer_kra_pin ILIKE '%' || $2 || '%'
-                        OR r.cu_invoice ILIKE '%' || $2 || '%'
-                        OR r.batch_title ILIKE '%' || $2 || '%'
-                        OR r.total_amount::text ILIKE '%' || $2 || '%'
-                        OR r.receipt_date::text ILIKE '%' || $2 || '%'
-                        OR li.name ILIKE '%' || $2 || '%'
-                      )
-                    GROUP BY r.id
+                    CROSS JOIN search_query sq
+                    WHERE {" AND ".join(where)}
+                    GROUP BY r.id, sq.query
                     ORDER BY r.id, rank DESC
                 )
                 SELECT *, COUNT(*) OVER() AS total
                 FROM ranked
-                ORDER BY rank DESC
-                LIMIT $3 OFFSET $4
+                ORDER BY rank DESC, receipt_date DESC NULLS LAST, created_at DESC NULLS LAST, id
+                LIMIT ${limit_index} OFFSET ${offset_index}
                 """,
-                user_id, q, limit, offset,
+                *args,
             )
 
             total = rows[0]["total"] if rows else 0
@@ -801,7 +883,8 @@ class DatabaseService:
                     MIN(supplier) AS "firstSupplier"
                 FROM receipts
                 WHERE user_id = $1
-                  AND image_filename IS NOT NULL
+                  AND (NULLIF(BTRIM(image_filename), '') IS NOT NULL
+                       OR NULLIF(BTRIM(legacy_image_url), '') IS NOT NULL)
                 GROUP BY "batchTitle"
                 ORDER BY count DESC
                 """,
