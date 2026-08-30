@@ -199,22 +199,20 @@ export const extractReceiptData = async (
   };
 
   // Reusable cached category list (will be cached by Gemini)
+  // Canonical taxonomy — keep identical to backend/app/services/gemini.py CATEGORIES
 const CATEGORY_LIST = [
-  "Building Materials", "Hardware & Tools", "Paint & Finishes", "Plumbing & Sanitary", "Electrical Supplies",
-  "Fuel & Lubricants", "Vehicle Maintenance", "Transport Services", "Energy & Utilities",
-  "Seeds & Inputs", "Fertilizers & Chemicals", "Irrigation Supplies", "Farm Tools & Equipment",
-  "Animal Feed & Supplements", "Veterinary Services", "Livestock & Poultry",
-  "Crop Harvesting & Processing", "Greenhouse Supplies", "Agro Consultancy & Training",
-  "Furniture & Fixtures", "Electronics & Appliances", "Utensils & Cutlery",
-  "Cleaning Supplies", "Stationery & Office Supplies",
-  "Groceries & Provisions", "Perishables", "Beverages", "Restaurant & Catering",
-  "Clothing & Footwear", "Personal Care & Beauty", "Health & Medicine", "Baby & Kids Supplies",
-  "Phones & Accessories", "Computers & IT Equipment", "Internet & Airtime",
-  "Gifts & Donations", "Entertainment & Leisure", "Education & Learning", "Subscriptions & Memberships",
-  "Raw Materials", "Packaging Supplies", "Marketing & Branding", "Employee Salaries & Wages",
-  "Professional Services", "Licenses & Permits",
-  "Rent & Lease", "Land & Property Purchases", "Security & Surveillance",
-  "Repairs & Maintenance", "Emergency Purchases"
+  "Building Materials", "Hardware & Tools", "Paint & Finishes", "Plumbing & Sanitary", "Electrical Supplies", "Security & Surveillance",
+  "Fuel & Lubricants", "Vehicle Maintenance", "Transport Services", "Utilities & Bills",
+  "Seeds & Inputs", "Fertilizers & Chemicals", "Farm Tools & Equipment", "Greenhouse Supplies",
+  "Crop Harvesting & Processing", "Agro Consultancy & Training",
+  "Animal Feed & Supplements", "Livestock & Poultry", "Veterinary Services",
+  "Food & Groceries", "Furniture & Fixtures", "Utensils & Cutlery", "Cleaning Supplies", "Baby & Kids Supplies",
+  "Clothing & Footwear", "Personal Care & Beauty", "Health & Medicine",
+  "Stationery & Office Supplies", "Professional & Business Services", "Employee Salaries & Wages",
+  "Licenses & Permits", "Rent, Lease & Property",
+  "Electronics & Appliances", "Phones & Accessories", "Computers & IT Equipment",
+  "Raw Materials", "Packaging Supplies", "Gifts & Donations", "Entertainment & Leisure",
+  "Repairs & Maintenance", "Emergency Purchases", "Other"
 ];
 
 const categoryInstructions = `
@@ -361,21 +359,18 @@ Return ONLY the exact category name (copy-paste from list above).`;
     console.log("🧠 Gemini raw category response:", category);
 
     const validCategories: string[] = [ 
-      "Building Materials", "Hardware & Tools", "Paint & Finishes", "Plumbing & Sanitary", "Electrical Supplies",
-      "Fuel & Lubricants", "Vehicle Maintenance", "Transport Services", "Energy & Utilities",
-      "Seeds & Inputs", "Fertilizers & Chemicals", "Irrigation Supplies", "Farm Tools & Equipment",
-      "Animal Feed & Supplements", "Veterinary Services", "Livestock & Poultry",
-      "Crop Harvesting & Processing", "Greenhouse Supplies", "Agro Consultancy & Training",
-      "Furniture & Fixtures", "Electronics & Appliances", "Utensils & Cutlery",
-      "Cleaning Supplies", "Stationery & Office Supplies",
-      "Groceries & Provisions", "Perishables", "Beverages", "Restaurant & Catering",
-      "Clothing & Footwear", "Personal Care & Beauty", "Health & Medicine", "Baby & Kids Supplies",
-      "Phones & Accessories", "Computers & IT Equipment", "Internet & Airtime",
-      "Gifts & Donations", "Entertainment & Leisure", "Education & Learning", "Subscriptions & Memberships",
-      "Raw Materials", "Packaging Supplies", "Marketing & Branding", "Employee Salaries & Wages",
-      "Professional Services", "Licenses & Permits",
-      "Rent & Lease", "Land & Property Purchases", "Security & Surveillance",
-      "Repairs & Maintenance", "Emergency Purchases"
+      "Building Materials", "Hardware & Tools", "Paint & Finishes", "Plumbing & Sanitary", "Electrical Supplies", "Security & Surveillance",
+      "Fuel & Lubricants", "Vehicle Maintenance", "Transport Services", "Utilities & Bills",
+      "Seeds & Inputs", "Fertilizers & Chemicals", "Farm Tools & Equipment", "Greenhouse Supplies",
+      "Crop Harvesting & Processing", "Agro Consultancy & Training",
+      "Animal Feed & Supplements", "Livestock & Poultry", "Veterinary Services",
+      "Food & Groceries", "Furniture & Fixtures", "Utensils & Cutlery", "Cleaning Supplies", "Baby & Kids Supplies",
+      "Clothing & Footwear", "Personal Care & Beauty", "Health & Medicine",
+      "Stationery & Office Supplies", "Professional & Business Services", "Employee Salaries & Wages",
+      "Licenses & Permits", "Rent, Lease & Property",
+      "Electronics & Appliances", "Phones & Accessories", "Computers & IT Equipment",
+      "Raw Materials", "Packaging Supplies", "Gifts & Donations", "Entertainment & Leisure",
+      "Repairs & Maintenance", "Emergency Purchases", "Other"
     ];
 
     if (category && validCategories.includes(category)) {

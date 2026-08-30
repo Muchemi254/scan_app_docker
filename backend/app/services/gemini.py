@@ -336,29 +336,72 @@ MODEL_PRICING = {
     "gemini-3.1-flash-lite-preview": {"input": 0.075, "cachedInput": 0.0225, "output": 0.3},
 }
 
-# Category list (reusable for caching)
+# Category list (reusable for caching).
+# Canonical taxonomy — see docs/category-taxonomy.md. Broad by design: every
+# receipt must fit a bucket; never grow this list (use CATEGORY_ALIASES or
+# 'Other' instead). Keep the frontend copy in
+# frontend/src/services/gemini.tsx (CATEGORY_LIST) identical.
 CATEGORIES = [
     "Building Materials", "Hardware & Tools", "Paint & Finishes",
-    "Plumbing & Sanitary", "Electrical Supplies",
+    "Plumbing & Sanitary", "Electrical Supplies", "Security & Surveillance",
     "Fuel & Lubricants", "Vehicle Maintenance", "Transport Services",
-    "Energy & Utilities",
-    "Seeds & Inputs", "Fertilizers & Chemicals", "Irrigation Supplies",
-    "Farm Tools & Equipment", "Animal Feed & Supplements", "Veterinary Services",
-    "Livestock & Poultry", "Crop Harvesting & Processing", "Greenhouse Supplies",
+    "Utilities & Bills",
+    "Seeds & Inputs", "Fertilizers & Chemicals", "Farm Tools & Equipment",
+    "Greenhouse Supplies", "Crop Harvesting & Processing",
     "Agro Consultancy & Training",
-    "Furniture & Fixtures", "Electronics & Appliances", "Utensils & Cutlery",
-    "Cleaning Supplies", "Stationery & Office Supplies",
-    "Groceries & Provisions", "Perishables", "Beverages", "Restaurant & Catering",
+    "Animal Feed & Supplements", "Livestock & Poultry", "Veterinary Services",
+    "Food & Groceries", "Furniture & Fixtures", "Utensils & Cutlery",
+    "Cleaning Supplies", "Baby & Kids Supplies",
     "Clothing & Footwear", "Personal Care & Beauty", "Health & Medicine",
-    "Baby & Kids Supplies",
-    "Phones & Accessories", "Computers & IT Equipment", "Internet & Airtime",
-    "Gifts & Donations", "Entertainment & Leisure", "Education & Learning",
-    "Subscriptions & Memberships",
-    "Raw Materials", "Packaging Supplies", "Marketing & Branding",
-    "Employee Salaries & Wages", "Professional Services", "Licenses & Permits",
-    "Rent & Lease", "Land & Property Purchases", "Security & Surveillance",
-    "Repairs & Maintenance", "Emergency Purchases"
+    "Stationery & Office Supplies", "Professional & Business Services",
+    "Employee Salaries & Wages", "Licenses & Permits", "Rent, Lease & Property",
+    "Electronics & Appliances", "Phones & Accessories", "Computers & IT Equipment",
+    "Raw Materials", "Packaging Supplies", "Gifts & Donations",
+    "Entertainment & Leisure",
+    "Repairs & Maintenance", "Emergency Purchases", "Other"
 ]
+
+# Old names + common variants → canonical category. Keeps historical data and
+# model near-misses from ever creating new categories.
+CATEGORY_ALIASES = {
+    "Groceries & Provisions": "Food & Groceries",
+    "Perishables": "Food & Groceries",
+    "Beverages": "Food & Groceries",
+    "Restaurant & Catering": "Food & Groceries",
+    "Irrigation Supplies": "Plumbing & Sanitary",
+    "Veterinary Inputs & Services": "Veterinary Services",
+    "Repairs & Maintenance Services": "Repairs & Maintenance",
+    "Facility maintenance services": "Repairs & Maintenance",
+    "Energy & Utilities": "Utilities & Bills",
+    "Internet & Airtime": "Utilities & Bills",
+    "Marketing & Branding": "Professional & Business Services",
+    "Professional Services": "Professional & Business Services",
+    "Subscriptions & Memberships": "Professional & Business Services",
+    "Education & Learning": "Professional & Business Services",
+    "Rent & Lease": "Rent, Lease & Property",
+    "Land & Property Purchases": "Rent, Lease & Property",
+    " Animal Feed & Supplements": "Animal Feed & Supplements",
+    "building materials": "Building Materials",
+    "cleaning": "Cleaning Supplies",
+}
+
+_CATEGORY_SET = set(CATEGORIES)
+_CATEGORY_ALIASES_LOWER = {k.strip().lower(): v for k, v in CATEGORY_ALIASES.items()}
+
+
+def normalize_category(raw: Optional[str]) -> str:
+    """Map an extracted category string to the canonical list.
+
+    1. collapse whitespace, exact match against CATEGORIES → return it
+    2. lowercased match against CATEGORY_ALIASES → return canonical
+    3. otherwise → 'Other' (never invent or store a new category)
+    """
+    if not raw:
+        return "Other"
+    value = " ".join(str(raw).split())
+    if value in _CATEGORY_SET:
+        return value
+    return _CATEGORY_ALIASES_LOWER.get(value.lower(), "Other")
 
 # ── Global extraction prompt (shared by single & batch) ──────────────
 # {batch_instruction} is replaced at call-site:
@@ -377,6 +420,12 @@ INSTRUCTIONS:
 - For the category field, analyze the supplier and items, then choose EXACTLY ONE:
   """ + ', '.join(CATEGORIES) + """
   Return ONLY the exact category name from the list.
+- Categories are broad by design: pick the closest fit, do not overthink.
+  Examples: a water or electricity bill → 'Utilities & Bills'; plumbing or
+  irrigation supplies → 'Plumbing & Sanitary'; groceries, beverages or
+  restaurant meals → 'Food & Groceries'.
+- Never invent, shorten or rephrase a category name — copy it exactly.
+- If nothing fits, return 'Other'.
 - KRA PINs: Always start with 'P' or 'A' followed by digits and end with a letter
   (e.g. 'P05115959U'). The SELLER PIN (kraPin) belongs to the supplier.
   The BUYER PIN (buyerKraPin) belongs to the customer/your company.
@@ -549,7 +598,7 @@ async def extract_receipt_data(
             totalAmount=sanitize_numeric(data.get("totalAmount")),
             taxAmount=sanitize_numeric(data.get("taxAmount")),
             receiptDate=data.get("receiptDate", ""),
-            category=data.get("category", "Other"),
+            category=normalize_category(data.get("category") or "Other"),
             invoiceNumber=data.get("invoiceNumber"),
             kraPin=data.get("kraPin"),
             buyerKraPin=data.get("buyerKraPin"),
