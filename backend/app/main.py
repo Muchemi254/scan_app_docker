@@ -100,18 +100,28 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Could not verify database collation: {e}")
 
-    # Image-integrity check — receipts reference image files by name in the
-    # image_data volume. A wiped/emptied volume (docker system prune
-    # --volumes, down -v, manual cleanup) leaves the DB intact while every
-    # gallery image 404s. Warn loudly at boot so the drift is visible in
-    # logs immediately instead of surfacing as broken images.
+    # Image-integrity check + self-heal — receipts reference image files by
+    # name in the image_data volume. A wiped/emptied volume (docker system
+    # prune --volumes, down -v, manual cleanup) used to leave the DB intact
+    # while every gallery image 404d. Image bytes are now mirrored in Postgres
+    # (receipts.image_bytes/thumb_bytes): at boot we converge disk ↔ DB, so a
+    # wiped volume repairs itself and old receipts get mirrored automatically.
     try:
-        from app.services.database_service import count_missing_image_files
+        from app.services.database_service import (
+            self_heal_image_files, count_missing_image_files,
+        )
+        healed = await self_heal_image_files()
+        if healed["backfilled"] or healed["repaired"]:
+            logger.warning(
+                "IMAGE SELF-HEAL: %d file(s) backfilled into the DB mirror, "
+                "%d re-materialized from the DB mirror (%d scanned)",
+                healed["backfilled"], healed["repaired"], healed["scanned"],
+            )
         referenced, missing = await count_missing_image_files()
         if missing:
-            logger.warning(
+            logger.error(
                 "IMAGE INTEGRITY: %d of %d receipt image files referenced by the "
-                "database are missing from %s. Restore with "
+                "database are missing from %s AND have no DB mirror. Restore with "
                 "`python scripts/restore_images_from_backup.py <backup.tar.gz>`.",
                 missing, referenced, settings.IMAGE_STORAGE_DIR,
             )

@@ -293,6 +293,16 @@ class DatabaseService:
                 )
                 receipt_id = row["id"]
 
+                # Mirror on-disk files into the DB (rebuild-proof storage).
+                # Best-effort: failure to mirror must never fail the write.
+                try:
+                    await _sync_image_bytes(
+                        conn, receipt_id, image_filename,
+                        receipt_data.get("thumbnail_filename"),
+                    )
+                except Exception:
+                    logger.warning("Failed to mirror image bytes for %s", receipt_id, exc_info=True)
+
                 if items:
                     await conn.executemany(
                         """
@@ -581,6 +591,16 @@ class DatabaseService:
 
                 if result == "UPDATE 0":
                     return False
+
+                # Mirror any (re-)uploaded files into the DB mirror.
+                try:
+                    await _sync_image_bytes(
+                        conn, receipt_id,
+                        receipt_data.get("image_filename"),
+                        receipt_data.get("thumbnail_filename"),
+                    )
+                except Exception:
+                    logger.warning("Failed to mirror image bytes for %s", receipt_id, exc_info=True)
 
                 # Replace items if provided
                 if "items" in receipt_data:
@@ -1198,16 +1218,73 @@ async def read_receipt_file(receipt_id: str, thumb: bool = False):
     Returns ``(bytes, media_type)`` or ``(None, None)``:
     - thumb=True → the JPEG thumbnail (or the full image as a fallback)
     - thumb=False → raw PDF when file_type is application/pdf, else the JPEG
+
+    Rebuild-proof: when the file is missing from disk (wiped image volume),
+    the bytes are re-materialized from the Postgres mirror (``image_bytes`` /
+    ``thumb_bytes``) before serving.
     """
     ftype = await get_receipt_file_type(receipt_id)
     if thumb:
-        img = read_image(receipt_id, thumb=True)
-        return (img, "image/jpeg") if img else (None, None)
+        # Exact thumbnail on disk (no full-image fallback here — the DB
+        # mirror should win over degrading to a larger image).
+        data = _read_disk_file(f"{receipt_id}_thumb.jpg")
+        if data:
+            return (data, "image/jpeg")
+        # Restore the real thumbnail from the DB mirror.
+        data = await fetch_receipt_image_bytes(receipt_id, thumb=True)
+        if data:
+            _write_receipt_file(receipt_id, "_thumb.jpg", data)
+            return (data, "image/jpeg")
+        # Degrade to the full-size image (disk, then DB mirror).
+        img = read_image(receipt_id, thumb=False)
+        if img:
+            return (img, "image/jpeg")
+        data = await fetch_receipt_image_bytes(receipt_id, thumb=False)
+        if data:
+            _write_receipt_file(receipt_id, ".jpg", data)
+            return (data, "image/jpeg")
+        return (None, None)
     if ftype == "application/pdf":
         pdf = read_pdf(receipt_id)
-        return (pdf, "application/pdf") if pdf else (None, None)
+        if pdf:
+            return (pdf, "application/pdf")
+        data = await fetch_receipt_image_bytes(receipt_id, thumb=False)
+        if data:
+            _write_receipt_file(receipt_id, ".pdf", data)
+            return (data, "application/pdf")
+        return (None, None)
     img = read_image(receipt_id, thumb=False)
-    return (img, "image/jpeg") if img else (None, None)
+    if img:
+        return (img, "image/jpeg")
+    data = await fetch_receipt_image_bytes(receipt_id, thumb=False)
+    if data:
+        _write_receipt_file(receipt_id, ".jpg", data)
+        return (data, "image/jpeg")
+    return (None, None)
+
+
+def _write_receipt_file(receipt_id: str, suffix: str, data: bytes) -> str:
+    """Write bytes to the storage dir; returns the filename."""
+    os.makedirs(settings.IMAGE_STORAGE_DIR, exist_ok=True)
+    filename = f"{receipt_id}{suffix}"
+    path = os.path.join(settings.IMAGE_STORAGE_DIR, filename)
+    with open(path, "wb") as f:
+        f.write(data)
+    return filename
+
+
+async def fetch_receipt_image_bytes(receipt_id: str, thumb: bool = False) -> Optional[bytes]:
+    """Read the mirrored image bytes from Postgres (None if not mirrored)."""
+    from app.core.database import get_pool
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT image_bytes, thumb_bytes FROM receipts WHERE id = $1", receipt_id
+        )
+    if not row:
+        return None
+    return row["thumb_bytes" if thumb else "image_bytes"]
 
 
 async def get_receipt_file_type(receipt_id: str) -> Optional[str]:
@@ -1295,3 +1372,103 @@ async def count_missing_image_files() -> tuple[int, int]:
         if not os.path.exists(os.path.join(settings.IMAGE_STORAGE_DIR, name)):
             missing += 1
     return referenced, missing
+
+
+# ── Rebuild-proof image storage (disk ↔ Postgres mirror) ─────────────────────
+
+def _read_disk_file(filename: str) -> Optional[bytes]:
+    """Read a stored file from disk; None on any failure."""
+    try:
+        path = os.path.join(settings.IMAGE_STORAGE_DIR, filename)
+        with open(path, "rb") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+async def _sync_image_bytes(conn, receipt_id: str, image_filename, thumbnail_filename) -> None:
+    """Mirror on-disk files into the receipts.image_bytes / thumb_bytes columns.
+
+    Called after a receipt row is created/updated. The disk files are the
+    write-time source; the DB mirror is what makes rebuilds self-healing.
+    The thumbnail name is derived ({id}_thumb.jpg) when not recorded, since
+    several flows save thumbs without setting thumbnail_filename.
+    """
+    if image_filename:
+        data = _read_disk_file(image_filename)
+        if data is not None:
+            await conn.execute(
+                "UPDATE receipts SET image_bytes = $1 WHERE id = $2",
+                data, receipt_id,
+            )
+    thumb_name = thumbnail_filename or f"{receipt_id}_thumb.jpg"
+    data = _read_disk_file(thumb_name)
+    if data is not None:
+        await conn.execute(
+            "UPDATE receipts SET thumb_bytes = $1 WHERE id = $2",
+            data, receipt_id,
+        )
+
+
+async def self_heal_image_files() -> dict:
+    """Converge the disk image volume with the Postgres byte mirror at boot.
+
+    - rows whose file exists on disk but bytes aren't mirrored yet → backfill
+      the DB (covers the one-time migration of pre-existing images)
+    - rows whose file is missing from disk but bytes are mirrored → rewrite
+      the file (covers a wiped/emptied image_data volume)
+
+    Returns {"backfilled": int, "repaired": int, "scanned": int}.
+    """
+    from app.core.database import get_pool
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, image_filename, thumbnail_filename, image_bytes, thumb_bytes "
+            "FROM receipts WHERE image_filename IS NOT NULL"
+        )
+
+    stats = {"scanned": len(rows), "backfilled": 0, "repaired": 0}
+
+    async def _backfill(rid: str, col: str, filename: str) -> None:
+        data = _read_disk_file(filename)
+        if data is None:
+            return
+        async with pool.acquire() as conn:
+            await conn.execute(
+                f"UPDATE receipts SET {col} = $1 WHERE id = $2 AND {col} IS NULL",
+                data, rid,
+            )
+        stats["backfilled"] += 1
+
+    async def _repair(rid: str, filename: str, data: bytes) -> None:
+        try:
+            os.makedirs(settings.IMAGE_STORAGE_DIR, exist_ok=True)
+            path = os.path.join(settings.IMAGE_STORAGE_DIR, filename)
+            with open(path, "wb") as f:
+                f.write(data)
+            stats["repaired"] += 1
+        except OSError:
+            logger.warning("Self-heal failed to rewrite %s", filename, exc_info=True)
+
+    for row in rows:
+        rid = str(row["id"])
+        fn = row["image_filename"]
+        if fn:
+            path = os.path.join(settings.IMAGE_STORAGE_DIR, fn)
+            if os.path.exists(path):
+                if not row["image_bytes"]:
+                    await _backfill(rid, "image_bytes", fn)
+            elif row["image_bytes"]:
+                await _repair(rid, fn, bytes(row["image_bytes"]))
+
+        thumb_fn = row["thumbnail_filename"] or f"{rid}_thumb.jpg"
+        tpath = os.path.join(settings.IMAGE_STORAGE_DIR, thumb_fn)
+        if os.path.exists(tpath):
+            if not row["thumb_bytes"]:
+                await _backfill(rid, "thumb_bytes", thumb_fn)
+        elif row["thumb_bytes"]:
+            await _repair(rid, thumb_fn, bytes(row["thumb_bytes"]))
+
+    return stats

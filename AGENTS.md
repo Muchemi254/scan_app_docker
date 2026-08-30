@@ -164,13 +164,15 @@ ops/restore/restore.sh --latest               # full restore to scratch containe
 - HEIC images are converted server-side by `pillow-heif` in `image_service.py`
 - Single `/extract` is synchronous; `/batch-extract` is async via Celery + task polling
 - Bootstrap admin creds: `ADMIN_EMAIL`/`ADMIN_PASSWORD` env (compose defaults `admin@local`/`admin12345`); when unset, a random admin is generated and logged once at boot
-- **Never wipe the image volume.** Receipt rows (pgdata volume) store only
-  `image_filename` names; the image bytes live in the separate `image_data`
-  volume (`/app/data/images`). `docker compose down -v`, `docker system prune
-  --volumes` (while the stack is down), or deleting volume contents in
-  Portainer wipes the files while the DB keeps referencing them → every
-  gallery image 404s. `docker compose down` + `up --build` alone is safe.
-  The backend warns at boot: "IMAGE INTEGRITY: N of M receipt image files
-  ... missing". Recover from backup exports with
-  `docker exec scan-app-backend python scripts/restore_images_from_backup.py /path/backup.tar.gz [...]`
-  (extracts only DB-referenced files; idempotent).
+- **Image storage is rebuild-proof.** Receipt rows (pgdata volume) store
+  `image_filename` names AND mirror the bytes (`image_bytes`/`thumb_bytes`,
+  migration 022). At boot the backend converges disk ↔ DB
+  (`self_heal_image_files()`): a wiped/emptied `image_data` volume
+  re-materializes every file from Postgres, and old receipts get backfilled
+  into the mirror automatically — a rebuild can never lose images and no
+  re-import is needed. Serving (`/api/images/cached`) also re-materializes a
+  missing file from the mirror on first request. The `image_data` volume is
+  still only an on-disk cache now: `docker compose down -v` / `prune
+  --volumes` / manual volume cleanup can no longer lose images (worst case a
+  boot log line "IMAGE SELF-HEAL"). Ultimate fallback (both disk AND mirror
+  gone): `docker exec scan-app-backend python scripts/restore_images_from_backup.py /path/backup.tar.gz`.
