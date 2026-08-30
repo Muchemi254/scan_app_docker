@@ -304,6 +304,7 @@ async def list_receipts(
     batch_title: Optional[str] = Query(None, alias="batchTitle"),
     rejected: bool = Query(False),
     has_image: Optional[bool] = Query(None, alias="hasImage"),
+    entry_type: Optional[str] = Query(None, alias="entryType"),
     current_user_id: str = Depends(get_current_user_id),
 ):
     """
@@ -317,6 +318,7 @@ async def list_receipts(
         category: Filter by category
         batch_title: Filter by batchTitle (for gallery groupings)
         rejected: Only receipts whose latest admin decision was a rejection
+        entry_type: expense | quotation | proforma | deposit | note | non_expense
         current_user_id: Authenticated user
 
     Returns:
@@ -328,7 +330,7 @@ async def list_receipts(
         receipts, total = await DataService.list_receipts(
             userId, skip=skip, limit=limit, status=status_filter,
             category=category, batch_title=batch_title, rejected=rejected,
-            has_image=has_image,
+            has_image=has_image, entry_type=entry_type,
         )
 
         return ReceiptList(
@@ -396,6 +398,7 @@ async def search_receipts_endpoint(
     scan_date_to: Optional[str] = Query(None, alias="scanDateTo"),
     rejected: bool = Query(False),
     receipt_ids: Optional[list[str]] = Query(None, alias="receiptId"),
+    entry_type: Optional[str] = Query(None, alias="entryType"),
     current_user_id: str = Depends(get_current_user_id),
 ):
     """
@@ -436,6 +439,7 @@ async def search_receipts_endpoint(
             scan_date_to=scan_date_to,
             rejected=rejected,
             receipt_ids=receipt_ids,
+            entry_type=entry_type,
         )
         return result
     except Exception as e:

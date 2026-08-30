@@ -42,7 +42,20 @@ export interface ReceiptData {
   updatedAt?: string;
   status?: string;
   batchTitle?: string;
+  /** expense (counts in totals) | quotation | proforma | deposit | note (retained, excluded from totals/exports) */
+  entryType?: string;
 }
+
+export const ENTRY_TYPE_OPTIONS = [
+  { value: 'expense', label: 'Expense' },
+  { value: 'quotation', label: 'Quotation' },
+  { value: 'proforma', label: 'Proforma' },
+  { value: 'deposit', label: 'Deposit' },
+  { value: 'note', label: 'Note' },
+] as const;
+
+export const entryTypeLabel = (t?: string): string =>
+  ENTRY_TYPE_OPTIONS.find((o) => o.value === t)?.label ?? 'Expense';
 
 export interface ReceiptItem {
   name: string;

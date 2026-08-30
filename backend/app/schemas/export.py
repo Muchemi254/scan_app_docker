@@ -44,3 +44,9 @@ class ExportRequest(BaseModel):
     category: Optional[str] = None
     pivotConfig: Optional[ExportPivotConfig] = None
     columns: Optional[List[str]] = None
+    # Non-expense handling: entryType (expense | quotation | proforma |
+    # deposit | note | non_expense) explicitly selects a subset and wins over
+    # the default exclusion; includeNonExpense (default False) includes
+    # non-expense entries in the unfiltered export.
+    entryType: Optional[str] = None
+    includeNonExpense: bool = False

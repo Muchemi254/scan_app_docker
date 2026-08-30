@@ -46,6 +46,8 @@ const ExportPage = ({ userId, customReceipts, onClose }: ExportPageProps) => {
   const [pivotConfig, setPivotConfig] = useState<PivotConfig>(defaultPivotConfig());
   const [backendLoading, setBackendLoading] = useState(false);
   const [exportMode, setExportMode] = useState<'client' | 'server'>('server');
+  const [entryType, setEntryType] = useState<string>('all');
+  const [includeNonExpense, setIncludeNonExpense] = useState(false);
 
   useEffect(() => {
     if (!customReceipts && userId) load(userId);
@@ -63,13 +65,23 @@ const ExportPage = ({ userId, customReceipts, onClose }: ExportPageProps) => {
     });
   }, [customReceipts, cachedReceipts, dateRange]);
 
+  // Non-expense handling: an explicit entryType selection wins; otherwise
+  // quotations/proformas/deposits/notes are excluded unless includeNonExpense.
+  const exportableReceipts = useMemo(() => {
+    const isExpense = (r: any) => (r.entryType || 'expense') === 'expense';
+    if (entryType === 'non_expense') return receipts.filter((r: any) => !isExpense(r));
+    if (entryType !== 'all') return receipts.filter((r: any) => (r.entryType || 'expense') === entryType);
+    if (!includeNonExpense) return receipts.filter((r: any) => isExpense(r));
+    return receipts;
+  }, [receipts, entryType, includeNonExpense]);
+
   const totalSpent = useMemo(
-    () => receipts.reduce((s: number, r: any) => s + (parseFloat(r.totalAmount) || 0), 0),
-    [receipts],
+    () => exportableReceipts.reduce((s: number, r: any) => s + (parseFloat(r.totalAmount) || 0), 0),
+    [exportableReceipts],
   );
 
   const handleExport = async () => {
-    if (receipts.length === 0) return;
+    if (exportableReceipts.length === 0) return;
     const title = `receipts_${reportType}_${new Date().toISOString().slice(0, 10)}`;
 
     if (exportMode === 'server') {
@@ -80,6 +92,8 @@ const ExportPage = ({ userId, customReceipts, onClose }: ExportPageProps) => {
           reportType,
           date_from: dateRange.start || undefined,
           date_to: dateRange.end || undefined,
+          entryType: entryType === 'all' ? undefined : entryType,
+          includeNonExpense: entryType === 'all' ? includeNonExpense : undefined,
           pivotConfig: reportType === 'pivot' ? {
             rowField: pivotConfig.rowField,
             colField: pivotConfig.colField,
@@ -96,9 +110,9 @@ const ExportPage = ({ userId, customReceipts, onClose }: ExportPageProps) => {
 
     const opts = { title, dateRange, pivotConfig: reportType === 'pivot' ? pivotConfig : undefined };
     if (format === 'xlsx' && reportType === 'detailed') {
-      exportMultiSheetExcel(receipts, opts);
+      exportMultiSheetExcel(exportableReceipts, opts);
     } else {
-      exportReport(receipts, reportType, format, opts);
+      exportReport(exportableReceipts, reportType, format, opts);
     }
   };
 
@@ -266,20 +280,59 @@ const ExportPage = ({ userId, customReceipts, onClose }: ExportPageProps) => {
             )}
           </div>
 
+          {/* Entry type */}
+          <div className="bg-white rounded-xl border border-gray-200 p-5">
+            <h2 className="font-semibold text-gray-800 mb-3">Entry Type</h2>
+            <div className="flex flex-wrap items-center gap-3">
+              <select
+                value={entryType}
+                onChange={(e) => setEntryType(e.target.value)}
+                className="px-3 py-2 rounded-lg border text-sm bg-white text-gray-700"
+              >
+                <option value="all">All entries</option>
+                <option value="expense">Expenses only</option>
+                <option value="non_expense">Non-expense only (register)</option>
+                <option value="quotation">Quotations</option>
+                <option value="proforma">Proformas</option>
+                <option value="deposit">Deposits</option>
+                <option value="note">Notes</option>
+              </select>
+              <label className="flex items-center gap-2 text-sm text-gray-600">
+                <input
+                  type="checkbox"
+                  checked={includeNonExpense}
+                  disabled={entryType !== 'all'}
+                  onChange={(e) => setIncludeNonExpense(e.target.checked)}
+                  className="rounded"
+                />
+                Include non-expense entries in the default export
+              </label>
+            </div>
+            <p className="text-xs text-gray-500 mt-2">
+              Non-expense entries (quotations, proformas, deposits, notes) are retained but excluded from totals and
+              exports by default. Pick “Non-expense only” to export the non-expense register separately.
+            </p>
+          </div>
+
           {/* Preview */}
           <div className="bg-white rounded-xl border border-gray-200 p-5">
             <h2 className="font-semibold text-gray-800 mb-3">Preview</h2>
             <div className="flex items-center justify-between text-sm">
               <span className="text-gray-600">
-                <span className="font-semibold text-gray-800">{receipts.length}</span> receipts · 
+                <span className="font-semibold text-gray-800">{exportableReceipts.length}</span> receipts · 
                 <span className="font-semibold text-gray-800 ml-1">{totalSpent.toLocaleString()}</span> total
               </span>
               <span className="text-gray-400">{reportType === 'pivot' ? `Pivot: ${pivotConfig.rowField} × ${pivotConfig.colField}` : reportTitle(reportType)} → .{format}</span>
             </div>
+            {exportableReceipts.length < receipts.length && (
+              <p className="text-xs text-amber-600 mt-1.5">
+                Excluding {receipts.length - exportableReceipts.length} non-expense entr{receipts.length - exportableReceipts.length === 1 ? 'y' : 'ies'} (quotations/proformas/deposits/notes)
+              </p>
+            )}
           </div>
 
           {/* Export button */}
-          <button onClick={handleExport} disabled={receipts.length === 0 || backendLoading}
+          <button onClick={handleExport} disabled={exportableReceipts.length === 0 || backendLoading}
             className={`w-full flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-semibold transition-colors shadow-sm ${
               backendLoading ? 'bg-purple-400 cursor-not-allowed' : exportMode === 'server' ? 'bg-purple-600 hover:bg-purple-700' : 'bg-blue-600 hover:bg-blue-700'
             } text-white disabled:bg-gray-300 disabled:text-gray-500`}>
@@ -295,8 +348,8 @@ const ExportPage = ({ userId, customReceipts, onClose }: ExportPageProps) => {
             <h2 className="font-semibold text-gray-800 mb-3">Quick Stats</h2>
             <div className="space-y-3">
               <div className="flex justify-between text-sm"><span className="text-gray-500">Total Spent</span><span className="font-bold text-gray-800">{totalSpent.toLocaleString()}</span></div>
-              <div className="flex justify-between text-sm"><span className="text-gray-500">Receipts</span><span className="font-bold text-gray-800">{receipts.length}</span></div>
-              <div className="flex justify-between text-sm"><span className="text-gray-500">Avg per Receipt</span><span className="font-bold text-gray-800">{receipts.length > 0 ? (totalSpent / receipts.length).toFixed(2) : '0'}</span></div>
+              <div className="flex justify-between text-sm"><span className="text-gray-500">Receipts</span><span className="font-bold text-gray-800">{exportableReceipts.length}</span></div>
+              <div className="flex justify-between text-sm"><span className="text-gray-500">Avg per Receipt</span><span className="font-bold text-gray-800">{exportableReceipts.length > 0 ? (totalSpent / exportableReceipts.length).toFixed(2) : '0'}</span></div>
             </div>
           </div>
 

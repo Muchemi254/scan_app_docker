@@ -56,11 +56,12 @@ class DataService:
         cls, user_id: str, skip: int = 0, limit: int = 50,
         status: Optional[str] = None, category: Optional[str] = None,
         batch_title: Optional[str] = None, rejected: bool = False,
-        has_image: Optional[bool] = None,
+        has_image: Optional[bool] = None, entry_type: Optional[str] = None,
     ) -> tuple:
         db, _ = cls._backend()
         return await db.list_receipts(
-            user_id, skip, limit, status, category, batch_title, rejected, has_image
+            user_id, skip, limit, status, category, batch_title, rejected,
+            has_image, entry_type,
         )
 
     @classmethod

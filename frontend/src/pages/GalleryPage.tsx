@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { receiptApi } from '../services/api';
 import ImageViewer from '../components/ImageViewer';
 import SearchBar from '../components/SearchBar';
+import { entryTypeLabel } from '../types/gemini';
 import {
   Image, X, ChevronLeft, ChevronRight,
   FolderOpen, Calendar, Layers, ArrowLeft
@@ -294,6 +295,11 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
                       (e.target as HTMLImageElement).style.display = 'none';
                     }}
                   />
+                  {receipt.entryType && receipt.entryType !== 'expense' && (
+                    <span className="absolute top-1 left-1 rounded bg-amber-500 text-white text-[9px] font-semibold px-1.5 py-0.5 shadow">
+                      {entryTypeLabel(receipt.entryType)}
+                    </span>
+                  )}
                 </div>
                 <div className="p-2">
                   <p className="text-xs font-semibold text-gray-800 truncate">

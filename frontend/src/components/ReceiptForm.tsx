@@ -3,6 +3,7 @@ import Decimal from 'decimal.js';
 import { parseCurrencyToNumber } from '../utils/helpers';
 import { addTax, splitTax } from '../utils/taxCalc';
 import type { ReceiptData } from '../types/gemini';
+import { ENTRY_TYPE_OPTIONS } from '../types/gemini';
 
 const ReceiptForm = ({
   initialData,
@@ -35,6 +36,7 @@ const ReceiptForm = ({
     location: initialData?.location || '',
     taxRate: initialData?.taxRate || '',
     status: initialData?.status || 'needs_review',
+    entryType: initialData?.entryType || 'expense',
     items: initialData?.items?.length
       ? initialData.items.map((item: any) => ({
           ...item,
@@ -125,6 +127,7 @@ const ReceiptForm = ({
         location: initialData.location || '',
         taxRate: initialData.taxRate || '',
         status: initialData.status || 'needs_review',
+        entryType: initialData.entryType || 'expense',
         items: initialData.items?.length
           ? initialData.items.map((item: any) => ({
               ...item,
@@ -530,6 +533,22 @@ const ReceiptForm = ({
             />
           </div>
         ))}
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-0.5">
+            Entry Type
+          </label>
+          <select
+            name="entryType"
+            value={formData.entryType || 'expense'}
+            onChange={(e) => setFormData({ ...formData, entryType: e.target.value })}
+            className="w-full px-2 py-1 border rounded text-sm bg-white"
+            title="Non-expense entries (quotations, proformas, deposits, notes) are retained but excluded from totals and exports"
+          >
+            {ENTRY_TYPE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+        </div>
         <div>
           <label className="block text-xs font-medium text-gray-600 mb-0.5">
             Location

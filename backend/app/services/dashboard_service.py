@@ -75,9 +75,11 @@ class DashboardService:
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """Fetch all receipts for a user, optionally filtered by date range."""
+        """Fetch all receipts for a user, optionally filtered by date range.
+        Only expense entries (entry_type='expense') count toward dashboard
+        totals — quotations/proformas/deposits/notes are excluded."""
         receipts, _ = await DataService.list_receipts(
-            user_id, skip=0, limit=5000,
+            user_id, skip=0, limit=5000, entry_type="expense",
         )
 
         if not date_from and not date_to:

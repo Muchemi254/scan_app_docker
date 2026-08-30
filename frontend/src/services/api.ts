@@ -784,6 +784,8 @@ export const exportApi = {
     date_from?: string;
     date_to?: string;
     category?: string;
+    entryType?: string;
+    includeNonExpense?: boolean;
     pivotConfig?: { rowField: string; colField: string; valueField: string };
     columns?: string[];
   }): Promise<void> {

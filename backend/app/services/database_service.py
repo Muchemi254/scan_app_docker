@@ -129,6 +129,7 @@ def _receipt_row_to_dict(
         "id": rid,
         "userId": row["user_id"],
         "status": row["status"],
+        "entryType": row.get("entry_type") or "expense",
         "supplier": row["supplier"],
         "totalAmount": total_amount,
         "taxAmount": tax_amount,
@@ -255,14 +256,15 @@ class DatabaseService:
             async with conn.transaction():
                 row = await conn.fetchrow(
                     """
-                    INSERT INTO receipts (id, user_id, status, supplier, total_amount, tax_amount,
+                    INSERT INTO receipts (id, user_id, status, entry_type, supplier, total_amount, tax_amount,
                         receipt_date, category, invoice_number, kra_pin, buyer_kra_pin, cu_invoice,
                         batch_title, location, tax_rate, image_filename, image_sha256, scanned_at, created_at, updated_at)
-                    VALUES (COALESCE($20, gen_random_uuid()), $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+                    VALUES (COALESCE($21, gen_random_uuid()), $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
                     RETURNING id
                     """,
                     user_id,
                     receipt_data.get("status", "processed"),
+                    receipt_data.get("entryType") or "expense",
                     receipt_data.get("supplier", ""),
                     total,
                     tax,
@@ -351,8 +353,13 @@ class DatabaseService:
         batch_title: Optional[str] = None,
         rejected: bool = False,
         has_image: Optional[bool] = None,
+        entry_type: Optional[str] = None,
     ) -> tuple:
-        """List receipts with filters and pagination. Returns (receipts, total)."""
+        """List receipts with filters and pagination. Returns (receipts, total).
+
+        entry_type: 'expense' | 'quotation' | 'proforma' | 'deposit' | 'note'
+        | 'non_expense' (any non-expense type) | None (all).
+        """
         pool = await get_pool()
         async with pool.acquire() as conn:
             params = [user_id]
@@ -363,6 +370,13 @@ class DatabaseService:
                 params.append(status)
                 conditions.append(f"status = ${param_idx}")
                 param_idx += 1
+            if entry_type:
+                if entry_type == "non_expense":
+                    conditions.append("entry_type <> 'expense'")
+                else:
+                    params.append(entry_type)
+                    conditions.append(f"entry_type = ${param_idx}")
+                    param_idx += 1
             if rejected:
                 # Rejections are not a persisted status — the admin decision
                 # reverts the receipt to needs_review. A receipt "is rejected"
@@ -466,6 +480,10 @@ class DatabaseService:
         if receipt_data.get("status"):
             set_parts.append(f"status = ${p_idx}")
             params.append(receipt_data["status"])
+            p_idx += 1
+        if "entryType" in receipt_data:
+            set_parts.append(f"entry_type = ${p_idx}")
+            params.append(receipt_data["entryType"] or "expense")
             p_idx += 1
         if receipt_data.get("supplier"):
             set_parts.append(f"supplier = ${p_idx}")
@@ -733,6 +751,7 @@ class DatabaseService:
         scan_date_to: Optional[str] = None,
         rejected: bool = False,
         receipt_ids: Optional[List[str]] = None,
+        entry_type: Optional[str] = None,
     ) -> dict:
         """
         Full-text search across receipts + items. Returns ranked matches.
@@ -821,6 +840,11 @@ class DatabaseService:
                 where.append("FALSE")
             else:
                 add(receipt_ids, "r.id = ANY(${index}::text[])")
+        if entry_type:
+            if entry_type == "non_expense":
+                where.append("r.entry_type <> 'expense'")
+            else:
+                add(entry_type, "r.entry_type = ${index}")
 
         limit_index = len(args) + 1
         offset_index = len(args) + 2
@@ -883,6 +907,7 @@ class DatabaseService:
                     MIN(supplier) AS "firstSupplier"
                 FROM receipts
                 WHERE user_id = $1
+                  AND entry_type = 'expense'
                   AND (NULLIF(BTRIM(image_filename), '') IS NOT NULL
                        OR NULLIF(BTRIM(legacy_image_url), '') IS NOT NULL)
                 GROUP BY "batchTitle"

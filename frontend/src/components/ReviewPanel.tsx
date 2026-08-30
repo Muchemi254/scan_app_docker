@@ -5,6 +5,7 @@ import ReceiptForm from './ReceiptForm';
 import AuditTrail from './AuditTrail';
 
 import type { ReceiptData } from '../types/gemini';
+import { entryTypeLabel } from '../types/gemini';
 import ImageViewer from './ImageViewer';
 import { parseCurrencyToNumber } from '../utils/helpers';
 import { lineTotalOf, sumItemTotals } from '../utils/itemTotals';
@@ -22,6 +23,11 @@ const fmtDate = (v?: string | null): string => {
 
 const ReceiptSummary = ({ data, showImage = true }: { data: ReceiptData; showImage?: boolean }) => (
   <div className="space-y-3 text-sm">
+    {data.entryType && data.entryType !== 'expense' && (
+      <div className="rounded border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800">
+        Non-expense — {entryTypeLabel(data.entryType)}. Excluded from totals and exports.
+      </div>
+    )}
     {showImage && data.imageUrl && (
       <div>
         <ImageViewer
@@ -40,6 +46,7 @@ const ReceiptSummary = ({ data, showImage = true }: { data: ReceiptData; showIma
         ['Date', data.receiptDate],
         ['Scanned', fmtDate(data.scannedAt)],
         ['Category', data.category],
+        ['Entry Type', entryTypeLabel(data.entryType)],
         ['Location', data.location],
         ...(data.taxRate != null && data.taxRate !== ''
           ? ([['Tax Rate', `${data.taxRate}%`]] as [string, string][])

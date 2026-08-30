@@ -66,6 +66,7 @@ class ReportDef:
         order_by: str = "",
         group_by: Optional[str] = None,
         money_cols: Optional[List[str]] = None,
+        expense_cond: Optional[str] = None,
     ):
         self.key = key
         self.name = name
@@ -79,6 +80,9 @@ class ReportDef:
         self.order_by = order_by
         self.group_by = group_by
         self.money_cols = money_cols or []
+        # SQL fragment restricting to spend rows (excludes quotations,
+        # proformas, deposits, notes). Set for receipt money reports.
+        self.expense_cond = expense_cond
 
 
 REPORT_DEFS: Dict[str, ReportDef] = {}
@@ -97,6 +101,7 @@ _register(ReportDef(
         ReportColumn("r.id", "Receipt ID"),
         ReportColumn("r.user_id", "Owner user ID", sensitive=True),
         ReportColumn("r.status", "Status"),
+        ReportColumn("r.entry_type", "Entry type"),
         ReportColumn("r.supplier", "Supplier"),
         ReportColumn("r.category", "Category"),
         ReportColumn("r.location", "Location"),
@@ -157,6 +162,7 @@ _register(ReportDef(
     },
     order_by=" ORDER BY r.receipt_date DESC, r.id, l.sort_order",
     money_cols=["Price (KES)", "Tax (KES)", "Discount (KES)"],
+    expense_cond="r.entry_type = 'expense'",
 ))
 
 _register(ReportDef(
@@ -178,6 +184,7 @@ _register(ReportDef(
     group_by="l.is_zero_rated, l.tax_rate",
     order_by=" ORDER BY l.tax_rate, l.is_zero_rated",
     money_cols=["Gross amount (KES)", "Tax amount (KES)", "Discount (KES)"],
+    expense_cond="r.entry_type = 'expense'",
 ))
 
 _register(ReportDef(
@@ -199,6 +206,7 @@ _register(ReportDef(
     group_by="to_char(r.receipt_date, 'YYYY-MM'), r.status",
     order_by=" ORDER BY 1 DESC, r.status",
     money_cols=["Total amount (KES)", "Tax amount (KES)"],
+    expense_cond="r.entry_type = 'expense'",
 ))
 
 _register(ReportDef(
@@ -623,6 +631,9 @@ async def run_report(
                 value = _coerce_bool(value)
             where.append(f"{col} = $" + str(len(args) + 1))
             args.append(value)
+
+    if d.expense_cond:
+        where.append(d.expense_cond)
 
     select = ", ".join(f"{c.col} AS {_alias(c.col)}" for c in columns)
     sql = f"SELECT {select} FROM {d.base}"

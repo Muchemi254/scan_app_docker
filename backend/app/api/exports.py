@@ -46,6 +46,23 @@ async def export_receipts(
     if not receipts:
         raise HTTPException(status_code=404, detail="No receipts found to export")
 
+    # Non-expense handling: an explicit entryType selection wins; otherwise
+    # non-expense entries (quotations/proformas/deposits/notes) are excluded
+    # unless includeNonExpense is set.
+    def _entry_type(r: dict) -> str:
+        return r.get("entryType") or "expense"
+
+    if body.entryType:
+        if body.entryType == "non_expense":
+            receipts = [r for r in receipts if _entry_type(r) != "expense"]
+        else:
+            receipts = [r for r in receipts if _entry_type(r) == body.entryType]
+    elif not body.includeNonExpense:
+        receipts = [r for r in receipts if _entry_type(r) == "expense"]
+
+    if not receipts:
+        raise HTTPException(status_code=404, detail="No receipts found for the selected entry type")
+
     pivot_dict = None
     if body.pivotConfig:
         pivot_dict = {

@@ -244,6 +244,7 @@ class FirestoreService:
         batch_title: Optional[str] = None,
         rejected: bool = False,
         has_image: Optional[bool] = None,
+        entry_type: Optional[str] = None,
     ) -> tuple[List[Dict[str, Any]], int]:
         """
         List receipts with filtering and pagination.
@@ -294,6 +295,18 @@ class FirestoreService:
                     d for d in all_docs
                     if bool(d.to_dict().get("imageUrl") or d.to_dict().get("imageFilename")) == has_image
                 ]
+
+            if entry_type:
+                if entry_type == "non_expense":
+                    all_docs = [
+                        d for d in all_docs
+                        if (d.to_dict().get("entryType") or "expense") != "expense"
+                    ]
+                else:
+                    all_docs = [
+                        d for d in all_docs
+                        if (d.to_dict().get("entryType") or "expense") == entry_type
+                    ]
 
             total = len(all_docs)
 

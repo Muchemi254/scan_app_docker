@@ -326,10 +326,15 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
   };
 
   const handleFrontendExport = () => {
+    // Non-expense entries (quotations/proformas/deposits/notes) stay retained
+    // but are excluded from spend exports by default.
+    const expenseOnly = (storeReceipts || []).filter(
+      (r: any) => (r.entryType || 'expense') === 'expense',
+    );
     if (multiSheet) {
-      exportMultiSheetExcel(storeReceipts, { title: 'Receipt Export' });
+      exportMultiSheetExcel(expenseOnly, { title: 'Receipt Export' });
     } else {
-      exportReport(storeReceipts, reportType, exportFormat, {
+      exportReport(expenseOnly, reportType, exportFormat, {
         title: 'Receipt Export',
         pivotConfig: reportType === 'pivot' ? pivotConfig : undefined,
       });
