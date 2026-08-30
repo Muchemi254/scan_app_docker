@@ -1164,11 +1164,42 @@ def delete_receipt_images(receipt_id: str) -> None:
 
 
 def read_image(receipt_id: str, thumb: bool = False) -> Optional[bytes]:
-    """Read an image file from disk.  Returns None if not found."""
-    suffix = "_thumb.jpg" if thumb else ".jpg"
-    path = os.path.join(settings.IMAGE_STORAGE_DIR, f"{receipt_id}{suffix}")
-    try:
-        with open(path, "rb") as f:
-            return f.read()
-    except FileNotFoundError:
-        return None
+    """Read an image file from disk.  Returns None if not found.
+
+    Thumbnail requests degrade gracefully: if the ``_thumb.jpg`` file is
+    missing, the full-size image is returned instead of a 404.
+    """
+    names = (f"{receipt_id}_thumb.jpg", f"{receipt_id}.jpg") if thumb else (f"{receipt_id}.jpg",)
+    for name in names:
+        path = os.path.join(settings.IMAGE_STORAGE_DIR, name)
+        try:
+            with open(path, "rb") as f:
+                return f.read()
+        except FileNotFoundError:
+            continue
+    return None
+
+
+async def count_missing_image_files() -> tuple[int, int]:
+    """Compare DB image references against files on disk.
+
+    Returns (referenced_count, missing_count).  Used by the boot-time
+    integrity warning so a wiped image volume is visible in the logs
+    immediately after a rebuild instead of surfacing as gallery 404s.
+    """
+    from app.core.database import get_pool
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT image_filename FROM receipts WHERE image_filename IS NOT NULL"
+        )
+    referenced = len(rows)
+    if referenced == 0:
+        return 0, 0
+    missing = 0
+    for row in rows:
+        name = str(row["image_filename"])
+        if not os.path.exists(os.path.join(settings.IMAGE_STORAGE_DIR, name)):
+            missing += 1
+    return referenced, missing

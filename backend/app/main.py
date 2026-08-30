@@ -100,6 +100,26 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Could not verify database collation: {e}")
 
+    # Image-integrity check — receipts reference image files by name in the
+    # image_data volume. A wiped/emptied volume (docker system prune
+    # --volumes, down -v, manual cleanup) leaves the DB intact while every
+    # gallery image 404s. Warn loudly at boot so the drift is visible in
+    # logs immediately instead of surfacing as broken images.
+    try:
+        from app.services.database_service import count_missing_image_files
+        referenced, missing = await count_missing_image_files()
+        if missing:
+            logger.warning(
+                "IMAGE INTEGRITY: %d of %d receipt image files referenced by the "
+                "database are missing from %s. Restore with "
+                "`python scripts/restore_images_from_backup.py <backup.tar.gz>`.",
+                missing, referenced, settings.IMAGE_STORAGE_DIR,
+            )
+        else:
+            logger.info("Image integrity OK: %d receipt image file(s) present", referenced)
+    except Exception as e:
+        logger.warning(f"Could not verify image integrity: {e}")
+
     # Load admin-managed trusted hosts (persisted) into the request middleware
     try:
         from app.core import trusted_hosts
