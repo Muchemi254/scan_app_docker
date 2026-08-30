@@ -3,23 +3,45 @@
 Goal: allow users to upload receipts as PDFs (alongside JPEG/PNG/WebP/HEIC),
 extract structured data from them, store the original file, preview it in the
 UI, and keep it working end-to-end (single scan, scan-staging batch flow,
-Celery batch, review, approvals, search, export).
+Celery batch, review, approvals, search, export) — on **every** AI provider
+the app supports (Gemini, OpenRouter, Qwen, DeepSeek).
 
 ## Intended Use
 
 This is a receipts app for Kenyan tax documents (KRA PIN, buyerKraPin,
 cuInvoice → eTIMS). In practice "PDF receipts" will be:
 
-- **E-mailed e-receipts / eTIMS invoices** — text-based PDFs; Gemini reads the
-  text directly (cheap, accurate).
+- **E-mailed e-receipts / eTIMS invoices** — text-based PDFs; cheap and
+  accurate to extract.
 - **Scanned paper receipts saved/forwarded as PDFs** — image-based PDFs;
-  Gemini OCRs the pages like it does photos today.
-- **Multi-page monthly bills** (e.g. utility invoices) — need a sane page cap,
-  not a hard one-page assumption.
+  vision OCR needed.
+- **Multi-page documents** (utility bills, multi-page invoices) — one
+  document, not one page.
 
 Scanning is batch-oriented (users upload several files at once via the
 ScannerPage), so PDF support must work in the staging batch flow, not just
 single uploads.
+
+## Multipage PDF Semantics
+
+- **One PDF = one receipt.** A 3-page utility bill is one document and must
+  produce one receipt. All pages are sent as context:
+  - Gemini: the whole PDF inline (native multi-page, text layer + vision).
+  - OpenRouter / Qwen: each page rendered to JPEG and sent in page order with
+    "page p of N" labels; prompt returns ONE receipt for the whole document.
+  - DeepSeek: whole text layer extracted and sent as one text prompt.
+- **Page cap:** `MAX_PDF_PAGES` (env, default **15**) enforced at upload and
+  again in worker/dispatch; multipage PDFs beyond the cap are rejected with a
+  clear message (chunked very-long-PDF processing is deferred).
+- **Thumbnail / preview:** page 1 renders to the existing JPEG thumbnail
+  pipeline, so every `<img>`-based view keeps working.
+- **Cost note:** for image providers each page is a vision part (≈1–2k tokens
+  per page); the cap bounds per-call cost. Gemini reads PDF pages as needed.
+- **Multiple receipts inside one PDF** (e.g. three scanned receipts merged
+  into one file) is deferred — the extractor takes the primary/dominant
+  receipt and the limitation is surfaced in the review UI.
+- Scanned PDFs (no text layer) with the DeepSeek provider → clear error
+  "scanned PDF requires a vision provider (Gemini/OpenRouter/Qwen)".
 
 ## Current State (what exists today)
 
@@ -49,13 +71,16 @@ single uploads.
 - Dispatch reads files back from `_scan_{batchId}` but **hardcodes
   `fname = f"{i:04d}.jpg"` and `mime = "image/jpeg"`** (`batches.py` ~line
   468) instead of using the recorded per-item values.
-- Gemini extraction: `extract_receipt_data(image_base64, mime_type, …)` in
-  `backend/app/services/gemini.py` sends an inline part
-  `{"mime_type": mime_type, "data": base64}` on the Gemini path; the
-  DeepSeek/OpenRouter/Qwen paths send `image_url` data-URLs (image/* only).
-  Default provider is **Gemini** (`ai_settings.get("provider", "gemini")`).
-  The Celery worker (`backend/app/tasks/worker.py`) runs every stored file
-  through `prepare_for_ai()` (Pillow) before base64.
+- AI extraction: `extract_receipt_data(image_base64, mime_type, …)` in
+  `backend/app/services/gemini.py` sends provider-specific parts:
+  Gemini → inline part `{"mime_type", "data"}`; DeepSeek / OpenRouter / Qwen →
+  `image_url` data-URLs (image/* only). **DeepSeek's chat API is text-only**
+  (no vision at all). Default provider is Gemini
+  (`ai_settings.get("provider", "gemini")`).
+- The Celery worker (`backend/app/tasks/worker.py`) runs every stored file
+  through `prepare_for_ai()` (Pillow) before base64, then calls
+  `extract_receipt_batch()` with a **flat** list of `(base64, mime)` images
+  and a 1:1 "image index → receipt" prompt mapping.
 - Frontend pickers: `frontend/src/pages/ScannerPage.tsx` (staging batch scan,
   `accept="image/*"`, no pre-upload previews) and
   `frontend/src/components/ReceiptForm.tsx` (`accept="image/*"`). Receipt
@@ -74,12 +99,12 @@ single uploads.
    column (`image/jpeg` | `application/pdf`) and `pdf_page_count`. Page 1
    renders to `{receipt_id}_thumb.jpg` through the existing thumbnail pipeline
    so every UI that uses thumbs keeps working unchanged.
-2. **Gemini is the PDF extraction path.** Inline PDF parts
-   (`mime_type: application/pdf`) are supported on gemini-1.5-pro/flash and
-   2.x. DeepSeek stays text-only, and OpenRouter/Qwen image-URL paths do not
-   accept PDFs — the core plan **rejects PDFs for non-Gemini providers with a
-   clear 400** ("PDF extraction requires the Gemini provider"). An optional
-   page-rendering fallback for other providers is Phase 3 polish, not core.
+2. **Provider-native PDF parts — all four providers supported.** A single
+   converter `pdf_to_provider_parts(pdf_bytes, provider, max_pages)` produces
+   the right content parts per provider (see Multipage section above):
+   Gemini inline PDF part; OpenRouter/Qwen per-page JPEG `image_url` parts;
+   DeepSeek text-layer prompt (pypdf). Used by both single and batch
+   extraction so behavior is identical everywhere.
 3. **Fix the dispatch reconstruction bug while touching batches.** The
    dispatch loop must read the recorded `image_filename`/`mime` per item
    instead of rebuilding `{i:04d}.jpg`/`image/jpeg`, otherwise PDF items break
@@ -93,8 +118,8 @@ single uploads.
    PDFs satisfy it (they are files with previews). Add an explicit `hasPdf`
    filter (Phase 3, optional) so queries can distinguish.
 6. **Caps.** Keep the 10 MB `MAX_UPLOAD_SIZE` global cap; add
-   `MAX_PDF_PAGES` (env-configurable, default **15** — multi-page bills are
-   legitimate here) enforced at upload and again in the worker/dispatch.
+   `MAX_PDF_PAGES` (env-configurable, default **15**) enforced at upload and
+   again in the worker/dispatch.
 
 ## Phases
 
@@ -112,8 +137,9 @@ together.*
    `file_type` (`VARCHAR(32)`) and `pdf_page_count` (`INTEGER`) to `receipts`;
    backfill `file_type='image/jpeg'` for rows with `image_filename`.
 2. `backend/app/services/pdf_service.py` (new): `is_pdf(bytes)` magic check
-   (`%PDF-`), `pdf_page_count(bytes)` via `pypdf`, `render_pdf_page(pdf_bytes,
-   page=0) -> JPEG` via `pdf2image`.
+   (`%PDF-`), `pdf_page_count(bytes)`, `extract_text(pdf_bytes)` (pypdf),
+   `render_pdf_pages(pdf_bytes, max_pages) -> [JPEG bytes]` (pdf2image,
+   page 1..N), `render_first_page(pdf_bytes) -> JPEG` (thumbnail).
 3. Accept PDFs at **all four** upload paths:
    - `/extract`, `POST /receipts`, `PUT /receipts/{receiptId}`
      (`backend/app/api/receipts.py`): add `application/pdf` to the allowlists;
@@ -131,23 +157,32 @@ together.*
    - `images.py`: branch on stored `file_type` — `application/pdf` (with
      nosniff + inline disposition) for `*.pdf`, `image/jpeg` otherwise;
      `?thumb=1` unchanged.
-5. AI:
-   - `gemini.py` `extract_receipt_data()` / `extract_receipt_batch()`: for
-     provider `gemini` and mime `application/pdf`, send the inline PDF part
-     (skip any JPEG-only transforms); adjust prompt wording for PDFs ("this
-     PDF document") via the existing parameterized `batch_instruction`.
-   - `tasks/worker.py`: skip `prepare_for_ai()` for PDF entries.
+5. AI — provider-native conversion:
+   - `gemini.py`: new `pdf_to_provider_parts(pdf_bytes, provider, max_pages)`
+     (Design Decision 2). In `extract_receipt_data()`, for mime
+     `application/pdf`, convert first, then hand the parts to the existing
+     provider send paths; adjust prompt wording ("this PDF document, page p of
+     N") via the parameterized `batch_instruction`.
+   - `extract_receipt_batch()`: signature moves from a **flat** image list to
+     **grouped per-file parts** (each file = 1 receipt, 1..N page parts).
+     Prompt labels pages within a receipt ("Receipt index r, page p") and
+     still returns exactly one receipt per file. `BATCH_CHUNK_SIZE` counts
+     receipts, not parts; `MAX_PDF_PAGES` bounds parts per file.
+   - `tasks/worker.py`: for PDF entries, read raw bytes and convert via
+     `pdf_to_provider_parts` (skipping `prepare_for_ai()`); keep grouping.
    - `batches.py` dispatch: use recorded per-item `image_filename`/`mime`
-     instead of the hardcoded `{i:04d}.jpg` reconstruction.
-   - Non-Gemini providers: explicit 400 "PDF extraction requires the Gemini
-     provider" (no silent fallback in core).
+     instead of the hardcoded `{i:04d}.jpg` reconstruction; dispatch path
+     converts PDFs the same way the worker does.
+   - DeepSeek: text-layer path via `pdf_service.extract_text()`; scanned PDFs
+     (no text layer) → clear 400 "scanned PDF requires a vision provider".
    - Caps: `MAX_PDF_PAGES` (env, default 15) at upload + worker/dispatch.
 6. Tests (see Testing).
 
-**Exit criteria:** upload a PDF via every endpoint, extract (mocked Gemini),
-stored as `{id}.pdf` with `file_type='application/pdf'`, served with the right
-content type, thumbnail exists, page-cap and size-cap rejections work, mixed
-staging batch dispatches correctly.
+**Exit criteria:** upload a PDF via every endpoint, extract (mocked provider
+per provider type), stored as `{id}.pdf` with `file_type='application/pdf'`,
+served with the right content type, thumbnail exists, multipage PDF produces
+one receipt with all pages in context, page-cap and size-cap rejections work,
+mixed staging batch dispatches correctly.
 
 ### Phase 2 — Frontend PDF UX
 
@@ -175,22 +210,17 @@ renders in gallery/details/review; badge shows; no type errors.
 
 - (a) `hasPdf` search/list filter (`database_service.py` + `receipts.py`) and
   a SearchBar toggle.
-- (b) Non-Gemini PDF fallback: render PDF pages to JPEGs via `pdf2image`
-  (adds `poppler-utils` to the backend image) for OpenRouter/Qwen installs
-  that want PDF support without switching provider.
-- (c) Admin/legacy parity checks (Firestore path stays deferred).
+- (b) Admin/legacy parity checks (Firestore path stays deferred).
 
 ### Phase 4 — Deploy & verify
 
-1. `backend/Dockerfile` / requirements: only if Phase 3(b) is taken — add
-   `poppler-utils`, `pypdf` + `pdf2image`; otherwise `pypdf`/`pdf2image` are
-   still needed for thumbnails/page-count (pure-Python + poppler only for
-   rendering) — confirm the base image has poppler or render via a fallback
-   library if not.
+1. `backend/Dockerfile` / requirements: add **poppler-utils** (required for
+   page rendering / thumbnails) plus `pypdf` + `pdf2image` to the backend
+   image.
 2. Rebuild backend (+worker) and frontend images;
    `docker-compose up -d` (migration 019 auto-applies).
 3. Run the backend suite in-container; manual smoke at `http://localhost:8081`
-   (upload a text PDF and a scanned PDF).
+   (upload a text PDF and a scanned PDF; try each provider setting).
 4. Confirm the `backup` sidecar tarball includes `*.pdf` in
    `IMAGE_STORAGE_DIR`.
 
@@ -198,16 +228,21 @@ renders in gallery/details/review; badge shows; no type errors.
 
 Backend (in-container pytest, `scanapp_test` DB):
 
-- `tests/test_pdf_service.py`: magic-byte detect, page count, page-1 render
-  against a tiny generated PDF.
+- `tests/test_pdf_service.py`: magic-byte detect, page count, page-1 render,
+  text-layer extraction against a tiny generated PDF.
 - `tests/test_pdf_upload.py`: `/extract` with PDF returns extraction (mocked
   provider); `POST /receipts` stores `{id}.pdf`,
   `file_type='application/pdf'`, thumbnail exists; serving returns
   `application/pdf` (and `image/jpeg` for `?thumb=1`); page-cap and size-cap
-  rejections; non-Gemini provider rejection.
+  rejections.
+- `tests/test_pdf_providers.py`: provider conversion matrix — Gemini gets an
+  inline PDF part; OpenRouter/Qwen get one `image_url` part per page;
+  DeepSeek gets extracted text (and a scanned-PDF rejection when no text
+  layer); batch grouping produces one receipt per file with correct page
+  labels.
 - `tests/test_pdf_batch.py`: mixed image+PDF staging batch dispatches with
-  per-item mime; Celery batch with PDF entry works through the mocked
-  provider.
+  per-item mime; Celery batch with a multipage PDF entry works through the
+  mocked provider.
 - Delete flow: `delete_receipt_images()` removes the PDF too.
 
 Frontend: `npm run build` (typecheck) + `npm run lint`; manual smoke of
@@ -223,8 +258,9 @@ upload/preview in the browser.
 ## Deferred
 
 - Firebase/Firestore PDF parity (only affects legacy `AUTH_MODE=firebase`).
-- PDF page-OCR quality tuning (scanned multi-page receipts), chunked
-  page-by-page extraction for very long PDFs.
+- Multiple receipts inside one PDF (extractor returns the primary receipt and
+  the limitation is surfaced in review).
+- Chunked page-by-page extraction for PDFs longer than `MAX_PDF_PAGES`.
 - Migrating the deprecated `google.generativeai` SDK to `google.genai`
   (surface it when touching the Gemini send path).
 - Generating PDF *output* (e.g. receipt export as PDF).
