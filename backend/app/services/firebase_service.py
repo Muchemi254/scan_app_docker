@@ -245,6 +245,7 @@ class FirestoreService:
         rejected: bool = False,
         has_image: Optional[bool] = None,
         entry_type: Optional[str] = None,
+        has_pdf: Optional[bool] = None,
     ) -> tuple[List[Dict[str, Any]], int]:
         """
         List receipts with filtering and pagination.
@@ -307,6 +308,12 @@ class FirestoreService:
                         d for d in all_docs
                         if (d.to_dict().get("entryType") or "expense") == entry_type
                     ]
+
+            if has_pdf is not None:
+                all_docs = [
+                    d for d in all_docs
+                    if (d.to_dict().get("fileType") == "application/pdf") == has_pdf
+                ]
 
             total = len(all_docs)
 

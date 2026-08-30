@@ -147,14 +147,20 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
           <div className="flex flex-col lg:flex-row lg:gap-4">
             {imageUrl && (
               <div className="sticky top-0 z-10 lg:static lg:w-1/2 xl:w-[55%] flex-shrink-0 bg-gray-50 rounded border border-gray-200 order-first lg:order-last flex flex-col">
-                <div className="flex-shrink-0 px-3 pt-2 pb-1 text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                <div className="flex-shrink-0 px-3 pt-2 pb-1 text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-2">
                   Receipt Image
+                  {receipt?.fileType === 'application/pdf' && (
+                    <span className="rounded bg-red-100 text-red-700 px-1.5 py-0.5 text-[10px] font-semibold">
+                      PDF{receipt.pdfPageCount ? ` · ${receipt.pdfPageCount}p` : ''}
+                    </span>
+                  )}
                 </div>
                 <div className="p-2 lg:flex-1">
                   <ImageViewer
                     imageUrl={imageUrl}
                     altText="Receipt"
                     containerClass="h-48 sm:h-64 lg:h-full lg:min-h-[60vh]"
+                    fileType={newImage ? undefined : receipt?.fileType}
                   />
                 </div>
               </div>

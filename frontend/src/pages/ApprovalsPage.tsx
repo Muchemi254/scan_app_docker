@@ -307,7 +307,7 @@ const ApprovalsPage = () => {
             <div className="flex gap-2.5">
               {row.imageUrl ? (
                 <img
-                  src={`/api/images/cached?url=${encodeURIComponent(row.imageUrl)}`}
+                  src={`/api/images/cached?url=${encodeURIComponent(row.imageUrl)}&thumb=1`}
                   alt=""
                   className="w-10 h-10 rounded object-cover border bg-gray-50 flex-shrink-0 mt-0.5"
                 />

@@ -278,6 +278,7 @@ export const receiptApi = {
     scanDateFrom?: string;
     scanDateTo?: string;
     rejected?: boolean;
+    hasPdf?: boolean;
     ids?: string[];
   }): Promise<{ total: number; results: any[] }> {
     const p = new URLSearchParams({ q, limit: String(limit), offset: String(offset) });

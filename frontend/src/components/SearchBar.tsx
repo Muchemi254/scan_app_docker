@@ -27,6 +27,7 @@ const SearchBar = ({
   const [isSearching, setIsSearching] = useState(false);
   const [total, setTotal] = useState(0);
   const [error, setError] = useState('');
+  const [pdfOnly, setPdfOnly] = useState(false);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestId = useRef(0);
   const hadQuery = useRef(false);
@@ -54,7 +55,9 @@ const SearchBar = ({
     searchTimer.current = setTimeout(async () => {
       const currentRequest = ++requestId.current;
       try {
-        const r = await (searchFnRef.current || receiptApi.search)(q, pageSize, 0);
+        const r = searchFnRef.current
+          ? await searchFnRef.current(q, pageSize, 0)
+          : await receiptApi.search(q, pageSize, 0, pdfOnly ? { hasPdf: true } : undefined);
         if (currentRequest !== requestId.current) return;
         onResultsRef.current(r.results || r.items || [], r.total || 0);
         setTotal(r.total || 0);
@@ -70,7 +73,7 @@ const SearchBar = ({
       if (searchTimer.current) clearTimeout(searchTimer.current);
       requestId.current += 1;
     };
-  }, [inputValue, pageSize, searchKey]);
+  }, [inputValue, pageSize, searchKey, pdfOnly]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const q = e.target.value;
@@ -106,11 +109,23 @@ const SearchBar = ({
           </button>
         )}
       </div>
-      {inputValue.trim() && !isSearching && (
-        <p className={`text-xs mt-1 ${error ? 'text-red-500' : 'text-gray-500'}`}>
-          {error || <>{total} match{total !== 1 ? 'es' : ''}{total > 0 && <span className="text-blue-500"> · ranked</span>}</>}
-        </p>
-      )}
+      <div className="flex items-center gap-2 mt-1.5">
+        <button
+          type="button"
+          onClick={() => setPdfOnly(v => !v)}
+          title="Restrict search results to PDF receipts"
+          className={`px-2 py-0.5 rounded-full text-[11px] font-medium border transition-colors ${
+            pdfOnly ? 'bg-red-50 border-red-300 text-red-600' : 'bg-gray-50 border-gray-200 text-gray-500 hover:bg-gray-100'
+          }`}
+        >
+          📄 PDF only
+        </button>
+        {inputValue.trim() && !isSearching && (
+          <p className={`text-xs ${error ? 'text-red-500' : 'text-gray-500'}`}>
+            {error || <>{total} match{total !== 1 ? 'es' : ''}{total > 0 && <span className="text-blue-500"> · ranked</span>}</>}
+          </p>
+        )}
+      </div>
     </>
   );
 };

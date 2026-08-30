@@ -162,11 +162,11 @@ const ScannerPage = ({ userId }: { userId: string | null }) => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">📁 Select Images</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">📁 Select Images / PDFs</label>
                 <input
                   type="file"
                   multiple
-                  accept="image/*"
+                  accept="image/*,.pdf,application/pdf"
                   onChange={e => {
                     if (e.target.files) {
                       const files = Array.from(e.target.files);

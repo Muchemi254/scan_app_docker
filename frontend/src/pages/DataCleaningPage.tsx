@@ -645,7 +645,7 @@ const DataCleaningPage = ({ userId }: { userId: string | null }) => {
                       <div className="px-5 pb-4 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)] gap-4">
                         <div className="bg-gray-50 rounded-lg border border-gray-200 overflow-hidden">
                           {m.imageUrl ? (
-                            <ImageViewer imageUrl={m.imageUrl} altText={m.supplier} containerClass="min-h-[24rem] max-h-[32rem]" />
+                            <ImageViewer imageUrl={m.imageUrl} altText={m.supplier} containerClass="min-h-[24rem] max-h-[32rem]" fileType={(m as any).fileType} />
                           ) : (
                             <div className="flex flex-col items-center justify-center h-64 text-gray-400">
                               <Image className="h-10 w-10 mb-2" />

@@ -591,10 +591,10 @@ const ReceiptForm = ({
           />
         </div>
         <div>
-          <label className="block text-xs font-medium text-gray-600 mb-0.5">Receipt Image</label>
+          <label className="block text-xs font-medium text-gray-600 mb-0.5">Receipt Image / PDF</label>
           <input
             type="file"
-            accept="image/*"
+            accept="image/*,.pdf,application/pdf"
             onChange={(e) => onImageChange(e.target.files?.[0] || null)}
             className="w-full px-2 py-1 border rounded text-sm"
           />

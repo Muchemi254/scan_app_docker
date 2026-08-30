@@ -160,3 +160,38 @@ async def test_jpeg_upload_still_works(client, monkeypatch):
         files={"file": ("r.jpg", make_jpeg_bytes(), "image/jpeg")},
     )
     assert resp.status_code == 200, resp.text
+
+
+@pytest.mark.asyncio
+async def test_list_and_search_has_pdf_filter(client):
+    user, headers = await _new_user(client)
+    uid = user["uid"]
+
+    # One PDF + one image receipt
+    pdf = await client.post(
+        f"/api/v1/users/{uid}/receipts",
+        data={"receipt_data": '{"supplier": "Pdf Co", "totalAmount": "10.00", "receiptDate": "08/25/2026", "status": "needs_review"}'},
+        files={"file": ("a.pdf", make_text_pdf(1), "application/pdf")},
+        headers=headers,
+    )
+    assert pdf.status_code == 201, pdf.text
+    img = await client.post(
+        f"/api/v1/users/{uid}/receipts",
+        data={"receipt_data": '{"supplier": "Img Co", "totalAmount": "20.00", "receiptDate": "08/25/2026", "status": "needs_review"}'},
+        files={"file": ("b.jpg", make_jpeg_bytes(), "image/jpeg")},
+        headers=headers,
+    )
+    assert img.status_code == 201, img.text
+
+    pdfs = (await client.get(f"/api/v1/users/{uid}/receipts", params={"hasPdf": "true"}, headers=headers)).json()
+    assert [i["supplier"] for i in pdfs["items"]] == ["Pdf Co"]
+    non_pdfs = (await client.get(f"/api/v1/users/{uid}/receipts", params={"hasPdf": "false"}, headers=headers)).json()
+    assert [i["supplier"] for i in non_pdfs["items"]] == ["Img Co"]
+
+    s = (await client.get(
+        f"/api/v1/users/{uid}/receipts/search",
+        params={"q": "Co", "hasPdf": "true"},
+        headers=headers,
+    )).json()
+    assert s["total"] == 1
+    assert s["results"][0]["supplier"] == "Pdf Co"

@@ -300,6 +300,11 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
                       {entryTypeLabel(receipt.entryType)}
                     </span>
                   )}
+                  {receipt.fileType === 'application/pdf' && (
+                    <span className="absolute top-1 right-1 rounded bg-red-500 text-white text-[9px] font-semibold px-1.5 py-0.5 shadow">
+                      PDF{receipt.pdfPageCount ? ` · ${receipt.pdfPageCount}p` : ''}
+                    </span>
+                  )}
                 </div>
                 <div className="p-2">
                   <p className="text-xs font-semibold text-gray-800 truncate">
@@ -389,6 +394,7 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
                 imageUrl={selectedReceipt.imageUrl}
                 altText={selectedReceipt.supplier || 'Receipt'}
                 containerClass="min-h-[50vh] max-h-[70vh]"
+                fileType={selectedReceipt.fileType}
               />
             </div>
             <div className="px-5 py-3 border-t bg-gray-50 flex flex-wrap gap-4 text-sm">

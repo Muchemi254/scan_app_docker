@@ -361,11 +361,13 @@ class DatabaseService:
         rejected: bool = False,
         has_image: Optional[bool] = None,
         entry_type: Optional[str] = None,
+        has_pdf: Optional[bool] = None,
     ) -> tuple:
         """List receipts with filters and pagination. Returns (receipts, total).
 
         entry_type: 'expense' | 'quotation' | 'proforma' | 'deposit' | 'note'
         | 'non_expense' (any non-expense type) | None (all).
+        has_pdf: restrict to PDF receipts (True) or image-only (False).
         """
         pool = await get_pool()
         async with pool.acquire() as conn:
@@ -416,6 +418,12 @@ class DatabaseService:
                 conditions.append(
                     "(NULLIF(BTRIM(image_filename), '') IS NULL AND "
                     "NULLIF(BTRIM(legacy_image_url), '') IS NULL)"
+                )
+            if has_pdf is True:
+                conditions.append("file_type = 'application/pdf'")
+            elif has_pdf is False:
+                conditions.append(
+                    "(file_type IS NULL OR file_type <> 'application/pdf')"
                 )
 
             where_clause = " AND ".join(conditions)
@@ -767,6 +775,7 @@ class DatabaseService:
         rejected: bool = False,
         receipt_ids: Optional[List[str]] = None,
         entry_type: Optional[str] = None,
+        has_pdf: Optional[bool] = None,
     ) -> dict:
         """
         Full-text search across receipts + items. Returns ranked matches.
@@ -860,6 +869,11 @@ class DatabaseService:
                 where.append("r.entry_type <> 'expense'")
             else:
                 add(entry_type, "r.entry_type = ${index}")
+
+        if has_pdf is True:
+            where.append("r.file_type = 'application/pdf'")
+        elif has_pdf is False:
+            where.append("(r.file_type IS NULL OR r.file_type <> 'application/pdf')")
 
         limit_index = len(args) + 1
         offset_index = len(args) + 2

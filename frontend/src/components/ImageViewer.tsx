@@ -4,11 +4,14 @@ const ImageViewer = ({
   imageUrl,
   altText,
   containerClass = 'h-56 sm:h-72 md:h-96',
+  fileType,
 }: {
   imageUrl: string;
   altText: string;
   containerClass?: string;
+  fileType?: string;
 }) => {
+  const isPdf = fileType === 'application/pdf';
   const [rotation, setRotation] = useState(0);
   const [zoom, setZoom] = useState(1);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -155,6 +158,53 @@ const ImageViewer = ({
   const zoomPct = Math.round(zoom * 100);
 
   if (!imageUrl) return null;
+
+  // ── PDF receipts: render inline via iframe (browser-native viewer) ────
+  // Zoom/pan don't apply to documents; show open/download actions instead.
+  if (isPdf) {
+    const pdfDisplayUrl = `/api/images/cached?url=${encodeURIComponent(imageUrl)}`;
+    const pdfFrame = (
+      <div className="border rounded overflow-hidden bg-gray-50">
+        <div className={`relative w-full ${containerClass} bg-gray-100`}>
+          <iframe
+            src={pdfDisplayUrl}
+            title={altText}
+            className="w-full h-full border-0"
+          />
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 bg-white border-t">
+          <span className="text-xs text-gray-500">
+            PDF receipt — rendered by your browser
+          </span>
+          <a
+            href={pdfDisplayUrl}
+            download
+            className="px-3 py-1.5 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded"
+          >
+            ⬇ Download PDF
+          </a>
+        </div>
+      </div>
+    );
+
+    return (
+      <div className="relative">
+        <div className="sticky top-0 z-10 mb-3 flex flex-wrap gap-2 bg-white/90 backdrop-blur-sm py-1.5 px-0.5 -mx-0.5 rounded">
+          <button onClick={handleOpenInNewTab} className="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded border" title="Open in New Tab">↗</button>
+          <button onClick={handleFullscreen} className="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded border" title="Fullscreen">⛶</button>
+        </div>
+        {pdfFrame}
+        {isFullscreen && (
+          <div className="fixed inset-0 bg-black bg-opacity-90 z-50 flex items-center justify-center" onClick={() => setIsFullscreen(false)}>
+            <div className="relative w-full max-w-5xl h-[90vh] p-4" onClick={(e) => e.stopPropagation()}>
+              <button onClick={() => setIsFullscreen(false)} className="absolute top-2 right-2 text-white text-2xl hover:text-gray-300 z-10 bg-black bg-opacity-50 rounded-full w-10 h-10 flex items-center justify-center">×</button>
+              <iframe src={pdfDisplayUrl} title={altText} className="w-full h-full border-0 rounded bg-white" />
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="relative">

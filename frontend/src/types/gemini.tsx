@@ -44,6 +44,10 @@ export interface ReceiptData {
   batchTitle?: string;
   /** expense (counts in totals) | quotation | proforma | deposit | note (retained, excluded from totals/exports) */
   entryType?: string;
+  /** Stored file MIME: image/jpeg or application/pdf */
+  fileType?: string;
+  /** Page count when fileType is application/pdf */
+  pdfPageCount?: number;
 }
 
 export const ENTRY_TYPE_OPTIONS = [

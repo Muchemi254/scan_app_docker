@@ -28,12 +28,18 @@ const ReceiptSummary = ({ data, showImage = true }: { data: ReceiptData; showIma
         Non-expense — {entryTypeLabel(data.entryType)}. Excluded from totals and exports.
       </div>
     )}
+    {data.fileType === 'application/pdf' && (
+      <div className="rounded border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700">
+        📄 PDF receipt{data.pdfPageCount ? ` · ${data.pdfPageCount} page${data.pdfPageCount === 1 ? '' : 's'}` : ''} — all pages are one document
+      </div>
+    )}
     {showImage && data.imageUrl && (
       <div>
         <ImageViewer
           imageUrl={data.imageUrl}
           altText="Receipt"
           containerClass="h-44 sm:h-60"
+          fileType={data.fileType}
         />
       </div>
     )}
@@ -418,6 +424,7 @@ const ReviewPanel = ({
                           imageUrl={approveDraftImage ? URL.createObjectURL(approveDraftImage) : (approveDraft.imageUrl || '')}
                           altText="Receipt"
                           containerClass="h-40 sm:h-56 lg:h-full lg:min-h-[50vh]"
+                          fileType={approveDraftImage ? undefined : approveDraft.fileType}
                         />
                       </div>
                     </div>
@@ -604,6 +611,7 @@ const ReviewPanel = ({
                     imageUrl={imageUrl}
                     altText="Receipt"
                     containerClass="h-36 sm:h-48 lg:h-full lg:min-h-[50vh]"
+                    fileType={newImage ? undefined : receipt.fileType}
                   />
                 </div>
               </div>
@@ -634,6 +642,7 @@ const ReviewPanel = ({
                   imageUrl={receipt.imageUrl}
                   altText="Receipt"
                   containerClass="h-56 sm:h-80 md:h-96"
+                  fileType={receipt.fileType}
                 />
               </div>
             )}
