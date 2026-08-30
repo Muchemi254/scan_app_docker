@@ -522,6 +522,92 @@ async def resolve_thinking_mode(user_id: Optional[str], provider: str) -> bool:
     return False
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Provider-native content parts (images + PDFs)
+# ═══════════════════════════════════════════════════════════════════════════
+
+_IMAGE_MIMES = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
+PDF_MIME = "application/pdf"
+
+
+def _image_parts(b64: str, mime: str, provider: str) -> list[dict]:
+    """Provider-shaped parts for a single image."""
+    if provider == "gemini":
+        return [{"mime_type": mime, "data": b64}]
+    return [{"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}]
+
+
+def _image_parts(b64: str, mime: str, provider: str, label: str = "") -> list[dict]:
+    """Provider-shaped parts for a single image."""
+    if provider == "gemini":
+        parts: list[dict] = []
+        if label:
+            parts.append({"text": label})
+        parts.append({"mime_type": mime, "data": b64})
+        return parts
+    parts = []
+    if label:
+        parts.append({"type": "text", "text": label})
+    parts.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+    return parts
+
+
+def pdf_to_provider_parts(
+    pdf_bytes: bytes,
+    provider: str,
+    max_pages: Optional[int] = None,
+    label: str = "",
+) -> list[dict]:
+    """
+    Convert a PDF into provider-native content parts.
+
+    One PDF = one receipt; every page goes into the same call so the model
+    sees the whole document:
+
+    - gemini: single inline ``application/pdf`` part (native multipage —
+      text layer + vision in one part).
+    - openrouter / qwen: each page rendered to JPEG and sent in page order,
+      labelled "page p of N".
+    - deepseek (text-only chat): the extracted text layer as one text part;
+      raises ValueError for scanned PDFs with no text layer.
+
+    ``label`` (e.g. "Receipt index 0") is prepended so batch prompts can
+    attribute parts to a document.
+    """
+    from app.services import pdf_service
+
+    cap = settings.MAX_PDF_PAGES if max_pages is None else max_pages
+    page_count = pdf_service.assert_within_page_cap(pdf_bytes, cap=cap)
+
+    prefix = f"{label} — " if label else ""
+    if provider == "deepseek":
+        text = pdf_service.extract_text(pdf_bytes)
+        if not text:
+            raise ValueError(
+                "Scanned PDF (no text layer) requires a vision provider — "
+                "switch to Gemini, OpenRouter or Qwen for this file"
+            )
+        return [{"type": "text", "text": f"{prefix}PDF text content (page 1 of {page_count}):\n{text}"}]
+
+    if provider == "gemini":
+        b64 = base64.standard_b64encode(pdf_bytes).decode()
+        parts: list[dict] = []
+        if label:
+            parts.append({"text": f"{prefix}PDF document ({page_count} pages)"})
+        parts.append({"mime_type": PDF_MIME, "data": b64})
+        return parts
+
+    # openrouter / qwen — per-page vision parts
+    pages = pdf_service.render_pdf_pages(pdf_bytes, max_pages=cap)
+    parts = []
+    for p, jpeg in enumerate(pages, start=1):
+        b64 = base64.standard_b64encode(jpeg).decode()
+        if label or page_count > 1:
+            parts.append({"type": "text", "text": f"{prefix}page {p} of {page_count}"})
+        parts.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
+    return parts
+
+
 async def extract_receipt_data(
     image_base64: str,
     mime_type: str,
@@ -546,37 +632,40 @@ async def extract_receipt_data(
         api_key, model_id, provider = await get_gemini_config(user_id)
         thinking_mode = await resolve_thinking_mode(user_id, provider)
 
+        is_pdf = mime_type == PDF_MIME
+        pdf_bytes = base64.b64decode(image_base64) if is_pdf else None
+
         prompt = RECEIPT_EXTRACTION_PROMPT.format(
-            batch_instruction="Extract receipt details from this image and return ONLY valid JSON.",
+            batch_instruction=(
+                "Extract receipt details from this PDF document — consider ALL "
+                "pages (they are one document) — and return ONLY valid JSON."
+                if is_pdf else
+                "Extract receipt details from this image and return ONLY valid JSON."
+            ),
             response_schema=_SINGLE_RESPONSE_SCHEMA,
         )
 
+        # Provider-native parts: PDFs are converted per provider (inline PDF
+        # part for Gemini, per-page images for OpenRouter/Qwen, text layer
+        # for DeepSeek); images use the existing single-part shape.
+        if is_pdf:
+            parts = pdf_to_provider_parts(pdf_bytes, provider, label="PDF document")
+        else:
+            parts = _image_parts(image_base64, mime_type, provider)
+
         if provider == "deepseek":
-            content = [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_base64}"}}
-            ]
+            content = [*parts, {"type": "text", "text": prompt}]
             response_text = await call_deepseek_api(api_key, model_id, prompt, content, thinking_mode=thinking_mode)
         elif provider == "openrouter":
-            content = [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_base64}"}}
-            ]
+            content = [*parts, {"type": "text", "text": prompt}]
             response_text = await call_openrouter_api(api_key, model_id, prompt, content, thinking_mode=thinking_mode)
         elif provider == "qwen":
-            content = [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{image_base64}"}}
-            ]
+            content = [*parts, {"type": "text", "text": prompt}]
             response_text = await call_qwen_api(api_key, model_id, prompt, content, thinking_mode=thinking_mode)
         else:
-            image_part = {
-                "mime_type": mime_type,
-                "data": image_base64
-            }
             response = await _gemini_generate_content(
                 api_key, model_id,
-                [image_part, prompt],
+                [*parts, prompt],
                 generation_config=genai.types.GenerationConfig(
                     response_mime_type="application/json",
                     temperature=0.1,
@@ -619,7 +708,7 @@ async def extract_receipt_data(
 
 
 async def extract_receipt_batch(
-    images: list[tuple[str, str]],  # [(base64, mime_type), ...]
+    files: list[list[dict]],  # one inner list of provider-shaped parts per receipt (1..N pages each)
     api_key: str,
     model_id: str,
     provider: str,
@@ -627,9 +716,16 @@ async def extract_receipt_batch(
 ) -> list[Optional[ReceiptCreate]]:
     """
     Extract structured data from MULTIPLE receipts in one AI call.
+
+    ``files`` is grouped per receipt: ``files[i]`` holds the provider-native
+    parts for document i (a single image, or a whole PDF rendered per
+    provider). Each document produces EXACTLY one receipt — for multipage
+    PDFs the pages are all present in the same part group, so the model is
+    told "one document = one receipt".
+
     Maximum efficiency for batch processing.
     """
-    if not images:
+    if not files:
         return []
 
     try:
@@ -643,12 +739,15 @@ async def extract_receipt_batch(
         # pattern and yields all receipts reliably.
         prompt = RECEIPT_EXTRACTION_PROMPT.format(
             batch_instruction=(
-                f"Extract receipt details from these {len(images)} images. Each image is "
-                "preceded by its index (Image index 0, Image index 1, ...).\n"
-                f"Return ONE JSON object with a \"receipts\" array containing EXACTLY {len(images)} "
-                "receipt objects, one per image.\n"
+                f"Extract receipt details from these {len(files)} documents. "
+                "Each document is preceded by its index (Receipt index 0, Receipt "
+                "index 1, ...). A document may be a multi-page PDF — its pages are "
+                "sent together labelled 'page p of N' — and ALL pages belong to ONE "
+                "receipt: never split one document into several receipts.\n"
+                f"Return ONE JSON object with a \"receipts\" array containing EXACTLY {len(files)} "
+                "receipt objects, one per document.\n"
                 "CRITICAL: every receipt object MUST include \"imageIndex\" — the 0-based number "
-                "of the image it was extracted from. imageIndex values must be unique and each "
+                "of the document it was extracted from. imageIndex values must be unique and each "
                 "must appear exactly once. You may list receipts in ANY order as long as every "
                 "imageIndex is correct."
             ),
@@ -661,40 +760,31 @@ async def extract_receipt_batch(
         # code fence that _clean_json_response can't strip and json.loads rejects
         # as "Expecting value: char 0" (misreported as AI_EMPTY_RESPONSE/AI_INVALID_JSON).
         base_budget = 8192 if (model_id and model_id.startswith("qwen-vl-ocr")) else 2048
-        max_tokens = min(8192, max(base_budget, 1024 * len(images)))
+        max_tokens = min(8192, max(base_budget, 1024 * len(files)))
 
         if provider == "deepseek":
             content = []
-            for i, (b64, mime) in enumerate(images):
-                content.append({"type": "text", "text": f"Image index {i}:"})
-                content.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+            for i, parts in enumerate(files):
+                content.extend(parts)
             content.append({"type": "text", "text": prompt})
             response_text = await call_deepseek_api(api_key, model_id, prompt, content, thinking_mode=thinking_mode, max_tokens=max_tokens)
         elif provider == "openrouter":
             content = []
-            for i, (b64, mime) in enumerate(images):
-                content.append({"type": "text", "text": f"Image index {i}:"})
-                content.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+            for i, parts in enumerate(files):
+                content.extend(parts)
             content.append({"type": "text", "text": prompt})
             response_text = await call_openrouter_api(api_key, model_id, prompt, content, thinking_mode=thinking_mode, max_tokens=max_tokens)
         elif provider == "qwen":
             content = []
-            for i, (b64, mime) in enumerate(images):
-                content.append({"type": "text", "text": f"Image index {i}:"})
-                content.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+            for i, parts in enumerate(files):
+                content.extend(parts)
             content.append({"type": "text", "text": prompt})
             response_text = await call_qwen_api(api_key, model_id, prompt, content, thinking_mode=thinking_mode, max_tokens=max_tokens)
         else:
-            # Prepare multimodal content
+            # Prepare multimodal content (Gemini part dicts, text appended)
             content = []
-            for i, (b64, mime) in enumerate(images):
-                content.append({
-                    "mime_type": mime,
-                    "data": b64
-                })
-                content.append({
-                    "text": f"This is image index {i}. Extract its details."
-                })
+            for i, parts in enumerate(files):
+                content.extend(parts)
             content.append({"text": prompt})
 
             response = await _gemini_generate_content(
@@ -727,10 +817,10 @@ async def extract_receipt_batch(
         # The whole point: a short array means the model dropped images. Treat
         # it as malformed so the worker fans out to per-image extraction
         # instead of silently marking N images failed.
-        if not isinstance(data_list, list) or len(data_list) != len(images):
+        if not isinstance(data_list, list) or len(data_list) != len(files):
             received = len(data_list) if isinstance(data_list, list) else "a non-array"
             raise ValueError(
-                f"AI returned malformed JSON (parse error: expecting {len(images)} "
+                f"AI returned malformed JSON (parse error: expecting {len(files)} "
                 f"receipts but received {received})"
             )
 
@@ -765,7 +855,7 @@ async def extract_receipt_batch(
                 raise ValueError(
                     f"AI returned malformed JSON (parse error: entry {i} has a non-numeric imageIndex)"
                 )
-            if idx < 0 or idx >= len(images) or idx in seen:
+            if idx < 0 or idx >= len(files) or idx in seen:
                 raise ValueError(
                     f"AI returned malformed JSON (parse error: entry {i} has an invalid or duplicate imageIndex {idx})"
                 )

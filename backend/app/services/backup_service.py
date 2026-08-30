@@ -233,12 +233,14 @@ async def export_user_data(user_id: str) -> dict:
         )
 
     # ── Collect image filenames belonging to this user ──
+    # PDF receipts are stored as {id}.pdf alongside {id}.jpg / {id}_thumb.jpg
+    # — include every referenced file type in the archive.
     image_files = []
     if os.path.isdir(settings.IMAGE_STORAGE_DIR):
         for fn in sorted(os.listdir(settings.IMAGE_STORAGE_DIR)):
-            if not fn.endswith(".jpg"):
+            if not (fn.endswith(".jpg") or fn.endswith(".pdf")):
                 continue
-            rid = fn.replace("_thumb.jpg", "").replace(".jpg", "")
+            rid = fn.replace("_thumb.jpg", "").replace(".jpg", "").replace(".pdf", "")
             if rid in receipt_ids or fn.split(".")[0].split("_")[0] in receipt_ids:
                 image_files.append(fn)
 
@@ -349,7 +351,9 @@ async def import_user_data(
                 data = json.loads(tar.extractfile(member).read())
             elif member.name == "backup/manifest.json":
                 manifest = json.loads(tar.extractfile(member).read())
-            elif member.name.startswith("backup/images/") and member.name.endswith(".jpg"):
+            elif member.name.startswith("backup/images/") and (
+                member.name.endswith(".jpg") or member.name.endswith(".pdf")
+            ):
                 fn = os.path.basename(member.name)
                 image_entries[fn] = member  # store member ref, not bytes
 
@@ -606,10 +610,12 @@ async def import_user_data(
     os.makedirs(settings.IMAGE_STORAGE_DIR, exist_ok=True)
     with tarfile.open(filepath, "r:gz") as tar:
         for member in tar:
-            if not (member.name.startswith("backup/images/") and member.name.endswith(".jpg")):
+            if not member.name.startswith("backup/images/"):
+                continue
+            if not (member.name.endswith(".jpg") or member.name.endswith(".pdf")):
                 continue
             fn = os.path.basename(member.name)
-            rid = fn.replace("_thumb.jpg", "").replace(".jpg", "")
+            rid = fn.replace("_thumb.jpg", "").replace(".jpg", "").replace(".pdf", "")
             if selected_ids and rid not in selected_ids:
                 continue
             if id_map:

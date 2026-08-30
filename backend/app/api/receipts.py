@@ -36,7 +36,7 @@ from app.services.receipt_workflow_service import (
     reject as workflow_reject,
     is_admin_actor,
 )
-from app.services.database_service import save_image, save_thumbnail, delete_receipt_images
+from app.services.database_service import save_image, save_thumbnail, save_pdf, save_pdf_thumbnail, delete_receipt_images
 from app.services.firebase_service import StorageService
 from app.services.gemini import extract_receipt_data, generate_ai_summary
 from app.services.image_service import process_image, generate_thumbnail, prepare_for_ai
@@ -77,6 +77,28 @@ async def verify_user_access(user_id: str, current_user_id: str):
     )
 
 
+PDF_MIME = "application/pdf"
+_UPLOAD_ALLOWED = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif", PDF_MIME}
+
+
+def _is_pdf_upload(contents: bytes, content_type: Optional[str]) -> bool:
+    """True for PDF uploads — magic-byte check so renamed files still work."""
+    from app.services.pdf_service import is_pdf
+    return content_type == PDF_MIME or is_pdf(contents)
+
+
+def _check_pdf_pages(contents: bytes) -> int:
+    """Validate the PDF page cap at upload time. Raises HTTPException 400."""
+    from app.services.pdf_service import assert_within_page_cap
+    try:
+        return assert_within_page_cap(contents)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        ) from e
+
+
 # ============================================================================
 # EXTRACT & CREATE ENDPOINTS
 # ============================================================================
@@ -113,8 +135,13 @@ async def batch_extract_receipts(
         contents = await file.read()
         if len(contents) > settings.MAX_UPLOAD_SIZE:
             raise HTTPException(status_code=413, detail=f"File too large: {file.filename}")
-        processed, processed_type = process_image(contents, file.content_type or "image/jpeg")
-        fname = f"{idx:04d}.jpg"
+        if _is_pdf_upload(contents, file.content_type):
+            _check_pdf_pages(contents)
+            processed, processed_type = contents, PDF_MIME
+            fname = f"{idx:04d}.pdf"
+        else:
+            processed, processed_type = process_image(contents, file.content_type or "image/jpeg")
+            fname = f"{idx:04d}.jpg"
         fpath = os.path.join(batch_dir, fname)
         with open(fpath, "wb") as f:
             f.write(processed)
@@ -160,9 +187,9 @@ async def extract_receipt_from_image(
     await verify_user_access(userId, current_user_id)
 
     try:
-        # Validate file type (HEIC/HEIF accepted — converted server-side)
-        allowed = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
-        if not file.content_type or file.content_type not in allowed:
+        # Validate file type (HEIC/HEIF accepted — converted server-side;
+        # PDFs accepted — provider-native extraction)
+        if not file.content_type or file.content_type not in _UPLOAD_ALLOWED:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Unsupported file type: {file.content_type}"
@@ -173,18 +200,24 @@ async def extract_receipt_from_image(
         if len(contents) > settings.MAX_UPLOAD_SIZE:
             raise HTTPException(status_code=413, detail="File too large")
 
-        # Optimize: convert HEIC→JPEG, resize, compress
-        processed, processed_type = process_image(contents, file.content_type or "image/jpeg")
+        if _is_pdf_upload(contents, file.content_type):
+            _check_pdf_pages(contents)
+            processed, processed_type = contents, PDF_MIME
+        else:
+            # Optimize: convert HEIC→JPEG, resize, compress
+            processed, processed_type = process_image(contents, file.content_type or "image/jpeg")
 
         # Convert to base64 for Gemini
         import base64
         base64_data = base64.standard_b64encode(processed).decode()
 
-        # Extract using Gemini (always sends JPEG now)
+        # Extract using provider (images → JPEG; PDFs converted per provider)
         receipt = await extract_receipt_data(base64_data, processed_type, userId)
 
         return receipt
 
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except Exception as e:
@@ -240,20 +273,40 @@ async def create_receipt(
         # Upload image if provided
         image_url = parsed.imageUrl
         image_filename = None
+        thumbnail_filename = None
+        file_type = None
+        pdf_page_count = None
         if file:
             file_contents = await file.read()
             if len(file_contents) > settings.MAX_UPLOAD_SIZE:
                 raise HTTPException(status_code=413, detail="File too large")
-            processed, _ = process_image(
-                file_contents, file.content_type or "image/jpeg"
-            )
-            thumb = generate_thumbnail(file_contents, file.content_type or "image/jpeg")
+
+            is_pdf = _is_pdf_upload(file_contents, file.content_type)
+            if is_pdf:
+                pdf_page_count = _check_pdf_pages(file_contents)
 
             if settings.USE_POSTGRES:
-                image_filename = save_image(receipt_id, processed)
-                if thumb:
-                    save_thumbnail(receipt_id, thumb)
+                if is_pdf:
+                    image_filename = save_pdf(receipt_id, file_contents)
+                    thumb_name = save_pdf_thumbnail(receipt_id, file_contents)
+                    if thumb_name:
+                        thumbnail_filename = thumb_name
+                    file_type = PDF_MIME
+                else:
+                    processed, _ = process_image(
+                        file_contents, file.content_type or "image/jpeg"
+                    )
+                    thumb = generate_thumbnail(file_contents, file.content_type or "image/jpeg")
+                    image_filename = save_image(receipt_id, processed)
+                    if thumb:
+                        save_thumbnail(receipt_id, thumb)
+                    file_type = "image/jpeg"
             else:
+                # Legacy firestore path — images only (PDF parity deferred)
+                processed, _ = process_image(
+                    file_contents, file.content_type or "image/jpeg"
+                )
+                thumb = generate_thumbnail(file_contents, file.content_type or "image/jpeg")
                 base = f"receipt_{int(datetime.utcnow().timestamp())}"
                 image_url, _ = await StorageService.upload_receipt_images(
                     userId, base, processed, thumb,
@@ -265,6 +318,12 @@ async def create_receipt(
         if settings.USE_POSTGRES:
             if image_filename:
                 data["image_filename"] = image_filename
+                if file_type:
+                    data["fileType"] = file_type
+                if pdf_page_count:
+                    data["pdfPageCount"] = pdf_page_count
+                if thumbnail_filename:
+                    data["thumbnail_filename"] = thumbnail_filename
         else:
             if image_url:
                 data["imageUrl"] = image_url
@@ -278,6 +337,8 @@ async def create_receipt(
         created = await DataService.get_receipt(userId, receipt_id)
         return Receipt(**created)
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to create receipt: {e}")
         raise HTTPException(
@@ -551,21 +612,40 @@ async def update_receipt(
 
         # Upload new image if provided
         image_url = current.get("imageUrl")
+        thumbnail_filename = None
+        file_type = None
+        pdf_page_count = None
         if file:
             file_contents = await file.read()
             if len(file_contents) > settings.MAX_UPLOAD_SIZE:
                 raise HTTPException(status_code=413, detail="File too large")
-            processed, _ = process_image(
-                file_contents, file.content_type or "image/jpeg"
-            )
-            thumb = generate_thumbnail(file_contents, file.content_type or "image/jpeg")
+
+            is_pdf = _is_pdf_upload(file_contents, file.content_type)
+            if is_pdf:
+                pdf_page_count = _check_pdf_pages(file_contents)
 
             if settings.USE_POSTGRES:
-                image_filename = save_image(receiptId, processed)
-                if thumb:
-                    save_thumbnail(receiptId, thumb)
+                if is_pdf:
+                    image_filename = save_pdf(receiptId, file_contents)
+                    thumb_name = save_pdf_thumbnail(receiptId, file_contents)
+                    if thumb_name:
+                        thumbnail_filename = thumb_name
+                    file_type = PDF_MIME
+                else:
+                    processed, _ = process_image(
+                        file_contents, file.content_type or "image/jpeg"
+                    )
+                    thumb = generate_thumbnail(file_contents, file.content_type or "image/jpeg")
+                    image_filename = save_image(receiptId, processed)
+                    if thumb:
+                        save_thumbnail(receiptId, thumb)
+                    file_type = "image/jpeg"
             else:
                 base = f"receipt_{int(datetime.utcnow().timestamp())}"
+                processed, _ = process_image(
+                    file_contents, file.content_type or "image/jpeg"
+                )
+                thumb = generate_thumbnail(file_contents, file.content_type or "image/jpeg")
                 image_url, _ = await StorageService.upload_receipt_images(
                     userId, base, processed, thumb,
                 )
@@ -575,6 +655,12 @@ async def update_receipt(
         if file:
             if settings.USE_POSTGRES:
                 data["image_filename"] = image_filename
+                if file_type:
+                    data["fileType"] = file_type
+                if pdf_page_count:
+                    data["pdfPageCount"] = pdf_page_count
+                if thumbnail_filename:
+                    data["thumbnail_filename"] = thumbnail_filename
             else:
                 data["imageUrl"] = image_url
 

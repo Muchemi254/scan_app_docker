@@ -99,6 +99,8 @@ class Receipt(ReceiptBase):
     entryType: EntryType = Field(default=EntryType.EXPENSE)
     imageUrl: Optional[str] = Field(None, description="Image URL in storage")
     thumbnailUrl: Optional[str] = Field(None, description="Thumbnail image URL for fast preview")
+    fileType: Optional[str] = Field(None, description="Stored file MIME: image/jpeg or application/pdf")
+    pdfPageCount: Optional[int] = Field(None, description="Page count when fileType is application/pdf")
     createdAt: datetime = Field(...)
     updatedAt: Optional[datetime] = Field(None)
     scannedAt: Optional[datetime] = Field(None, description="Time when the receipt was scanned/uploaded")

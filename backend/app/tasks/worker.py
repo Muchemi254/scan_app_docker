@@ -127,28 +127,43 @@ async def _extract_one_chunk(
     active_provider: str,
     user_id: str,
 ):
-    """Read images, base64-encode, call Gemini. Raises ScanError on failure."""
-    b64_images = []
-    img_bytes_list = []
-    for entry in chunk:
+    """Read files, build provider-native parts (grouped per receipt), call AI.
+
+    Returns (raw_bytes_list, results). Raises ScanError on failure.
+
+    Grouping: each entry (one file = one receipt) becomes its own list of
+    parts — a single image, or a whole PDF converted per provider (inline
+    PDF part for Gemini, per-page JPEGs for OpenRouter/Qwen, text layer for
+    DeepSeek). Multipage PDFs stay one receipt with all pages in context.
+    """
+    from app.services.gemini import _image_parts, pdf_to_provider_parts
+
+    b64_files = []
+    raw_bytes_list = []
+    for i, entry in enumerate(chunk):
         fpath = os.path.join(batch_dir, entry["filename"])
         with open(fpath, "rb") as f:
-            img_bytes = f.read()
-        # Stored copy stays high-quality for human review; the AI sees a
-        # downscaled version so token cost is unchanged.
-        ai_bytes = prepare_for_ai(img_bytes)
-        b64 = base64.standard_b64encode(ai_bytes).decode()
-        b64_images.append((b64, entry.get("mime", "image/jpeg")))
-        img_bytes_list.append(img_bytes)
+            raw = f.read()
+        mime = entry.get("mime") or "image/jpeg"
+        if mime == "application/pdf" or entry.get("filename", "").lower().endswith(".pdf"):
+            parts = pdf_to_provider_parts(raw, active_provider, label=f"Receipt index {i}")
+        else:
+            # Stored copy stays high-quality for human review; the AI sees a
+            # downscaled version so token cost is unchanged.
+            ai_bytes = prepare_for_ai(raw)
+            b64 = base64.standard_b64encode(ai_bytes).decode()
+            parts = _image_parts(b64, "image/jpeg", active_provider, label=f"Receipt index {i}")
+        b64_files.append(parts)
+        raw_bytes_list.append(raw)
 
     try:
         results = await extract_receipt_batch(
-            b64_images, api_key, model_id, active_provider, user_id=user_id
+            b64_files, api_key, model_id, active_provider, user_id=user_id
         )
     except Exception as e:
         raise classify_exception(e) from e
 
-    return img_bytes_list, results
+    return raw_bytes_list, results
 
 
 async def _persist_one_item(
@@ -189,7 +204,7 @@ async def _persist_one_item(
         img_filename = None
         thumb_filename = None
         if img_bytes and settings.USE_POSTGRES:
-            from app.services.database_service import save_image, save_thumbnail
+            from app.services.database_service import save_image, save_pdf, save_pdf_thumbnail, save_thumbnail
             # Canonical hash of the exact bytes we're about to store. Retries
             # carry no upload-time hash, so derive it here — this is what makes
             # retry dedup / orphan reconciliation work.
@@ -212,9 +227,22 @@ async def _persist_one_item(
                     await on_item_result(global_idx, None)
                 return
 
-            img_filename = save_image(receipt_id, img_bytes)
-            thumb = generate_thumbnail(img_bytes, "image/jpeg")
-            thumb_filename = save_thumbnail(receipt_id, thumb) if thumb else None
+            mime = entry.get("mime") or "image/jpeg"
+            if mime == "application/pdf" or entry.get("filename", "").lower().endswith(".pdf"):
+                # PDF receipt: store the raw file + page-1 JPEG thumbnail.
+                img_filename = save_pdf(receipt_id, img_bytes)
+                thumb_filename = save_pdf_thumbnail(receipt_id, img_bytes)
+                data["fileType"] = "application/pdf"
+                try:
+                    from app.services.pdf_service import assert_within_page_cap
+                    data["pdfPageCount"] = assert_within_page_cap(img_bytes)
+                except Exception:
+                    pass  # extraction already validated; best-effort metadata
+            else:
+                img_filename = save_image(receipt_id, img_bytes)
+                thumb = generate_thumbnail(img_bytes, "image/jpeg")
+                thumb_filename = save_thumbnail(receipt_id, thumb) if thumb else None
+                data["fileType"] = "image/jpeg"
 
         data["id"] = receipt_id
         data["userId"] = user_id

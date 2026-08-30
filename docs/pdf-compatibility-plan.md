@@ -133,7 +133,7 @@ changes — Pillow would crash on PDF bytes in the worker, and image-URL
 providers would receive `data:application/pdf`. Storage + extraction must land
 together.*
 
-1. `backend/alembic/versions/020_pdf_support.py` (new): add nullable
+1. `backend/alembic/versions/021_pdf_support.py` (new — 020 is taken by entry_type): add nullable
    `file_type` (`VARCHAR(32)`) and `pdf_page_count` (`INTEGER`) to `receipts`;
    backfill `file_type='image/jpeg'` for rows with `image_filename`.
 2. `backend/app/services/pdf_service.py` (new): `is_pdf(bytes)` magic check
@@ -218,7 +218,7 @@ renders in gallery/details/review; badge shows; no type errors.
    page rendering / thumbnails) plus `pypdf` + `pdf2image` to the backend
    image.
 2. Rebuild backend (+worker) and frontend images;
-   `docker-compose up -d` (migration 020 auto-applies).
+   `docker-compose up -d` (migration 021 auto-applies).
 3. Run the backend suite in-container; manual smoke at `http://localhost:8081`
    (upload a text PDF and a scanned PDF; try each provider setting).
 4. Confirm the `backup` sidecar tarball includes `*.pdf` in

@@ -29,10 +29,12 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install runtime dependencies (libpq5 needed for asyncpg at runtime)
+# Install runtime dependencies (libpq5 needed for asyncpg at runtime;
+# poppler-utils needed by pdf2image to render PDF pages / thumbnails)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     libpq5 \
+    poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root app user

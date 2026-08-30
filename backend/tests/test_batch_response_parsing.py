@@ -17,7 +17,11 @@ import pytest
 from app.services.gemini import extract_receipt_batch, call_qwen_api
 from app.services.error_codes import classify_exception, should_fan_out_to_per_image
 
-IMAGES = [("aGVsbG8=", "image/jpeg"), ("d29ybGQ=", "image/jpeg")]
+# Grouped per-file parts (new batch contract): one inner list per receipt.
+FILES = [
+    [{"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,aGVsbG8="}}],
+    [{"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,d29ybGQ="}}],
+]
 
 
 def _receipt_dict(supplier, invoice):
@@ -44,7 +48,7 @@ async def test_batch_wrapper_object_parsed(monkeypatch):
         return json.dumps({"receipts": receipts})
 
     monkeypatch.setattr("app.services.gemini.call_qwen_api", fake_qwen)
-    results = await extract_receipt_batch(IMAGES, "sk-test", "qwen3-vl-flash", "qwen")
+    results = await extract_receipt_batch(FILES, "sk-test", "qwen3-vl-flash", "qwen")
     assert len(results) == 2
     assert results[0].supplier == "ACME"
     assert results[1].supplier == "BETA"
@@ -62,7 +66,7 @@ async def test_batch_reorders_by_image_index(monkeypatch):
         return json.dumps({"receipts": receipts})
 
     monkeypatch.setattr("app.services.gemini.call_qwen_api", fake_qwen)
-    results = await extract_receipt_batch(IMAGES, "sk-test", "qwen3-vl-flash", "qwen")
+    results = await extract_receipt_batch(FILES, "sk-test", "qwen3-vl-flash", "qwen")
     assert len(results) == 2
     assert results[0].supplier == "ACME", "receipt for image 0 must be first after reassembly"
     assert results[1].supplier == "BETA", "receipt for image 1 must be second after reassembly"
@@ -77,7 +81,7 @@ async def test_batch_partial_indices_raises(monkeypatch):
 
     monkeypatch.setattr("app.services.gemini.call_qwen_api", fake_qwen)
     with pytest.raises(ValueError) as exc:
-        await extract_receipt_batch(IMAGES, "sk-test", "qwen3-vl-flash", "qwen")
+        await extract_receipt_batch(FILES, "sk-test", "qwen3-vl-flash", "qwen")
     assert "inconsistent imageIndex" in str(exc.value)
 
 
@@ -90,7 +94,7 @@ async def test_batch_duplicate_index_raises(monkeypatch):
 
     monkeypatch.setattr("app.services.gemini.call_qwen_api", fake_qwen)
     with pytest.raises(ValueError) as exc:
-        await extract_receipt_batch(IMAGES, "sk-test", "qwen3-vl-flash", "qwen")
+        await extract_receipt_batch(FILES, "sk-test", "qwen3-vl-flash", "qwen")
     assert "invalid or duplicate imageIndex" in str(exc.value)
 
 
@@ -103,7 +107,7 @@ async def test_batch_out_of_range_index_raises(monkeypatch):
 
     monkeypatch.setattr("app.services.gemini.call_qwen_api", fake_qwen)
     with pytest.raises(ValueError) as exc:
-        await extract_receipt_batch(IMAGES, "sk-test", "qwen3-vl-flash", "qwen")
+        await extract_receipt_batch(FILES, "sk-test", "qwen3-vl-flash", "qwen")
     assert "invalid or duplicate imageIndex" in str(exc.value)
 
 
@@ -116,7 +120,7 @@ async def test_batch_non_numeric_index_raises(monkeypatch):
 
     monkeypatch.setattr("app.services.gemini.call_qwen_api", fake_qwen)
     with pytest.raises(ValueError) as exc:
-        await extract_receipt_batch(IMAGES, "sk-test", "qwen3-vl-flash", "qwen")
+        await extract_receipt_batch(FILES, "sk-test", "qwen3-vl-flash", "qwen")
     assert "non-numeric imageIndex" in str(exc.value)
 
 
@@ -129,7 +133,7 @@ async def test_batch_permutation_error_triggers_per_image_fanout(monkeypatch):
 
     monkeypatch.setattr("app.services.gemini.call_qwen_api", fake_qwen)
     with pytest.raises(ValueError) as exc:
-        await extract_receipt_batch(IMAGES, "sk-test", "qwen3-vl-flash", "qwen")
+        await extract_receipt_batch(FILES, "sk-test", "qwen3-vl-flash", "qwen")
 
     scan_error = classify_exception(exc.value)
     assert scan_error.code.value == "AI_INVALID_JSON"
@@ -142,7 +146,7 @@ async def test_batch_short_array_raises_count_error(monkeypatch):
 
     monkeypatch.setattr("app.services.gemini.call_qwen_api", fake_qwen)
     with pytest.raises(ValueError) as exc:
-        await extract_receipt_batch(IMAGES, "sk-test", "qwen3-vl-flash", "qwen")
+        await extract_receipt_batch(FILES, "sk-test", "qwen3-vl-flash", "qwen")
     assert "expecting 2" in str(exc.value)
     assert "received 1" in str(exc.value)
 
@@ -160,7 +164,7 @@ async def test_batch_empty_supplier_does_not_fail(monkeypatch):
         return json.dumps({"receipts": receipts})
 
     monkeypatch.setattr("app.services.gemini.call_qwen_api", fake_qwen)
-    results = await extract_receipt_batch(IMAGES, "sk-test", "qwen-vl-ocr", "qwen")
+    results = await extract_receipt_batch(FILES, "sk-test", "qwen-vl-ocr", "qwen")
     assert len(results) == 2
     assert results[0].supplier == "ACME"
     assert results[1].supplier == "Unknown", "empty supplier must become 'Unknown', not fail"
@@ -173,7 +177,7 @@ async def test_batch_single_object_coercion_raises_count_error(monkeypatch):
 
     monkeypatch.setattr("app.services.gemini.call_qwen_api", fake_qwen)
     with pytest.raises(ValueError) as exc:
-        await extract_receipt_batch(IMAGES, "sk-test", "qwen3-vl-flash", "qwen")
+        await extract_receipt_batch(FILES, "sk-test", "qwen3-vl-flash", "qwen")
     assert "expecting 2" in str(exc.value)
 
 
@@ -183,7 +187,7 @@ async def test_batch_non_dict_entry_raises(monkeypatch):
 
     monkeypatch.setattr("app.services.gemini.call_qwen_api", fake_qwen)
     with pytest.raises(ValueError) as exc:
-        await extract_receipt_batch(IMAGES, "sk-test", "qwen3-vl-flash", "qwen")
+        await extract_receipt_batch(FILES, "sk-test", "qwen3-vl-flash", "qwen")
     assert "entry 1 is not an object" in str(exc.value)
 
 
@@ -192,7 +196,7 @@ async def test_batch_plain_array_backcompat(monkeypatch):
         return json.dumps([_receipt_dict("ACME", "INV-1"), _receipt_dict("BETA", "INV-2")])
 
     monkeypatch.setattr("app.services.gemini.call_qwen_api", fake_qwen)
-    results = await extract_receipt_batch(IMAGES, "sk-test", "qwen3-vl-flash", "qwen")
+    results = await extract_receipt_batch(FILES, "sk-test", "qwen3-vl-flash", "qwen")
     assert len(results) == 2
 
 
@@ -210,7 +214,7 @@ async def test_batch_items_drop_tax_and_discount(monkeypatch):
         return json.dumps({"receipts": receipts})
 
     monkeypatch.setattr("app.services.gemini.call_qwen_api", fake_qwen)
-    results = await extract_receipt_batch(IMAGES, "sk-test", "qwen3-vl-flash", "qwen")
+    results = await extract_receipt_batch(FILES, "sk-test", "qwen3-vl-flash", "qwen")
     assert len(results) == 2
     for r in results:
         assert r.items, "each receipt should have items"
@@ -225,7 +229,7 @@ async def test_count_error_triggers_per_image_fanout(monkeypatch):
 
     monkeypatch.setattr("app.services.gemini.call_qwen_api", fake_qwen)
     with pytest.raises(ValueError) as exc:
-        await extract_receipt_batch(IMAGES, "sk-test", "qwen3-vl-flash", "qwen")
+        await extract_receipt_batch(FILES, "sk-test", "qwen3-vl-flash", "qwen")
 
     scan_error = classify_exception(exc.value)
     assert scan_error.code.value == "AI_INVALID_JSON"

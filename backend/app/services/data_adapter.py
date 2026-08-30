@@ -15,6 +15,7 @@ _PG_AVAILABLE = False
 try:
     from app.services.database_service import (
         DatabaseService, save_image, save_thumbnail,
+        save_pdf, save_pdf_thumbnail,
         delete_receipt_images, read_image,
     )
     _PG_AVAILABLE = True
@@ -191,6 +192,16 @@ def _save_thumbnail_local(receipt_id: str, jpeg_bytes: bytes) -> str:
     if _PG_AVAILABLE:
         return save_thumbnail(receipt_id, jpeg_bytes)
     raise RuntimeError("Local image storage not available (USE_POSTGRES=false)")
+
+def _save_pdf_local(receipt_id: str, pdf_bytes: bytes) -> str:
+    if _PG_AVAILABLE:
+        return save_pdf(receipt_id, pdf_bytes)
+    raise RuntimeError("Local image storage not available (USE_POSTGRES=false)")
+
+def _save_pdf_thumbnail_local(receipt_id: str, pdf_bytes: bytes):
+    if _PG_AVAILABLE:
+        return save_pdf_thumbnail(receipt_id, pdf_bytes)
+    return None
 
 def _delete_receipt_images_local(receipt_id: str) -> None:
     if _PG_AVAILABLE:

@@ -28,7 +28,8 @@ async def fetch_referenced() -> set[str]:
     conn = await asyncpg.connect(settings.DATABASE_URL)
     try:
         rows = await conn.fetch(
-            "SELECT image_filename FROM receipts WHERE image_filename IS NOT NULL"
+            "SELECT image_filename, thumbnail_filename FROM receipts "
+            "WHERE image_filename IS NOT NULL"
         )
     finally:
         await conn.close()
@@ -37,7 +38,10 @@ async def fetch_referenced() -> set[str]:
     for row in rows:
         name = row["image_filename"]
         wanted.add(name)
-        if name.endswith(".jpg"):
+        thumb = row["thumbnail_filename"]
+        if thumb:
+            wanted.add(thumb)
+        elif name.endswith(".jpg"):
             wanted.add(name[: -len(".jpg")] + "_thumb.jpg")
     return wanted
 
@@ -49,6 +53,8 @@ def extract_wanted(tar_path: str, wanted: set[str], dest_dir: str, stats: dict) 
     with tarfile.open(tar_path, "r:gz") as tar:
         for member in tar:
             if not member.name.startswith("backup/images/") or not member.isfile():
+                continue
+            if not (member.name.endswith(".jpg") or member.name.endswith(".pdf")):
                 continue
             fn = os.path.basename(member.name)
             if fn not in wanted:

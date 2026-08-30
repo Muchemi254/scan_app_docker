@@ -82,6 +82,10 @@ class Settings(BaseSettings):
     )
     BACKUP_STORAGE_DIR: str = os.getenv("BACKUP_STORAGE_DIR", "/app/backups")
     MAX_UPLOAD_SIZE: int = _env_int("MAX_UPLOAD_SIZE", 10 * 1024 * 1024)  # 10 MB
+    # PDF receipts: max pages per document. Enforced at upload AND again in
+    # the worker/dispatch. Longer documents are rejected with a clear message
+    # (chunked very-long-PDF extraction is deferred).
+    MAX_PDF_PAGES: int = _env_int("MAX_PDF_PAGES", 15)
 
     # Background cleanup of deleted users' data (rows + files). Runs on a
     # timer in the app lifetime so deleting a user never blocks on I/O.

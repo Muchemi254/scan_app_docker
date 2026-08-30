@@ -14,7 +14,8 @@ import logging
 import socket
 import httpx
 from collections import OrderedDict
-from fastapi import APIRouter, HTTPException, status
+from typing import Optional
+from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import Response
 from pydantic import BaseModel
 from urllib.parse import urlparse
@@ -139,7 +140,7 @@ class ConvertHeicRequest(BaseModel):
 
 
 @router.get("/api/images/cached")
-async def get_cached_image(url: str):
+async def get_cached_image(url: str, thumb: Optional[bool] = Query(None)):
     """
     Proxy an image through the server, caching it in Redis.
 
@@ -155,24 +156,31 @@ async def get_cached_image(url: str):
     # Defense: receipt IDs are opaque UUIDs/strings — unguessable URLs.
     # For production, add signed URL tokens or short-lived proxy links.
     if url.startswith("/receipt-images/"):
-        from app.services.database_service import read_image
+        from app.services.database_service import read_receipt_file
         parts = url.rstrip("/").split("/")
         raw_id = parts[-1]
-        thumb = "?thumb=1" in url or url.endswith("?thumb=1")
+        # thumb may arrive as its own query param (?thumb=1) or embedded in the
+        # url (imageUrl "/receipt-images/{id}?thumb=1")
+        thumb = thumb if thumb is not None else ("?thumb=1" in url or url.endswith("?thumb=1"))
         receipt_id = raw_id.split("?")[0]
-        img_bytes = read_image(receipt_id, thumb=thumb)
-        if img_bytes:
-            # Detect and convert HEIC/HEIF to JPEG on-the-fly
-            if img_bytes[:12] and img_bytes[4:8] == b'ftyp' and (b'heic' in img_bytes[:32] or b'heif' in img_bytes[:32] or b'mif1' in img_bytes[:32]):
-                try:
-                    from app.services.image_service import process_image
-                    img_bytes, _ = process_image(img_bytes, 'image/heic')
-                except Exception:
-                    pass  # serve as-is if conversion fails
-            return Response(
-                content=img_bytes, media_type="image/jpeg",
-                headers={"Cache-Control": "public, max-age=86400"},
-            )
+        content, media_type = await read_receipt_file(receipt_id, thumb=thumb)
+        if content:
+            headers = {
+                "Cache-Control": "public, max-age=86400",
+                "X-Content-Type-Options": "nosniff",
+            }
+            if media_type == "application/pdf":
+                # Raw PDF receipt: let the browser render/embed it inline.
+                headers["Content-Disposition"] = "inline"
+            else:
+                # Detect and convert HEIC/HEIF to JPEG on-the-fly
+                if content[:12] and content[4:8] == b'ftyp' and (b'heic' in content[:32] or b'heif' in content[:32] or b'mif1' in content[:32]):
+                    try:
+                        from app.services.image_service import process_image
+                        content, _ = process_image(content, 'image/heic')
+                    except Exception:
+                        pass  # serve as-is if conversion fails
+            return Response(content=content, media_type=media_type, headers=headers)
         raise HTTPException(status_code=404, detail="Image not found")
 
     # ── External URL proxy (Firebase Storage, legacy images) ──────────────

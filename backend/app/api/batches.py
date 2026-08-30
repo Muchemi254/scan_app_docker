@@ -162,7 +162,7 @@ async def start_processing(
     if batch["status"] not in ("uploading",):
         raise HTTPException(status_code=409, detail=f"Batch is already {batch['status']}")
 
-    allowed_types = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
+    allowed_types = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif", "application/pdf"}
     batch_dir = os.path.join(settings.IMAGE_STORAGE_DIR, f"_scan_{batchId}")
     os.makedirs(batch_dir, exist_ok=True)
 
@@ -194,8 +194,15 @@ async def start_processing(
             )
 
         try:
-            processed, p_type = process_image(contents, f.content_type or "image/jpeg")
-            fname = f"{idx:04d}.jpg"
+            from app.services.pdf_service import is_pdf, assert_within_page_cap
+            if f.content_type == "application/pdf" or is_pdf(contents):
+                assert_within_page_cap(contents)
+                processed = contents
+                p_type = "application/pdf"
+                fname = f"{idx:04d}.pdf"
+            else:
+                processed, p_type = process_image(contents, f.content_type or "image/jpeg")
+                fname = f"{idx:04d}.jpg"
             fpath = os.path.join(batch_dir, fname)
             with open(fpath, "wb") as outf:
                 outf.write(processed)
@@ -465,13 +472,13 @@ async def retry_chunk(
         # Skip already-saved items so a retry doesn't overwrite them
         if item["status"] in ("done", "needs_review", "duplicate"):
             continue
-        fname = f"{i:04d}.jpg"
-        if not os.path.exists(os.path.join(batch_dir, fname)):
+        fname = item.get("filename")
+        if not fname or not os.path.exists(os.path.join(batch_dir, fname)):
             continue
         entries.append({
             "index": i,
             "filename": fname,
-            "mime": "image/jpeg",
+            "mime": item.get("mime") or "image/jpeg",
             "sha256": None,
             "orig_filename": item.get("origFilename"),
         })
@@ -528,9 +535,8 @@ async def retry_item(
         )
 
     batch_dir = os.path.join(settings.IMAGE_STORAGE_DIR, f"_scan_{batchId}")
-    fname = f"{itemIndex:04d}.jpg"
-    fpath = os.path.join(batch_dir, fname)
-    if not os.path.exists(fpath):
+    fname = item.get("filename")
+    if not fname or not os.path.exists(os.path.join(batch_dir, fname)):
         raise HTTPException(
             status_code=410,
             detail="Image is no longer on disk — please re-upload",
@@ -539,7 +545,7 @@ async def retry_item(
     entry = {
         "index": itemIndex,
         "filename": fname,
-        "mime": "image/jpeg",
+        "mime": item.get("mime") or "image/jpeg",
         "sha256": None,
         "orig_filename": item.get("origFilename"),
         "chunkIndex": item.get("chunkIndex"),

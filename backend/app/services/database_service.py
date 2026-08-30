@@ -144,6 +144,8 @@ def _receipt_row_to_dict(
         "taxRate": tax_rate,
         "imageUrl": image_url,
         "thumbnailUrl": thumbnail_url,
+        "fileType": row.get("file_type"),
+        "pdfPageCount": row.get("pdf_page_count"),
         "items": items or [],
         "createdAt": row.get("created_at"),
         "updatedAt": row.get("updated_at"),
@@ -248,6 +250,8 @@ class DatabaseService:
         items = receipt_data.get("items") or []
         image_filename = receipt_data.get("image_filename")
         image_sha256 = receipt_data.get("image_sha256")
+        file_type = receipt_data.get("fileType") or receipt_data.get("file_type")
+        pdf_page_count = receipt_data.get("pdfPageCount") or receipt_data.get("pdf_page_count")
         # Allow caller to pre-generate an ID (needed for image filenames)
         use_id = receipt_data.get("id")
 
@@ -258,8 +262,9 @@ class DatabaseService:
                     """
                     INSERT INTO receipts (id, user_id, status, entry_type, supplier, total_amount, tax_amount,
                         receipt_date, category, invoice_number, kra_pin, buyer_kra_pin, cu_invoice,
-                        batch_title, location, tax_rate, image_filename, image_sha256, scanned_at, created_at, updated_at)
-                    VALUES (COALESCE($21, gen_random_uuid()), $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+                        batch_title, location, tax_rate, image_filename, image_sha256,
+                        file_type, pdf_page_count, scanned_at, created_at, updated_at)
+                    VALUES (COALESCE($23, gen_random_uuid()), $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
                     RETURNING id
                     """,
                     user_id,
@@ -279,6 +284,8 @@ class DatabaseService:
                     _to_numeric(receipt_data.get("taxRate")),
                     image_filename,
                     image_sha256,
+                    file_type,
+                    pdf_page_count,
                     now,
                     now,
                     now,
@@ -544,6 +551,14 @@ class DatabaseService:
         if receipt_data.get("image_filename") is not None:
             set_parts.append(f"image_filename = ${p_idx}")
             params.append(receipt_data["image_filename"])
+            p_idx += 1
+        if "fileType" in receipt_data or "file_type" in receipt_data:
+            set_parts.append(f"file_type = ${p_idx}")
+            params.append(receipt_data.get("fileType") or receipt_data.get("file_type"))
+            p_idx += 1
+        if "pdfPageCount" in receipt_data or "pdf_page_count" in receipt_data:
+            set_parts.append(f"pdf_page_count = ${p_idx}")
+            params.append(receipt_data.get("pdfPageCount") or receipt_data.get("pdf_page_count"))
             p_idx += 1
 
         set_clause = ", ".join(set_parts)
@@ -1151,8 +1166,8 @@ def save_thumbnail(receipt_id: str, jpeg_bytes: bytes) -> str:
 
 
 def delete_receipt_images(receipt_id: str) -> None:
-    """Remove image + thumbnail files for a receipt."""
-    for suffix in (".jpg", "_thumb.jpg"):
+    """Remove image/PDF + thumbnail files for a receipt."""
+    for suffix in (".jpg", ".pdf", "_thumb.jpg"):
         path = os.path.join(settings.IMAGE_STORAGE_DIR, f"{receipt_id}{suffix}")
         try:
             os.remove(path)
@@ -1161,6 +1176,69 @@ def delete_receipt_images(receipt_id: str) -> None:
             pass
         except Exception:
             logger.warning("Failed to delete %s", path, exc_info=True)
+
+
+async def read_receipt_file(receipt_id: str, thumb: bool = False):
+    """Read a receipt's stored file for serving.
+
+    Returns ``(bytes, media_type)`` or ``(None, None)``:
+    - thumb=True → the JPEG thumbnail (or the full image as a fallback)
+    - thumb=False → raw PDF when file_type is application/pdf, else the JPEG
+    """
+    ftype = await get_receipt_file_type(receipt_id)
+    if thumb:
+        img = read_image(receipt_id, thumb=True)
+        return (img, "image/jpeg") if img else (None, None)
+    if ftype == "application/pdf":
+        pdf = read_pdf(receipt_id)
+        return (pdf, "application/pdf") if pdf else (None, None)
+    img = read_image(receipt_id, thumb=False)
+    return (img, "image/jpeg") if img else (None, None)
+
+
+async def get_receipt_file_type(receipt_id: str) -> Optional[str]:
+    """Stored file_type for a receipt (image/jpeg | application/pdf | None)."""
+    from app.core.database import get_pool
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT file_type FROM receipts WHERE id = $1", receipt_id
+        )
+    return row["file_type"] if row else None
+
+
+def read_pdf(receipt_id: str) -> Optional[bytes]:
+    """Read the raw PDF file ({id}.pdf) from disk.  None if missing."""
+    path = os.path.join(settings.IMAGE_STORAGE_DIR, f"{receipt_id}.pdf")
+    try:
+        with open(path, "rb") as f:
+            return f.read()
+    except FileNotFoundError:
+        return None
+
+
+def save_pdf(receipt_id: str, pdf_bytes: bytes) -> str:
+    """Save the raw PDF to disk.  Returns the filename ({id}.pdf)."""
+    os.makedirs(settings.IMAGE_STORAGE_DIR, exist_ok=True)
+    filename = f"{receipt_id}.pdf"
+    path = os.path.join(settings.IMAGE_STORAGE_DIR, filename)
+    with open(path, "wb") as f:
+        f.write(pdf_bytes)
+    logger.info("Saved PDF %s (%d KB)", filename, len(pdf_bytes) // 1024)
+    return filename
+
+
+def save_pdf_thumbnail(receipt_id: str, pdf_bytes: bytes) -> Optional[str]:
+    """Render PDF page 1 to the JPEG thumbnail slot.  Returns filename or None."""
+    try:
+        from app.services.pdf_service import render_first_page
+        thumb = render_first_page(pdf_bytes)
+        if thumb:
+            return save_thumbnail(receipt_id, thumb)
+    except Exception as e:
+        logger.warning("PDF thumbnail failed for %s: %s", receipt_id, e)
+    return None
 
 
 def read_image(receipt_id: str, thumb: bool = False) -> Optional[bytes]:
