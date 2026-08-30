@@ -76,10 +76,12 @@ npm run lint      # eslint
 Uses the dedicated `scanapp_test` database (auto-created + migrated). Tests are baked into the image; run them on the running backend container:
 
 ```bash
-docker exec -u 0:0 -w /app scan-app-backend env TEST_DATABASE_URL=postgresql://scanapp:scanapp_dev@postgres:5432/scanapp_test python -m pytest tests -v
+docker exec -u 0:0 -w /app scan-app-backend env TEST_DATABASE_URL=postgresql://scanapp:scanapp_dev@postgres:5432/scanapp_test IMAGE_STORAGE_DIR=/tmp/scanapp_pytest_images BACKUP_STORAGE_DIR=/tmp/scanapp_pytest_backups python -m pytest tests -v
 ```
 
-The suite requires `AUTH_MODE=local` and a writable test DB; `conftest.py` forces deterministic env (admin@pytest.local) so it works regardless of compose vars. No Redis/Celery needed — the batch engine is driven directly with a mocked AI provider.
+The suite requires `AUTH_MODE=local` and a writable test DB; `conftest.py` forces deterministic env (admin@pytest.local, scratch storage dirs) so it works regardless of compose vars. No Redis/Celery needed — the batch engine is driven directly with a mocked AI provider.
+
+⚠️ **Never run the suite without the `IMAGE_STORAGE_DIR`/`BACKUP_STORAGE_DIR` overrides.** The container env sets them to the production volumes; conftest's scratch-dir sandbox is a *forced* override, so passing the env explicitly is the safety net. A suite run against the real `image_data` volume with the empty test DB as reference set can delete live receipts' image files.
 
 Manual testing via Swagger UI (`/docs`) and curl. Frontend testing via browser DevTools.
 

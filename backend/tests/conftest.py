@@ -34,9 +34,15 @@ os.environ["ADMIN_PASSWORD"] = "admin-password-123!"
 os.environ["GEMINI_API_KEY"] = "pytest-dummy-api-key"
 os.environ.setdefault("USE_POSTGRES", "true")
 os.environ.setdefault("AUTH_MODE", "local")
-os.environ.setdefault("IMAGE_STORAGE_DIR", "/tmp/scanapp_pytest_images")
-os.environ.setdefault("BACKUP_STORAGE_DIR", "/tmp/scanapp_pytest_backups")
-os.environ.setdefault("REVIEW_BATCH_DB_PATH", "/tmp/scanapp_pytest_review.db")
+# Force (not setdefault) the storage dirs into a scratch area. The test suite
+# runs inside the backend container, whose compose env already sets
+# IMAGE_STORAGE_DIR=/app/data/images — under setdefault the production image
+# volume would be used as test scratch space, and cleanup tests (which enable
+# ENABLE_ORPHAN_IMAGE_FILE_DELETE and run the full app lifespan) would delete
+# real receipts' files while the test DB holds no references for them.
+os.environ["IMAGE_STORAGE_DIR"] = "/tmp/scanapp_pytest_images"
+os.environ["BACKUP_STORAGE_DIR"] = "/tmp/scanapp_pytest_backups"
+os.environ["REVIEW_BATCH_DB_PATH"] = "/tmp/scanapp_pytest_review.db"
 os.environ.setdefault("ENABLE_DOCS", "false")
 # Keep user-data cleanup deterministic in tests: the delete endpoint must not
 # fire background purge tasks mid-suite. The cleanup service itself is tested
