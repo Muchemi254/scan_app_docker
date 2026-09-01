@@ -46,18 +46,28 @@ async def create_batch(
                 """,
                 batch_id, user_id, name, csv_filename, now,
             )
-            for rid in receipt_ids:
-                try:
-                    await conn.execute(
+            if receipt_ids:
+                # One round trip, not N: skip ids with no receipt row (the old
+                # per-row try/except swallowed those FK violations) then insert
+                # the rest in a single executemany.
+                cleaned = [rid.strip() for rid in receipt_ids if rid and rid.strip()]
+                existing_rows = (
+                    await conn.fetch(
+                        "SELECT id FROM receipts WHERE id = ANY($1::text[])", cleaned
+                    )
+                    if cleaned
+                    else []
+                )
+                valid = [str(r["id"]) for r in existing_rows]
+                if valid:
+                    await conn.executemany(
                         """
                         INSERT INTO review_batch_items (batch_id, receipt_id, review_status)
                         VALUES ($1, $2, 'pending_review')
                         ON CONFLICT (batch_id, receipt_id) DO NOTHING
                         """,
-                        batch_id, rid.strip(),
+                        [(batch_id, rid) for rid in valid],
                     )
-                except Exception:
-                    pass
 
         return {
             "id": batch_id, "user_id": user_id, "name": name,

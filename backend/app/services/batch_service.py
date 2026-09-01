@@ -151,15 +151,17 @@ async def create_batch(user_id: str, batch_title: str, filenames: List[str]) -> 
                 """,
                 session_id, user_id, batch_title,
             )
-            for i, fn in enumerate(filenames):
-                await conn.execute(
-                    """
-                    INSERT INTO scan_session_items
-                        (id, session_id, user_id, item_index, orig_filename, image_filename, mime, group_index, status, stage)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', 'queued')
-                    """,
-                    uuid.uuid4().hex, session_id, user_id, i, fn, None, None, 0,
-                )
+            await conn.executemany(
+                """
+                INSERT INTO scan_session_items
+                    (id, session_id, user_id, item_index, orig_filename, image_filename, mime, group_index, status, stage)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', 'queued')
+                """,
+                [
+                    (uuid.uuid4().hex, session_id, user_id, i, fn, None, None, 0)
+                    for i, fn in enumerate(filenames)
+                ],
+            )
     return session_id
 
 
@@ -496,20 +498,17 @@ async def mark_queued(user_id: str, batch_id: str, indexes: List[int]) -> List[i
     if not indexes:
         return []
     pool = await get_pool()
-    flipped: List[int] = []
     async with pool.acquire() as conn:
         async with conn.transaction():
-            for idx in indexes:
-                row = await conn.fetchrow(
-                    """
-                    UPDATE scan_session_items
-                    SET status = 'pending', stage = 'queued', message = 'Ready for AI',
-                        error_code = NULL, error_message = NULL, updated_at = now()
-                    WHERE session_id = $1 AND item_index = $2 AND status = 'prepared'
-                    RETURNING item_index
-                    """,
-                    batch_id, idx,
-                )
-                if row:
-                    flipped.append(idx)
+            rows = await conn.fetch(
+                """
+                UPDATE scan_session_items
+                SET status = 'pending', stage = 'queued', message = 'Ready for AI',
+                    error_code = NULL, error_message = NULL, updated_at = now()
+                WHERE session_id = $1 AND item_index = ANY($2::int[]) AND status = 'prepared'
+                RETURNING item_index
+                """,
+                batch_id, [int(i) for i in indexes],
+            )
+            flipped = sorted(r["item_index"] for r in rows)
     return flipped

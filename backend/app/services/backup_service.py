@@ -25,6 +25,7 @@ from typing import Optional, List, Dict, Any
 
 from app.core.database import get_pool
 from app.core.config import settings
+from app.services.database_service import _RECEIPT_COLS
 from app.services import ops_service
 
 logger = logging.getLogger(__name__)
@@ -161,7 +162,8 @@ async def export_user_data(user_id: str) -> dict:
     pool = await get_pool()
     async with pool.acquire() as conn:
         receipt_rows = await conn.fetch(
-            "SELECT * FROM receipts WHERE user_id = $1", user_id
+            f"SELECT {_RECEIPT_COLS}, thumbnail_filename FROM receipts WHERE user_id = $1",
+            user_id,
         )
         receipt_ids = [r["id"] for r in receipt_rows]
 

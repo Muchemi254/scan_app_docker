@@ -167,6 +167,42 @@ def _receipt_row_to_dict(
     }
 
 
+async def _batch_load_items(conn, receipt_ids: List[str]) -> Dict[str, List[dict]]:
+    """Load line items for many receipts in ONE query, grouped by receipt_id.
+
+    Produces the same item dict shape as _fetch_items (API contract: 2dp
+    string amounts). Callers iterate receipts and look items up by id —
+    never fetch items per receipt (N+1 storm).
+    """
+    if not receipt_ids:
+        return {}
+    item_rows = await conn.fetch(
+        """
+        SELECT receipt_id, sort_order, name, quantity, price, tax, is_zero_rated, discount, tax_rate
+        FROM line_items
+        WHERE receipt_id = ANY($1::text[])
+        ORDER BY receipt_id, sort_order
+        """,
+        receipt_ids,
+    )
+    items_map: Dict[str, List[dict]] = {}
+    for ir in item_rows:
+        rid = ir["receipt_id"]
+        if rid not in items_map:
+            items_map[rid] = []
+        tax_rate = ir["tax_rate"]
+        items_map[rid].append({
+            "name": ir["name"],
+            "quantity": float(ir["quantity"]),
+            "price": format(Decimal(str(ir["price"])), ".2f"),
+            "tax": format(Decimal(str(ir["tax"] or 0)), ".2f"),
+            "isZeroRated": ir["is_zero_rated"],
+            "discount": format(Decimal(str(ir["discount"])), ".2f") if ir["discount"] else None,
+            "taxRate": format(Decimal(str(tax_rate)), "g") if tax_rate is not None else None,
+        })
+    return items_map
+
+
 async def _fetch_items(conn, receipt_id: str) -> List[dict]:
     """Fetch line_items for a receipt, return as list of dicts (API shape)."""
     rows = await conn.fetch(
@@ -368,10 +404,12 @@ class DatabaseService:
                 f"SELECT {_RECEIPT_COLS} FROM receipts WHERE user_id = $1 AND id = ANY($2::text[])",
                 user_id, receipt_ids,
             )
+            items_map = await _batch_load_items(
+                conn, [str(r["id"]) for r in rows]
+            )
             results = []
             for row in rows:
-                items = await _fetch_items(conn, str(row["id"]))
-                results.append(_receipt_row_to_dict(row, items))
+                results.append(_receipt_row_to_dict(row, items_map.get(str(row["id"]), [])))
             return results
 
     @staticmethod
@@ -471,32 +509,9 @@ class DatabaseService:
             )
             total = rows[0]["full_count"] if rows else 0
             # Batch-load items for all returned receipts (single query)
-            receipt_ids = [r["id"] for r in rows]
-            items_map = {}
-            if receipt_ids:
-                item_rows = await conn.fetch(
-                    """
-                    SELECT receipt_id, sort_order, name, quantity, price, tax, is_zero_rated, discount, tax_rate
-                    FROM line_items
-                    WHERE receipt_id = ANY($1::text[])
-                    ORDER BY receipt_id, sort_order
-                    """,
-                    receipt_ids,
-                )
-                for ir in item_rows:
-                    rid = ir["receipt_id"]
-                    if rid not in items_map:
-                        items_map[rid] = []
-                    tax_rate = ir["tax_rate"]
-                    items_map[rid].append({
-                        "name": ir["name"],
-                        "quantity": float(ir["quantity"]),
-                        "price": format(Decimal(str(ir["price"])), ".2f"),
-                        "tax": format(Decimal(str(ir["tax"] or 0)), ".2f"),
-                        "isZeroRated": ir["is_zero_rated"],
-                        "discount": format(Decimal(str(ir["discount"])), ".2f") if ir["discount"] else None,
-                        "taxRate": format(Decimal(str(tax_rate)), "g") if tax_rate is not None else None,
-                    })
+            items_map = await _batch_load_items(
+                conn, [str(r["id"]) for r in rows]
+            )
 
             receipts = [_receipt_row_to_dict(r, items_map.get(r["id"], [])) for r in rows]
             return receipts, total
