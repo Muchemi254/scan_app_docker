@@ -137,6 +137,15 @@ services:
     user: "0:0"  # root — entrypoint fixes volume permissions then drops to appuser
     ports:
       - "8003:8000"
+    volumes:
+      # Persist SQLite review batch database across container rebuilds
+      - review_batch_data:/app/data
+      # Local image storage — MUST match the worker's mount, or uploads land
+      # in the container overlay and are wiped on every rebuild (self-heal
+      # then re-materializes them into the overlay, repeating forever).
+      - image_data:/app/data/images
+      # Backup storage (user-initiated exports)
+      - backup_data:/app/backups
     environment:
       # Low-RAM VM tuning: give freed Python/glibc memory back to the OS
       # instead of holding RSS (biggest win on long-running processes), and
