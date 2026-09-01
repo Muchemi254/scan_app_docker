@@ -1410,6 +1410,35 @@ async def _sync_image_bytes(conn, receipt_id: str, image_filename, thumbnail_fil
         )
 
 
+async def _backfill_one(conn, rid: str, col: str, filename: str) -> bool:
+    """Mirror one on-disk file into {col} for {rid} on the shared connection.
+
+    `IS NULL` guard keeps the write idempotent. Payload is held transiently
+    only for this one receipt. Returns True when a file was written.
+    """
+    data = _read_disk_file(filename)
+    if data is None:
+        return False
+    await conn.execute(
+        f"UPDATE receipts SET {col} = $1 WHERE id = $2 AND {col} IS NULL",
+        data, rid,
+    )
+    return True
+
+
+def _rewrite_disk_file(filename: str, data: bytes) -> bool:
+    """Write one mirrored payload back to disk. Returns True on success."""
+    try:
+        os.makedirs(settings.IMAGE_STORAGE_DIR, exist_ok=True)
+        path = os.path.join(settings.IMAGE_STORAGE_DIR, filename)
+        with open(path, "wb") as f:
+            f.write(data)
+        return True
+    except OSError:
+        logger.warning("Self-heal failed to rewrite %s", filename, exc_info=True)
+        return False
+
+
 async def self_heal_image_files() -> dict:
     """Converge the disk image volume with the Postgres byte mirror at boot.
 
@@ -1418,57 +1447,74 @@ async def self_heal_image_files() -> dict:
     - rows whose file is missing from disk but bytes are mirrored → rewrite
       the file (covers a wiped/emptied image_data volume)
 
+    Memory-safe at any dataset size: the scan selects id + filenames only —
+    payloads stay in TOAST and `IS NULL` checks don't pull them — and a
+    payload is read/held transiently for one receipt at a time. Iteration
+    uses keyset pagination so volume scales are handled in constant memory,
+    and the whole pass runs on a single pooled connection.
+
     Returns {"backfilled": int, "repaired": int, "scanned": int}.
     """
     from app.core.database import get_pool
 
     pool = await get_pool()
+    stats = {"scanned": 0, "backfilled": 0, "repaired": 0}
+    page_size = 1000
+    last_id = None
+
     async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT id, image_filename, thumbnail_filename, image_bytes, thumb_bytes "
-            "FROM receipts WHERE image_filename IS NOT NULL"
-        )
-
-    stats = {"scanned": len(rows), "backfilled": 0, "repaired": 0}
-
-    async def _backfill(rid: str, col: str, filename: str) -> None:
-        data = _read_disk_file(filename)
-        if data is None:
-            return
-        async with pool.acquire() as conn:
-            await conn.execute(
-                f"UPDATE receipts SET {col} = $1 WHERE id = $2 AND {col} IS NULL",
-                data, rid,
+        while True:
+            rows = await conn.fetch(
+                """
+                SELECT id, image_filename, thumbnail_filename,
+                       image_bytes IS NULL AS image_bytes_null,
+                       thumb_bytes IS NULL AS thumb_bytes_null
+                FROM receipts
+                WHERE image_filename IS NOT NULL
+                  AND ($1::text IS NULL OR id > $1::text)
+                ORDER BY id
+                LIMIT $2
+                """,
+                last_id, page_size,
             )
-        stats["backfilled"] += 1
+            if not rows:
+                break
 
-    async def _repair(rid: str, filename: str, data: bytes) -> None:
-        try:
-            os.makedirs(settings.IMAGE_STORAGE_DIR, exist_ok=True)
-            path = os.path.join(settings.IMAGE_STORAGE_DIR, filename)
-            with open(path, "wb") as f:
-                f.write(data)
-            stats["repaired"] += 1
-        except OSError:
-            logger.warning("Self-heal failed to rewrite %s", filename, exc_info=True)
+            for row in rows:
+                rid = str(row["id"])
+                stats["scanned"] += 1
 
-    for row in rows:
-        rid = str(row["id"])
-        fn = row["image_filename"]
-        if fn:
-            path = os.path.join(settings.IMAGE_STORAGE_DIR, fn)
-            if os.path.exists(path):
-                if not row["image_bytes"]:
-                    await _backfill(rid, "image_bytes", fn)
-            elif row["image_bytes"]:
-                await _repair(rid, fn, bytes(row["image_bytes"]))
+                fn = row["image_filename"]
+                if fn:
+                    path = os.path.join(settings.IMAGE_STORAGE_DIR, fn)
+                    if os.path.exists(path):
+                        if row["image_bytes_null"]:
+                            if await _backfill_one(conn, rid, "image_bytes", fn):
+                                stats["backfilled"] += 1
+                    elif not row["image_bytes_null"]:
+                        payload = await conn.fetchrow(
+                            "SELECT image_bytes FROM receipts WHERE id = $1", rid
+                        )
+                        data = payload["image_bytes"] if payload else None
+                        if data is not None and _rewrite_disk_file(fn, bytes(data)):
+                            stats["repaired"] += 1
 
-        thumb_fn = row["thumbnail_filename"] or f"{rid}_thumb.jpg"
-        tpath = os.path.join(settings.IMAGE_STORAGE_DIR, thumb_fn)
-        if os.path.exists(tpath):
-            if not row["thumb_bytes"]:
-                await _backfill(rid, "thumb_bytes", thumb_fn)
-        elif row["thumb_bytes"]:
-            await _repair(rid, thumb_fn, bytes(row["thumb_bytes"]))
+                thumb_fn = row["thumbnail_filename"] or f"{rid}_thumb.jpg"
+                tpath = os.path.join(settings.IMAGE_STORAGE_DIR, thumb_fn)
+                if os.path.exists(tpath):
+                    if row["thumb_bytes_null"]:
+                        if await _backfill_one(conn, rid, "thumb_bytes", thumb_fn):
+                            stats["backfilled"] += 1
+                elif not row["thumb_bytes_null"]:
+                    payload = await conn.fetchrow(
+                        "SELECT thumb_bytes FROM receipts WHERE id = $1", rid
+                    )
+                    data = payload["thumb_bytes"] if payload else None
+                    if data is not None and _rewrite_disk_file(
+                        thumb_fn, bytes(data)
+                    ):
+                        stats["repaired"] += 1
+
+            last_id = rows[-1]["id"]
 
     return stats

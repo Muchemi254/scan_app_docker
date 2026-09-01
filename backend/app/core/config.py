@@ -69,7 +69,9 @@ class Settings(BaseSettings):
         "postgresql://scanapp:scanapp_dev@localhost:5432/scanapp",
     )
     DATABASE_POOL_MIN: int = _env_int("DATABASE_POOL_MIN", 2)
-    DATABASE_POOL_MAX: int = _env_int("DATABASE_POOL_MAX", 20)
+    # Default 5 (was 20): on small VMs 5 pooled connections per process × 3
+    # backend/worker processes is plenty; each asyncpg connection holds memory.
+    DATABASE_POOL_MAX: int = _env_int("DATABASE_POOL_MAX", 5)
 
     # Storage
     IMAGE_STORAGE_DIR: str = os.getenv(

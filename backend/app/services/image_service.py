@@ -45,9 +45,12 @@ REUSE_MAX_BYTES = 300 * 1024
 # memory per API request and isolate chunk failures.
 BATCH_CHUNK_SIZE = 10
 
-# Max concurrent Gemini calls during batch extraction.
-# Tune based on your Gemini tier (free: 2, pay-as-you-go: 5-10).
-MAX_AI_CONCURRENCY = int(os.getenv("MAX_AI_CONCURRENCY", "4"))
+# Max concurrent Gemini calls per batch task. Tune based on your Gemini tier
+# (free: 2, pay-as-you-go: 5-10). This also drives the Celery worker process
+# count (worker container command). Default 2 for small VMs — the per-task
+# value is additionally capped at this in worker.get_ai_concurrency, so
+# in-flight AI calls ≈ procs × calls stays inside the container memory limit.
+MAX_AI_CONCURRENCY = int(os.getenv("MAX_AI_CONCURRENCY", "2"))
 
 
 def _open_and_normalise(file_data: bytes, content_type: str):

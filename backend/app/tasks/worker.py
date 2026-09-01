@@ -108,15 +108,22 @@ def _split_into_chunks(entries: list, chunk_size: int) -> list[list]:
 
 
 async def get_ai_concurrency(user_id: str) -> int:
-    """Return the user's saved max_ai_concurrency, falling back to the env default."""
+    """Return the user's saved max_ai_concurrency, falling back to the env default.
+
+    Capped at MAX_AI_CONCURRENCY (the Celery process count): with N worker
+    processes each running up to N parallel AI calls, worst-case in-flight
+    requests = N × N. The cap keeps RAM (base64 image payloads per call)
+    inside the worker container's memory limit on small VMs.
+    """
+    cap = max(1, MAX_AI_CONCURRENCY)
     try:
         if user_id:
             ai_settings = await DataService.get_user_settings(user_id, "ai_config")
             if ai_settings and ai_settings.get("max_ai_concurrency"):
-                return int(ai_settings["max_ai_concurrency"])
+                return max(1, min(int(ai_settings["max_ai_concurrency"]), cap))
     except Exception as e:
         logger.error(f"Failed to load concurrency setting, using default {MAX_AI_CONCURRENCY}: {e}")
-    return MAX_AI_CONCURRENCY
+    return cap
 
 
 async def _extract_one_chunk(

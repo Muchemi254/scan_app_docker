@@ -16,6 +16,13 @@ services:
       retries: 5
     networks:
       - data-network
+    # Small VM (1.4 GB RAM): hard caps stop a container from thrashing the
+    # host into swap/OOM. Exceeded limits → Docker kills the container
+    # (restart policy brings it back) instead of taking down the whole box.
+    deploy:
+      resources:
+        limits:
+          memory: 192m
 
   # ========================================================================
   # Postgres collation auto-fix — one-shot, runs BEFORE postgres.
@@ -101,6 +108,10 @@ services:
       retries: 5
     networks:
       - data-network
+    deploy:
+      resources:
+        limits:
+          memory: 256m
 
   # ========================================================================
   # FastAPI Backend
@@ -196,6 +207,11 @@ services:
       - app-network
       - data-network
 
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
   # ========================================================================
   # Celery Worker
   # ========================================================================
@@ -205,7 +221,7 @@ services:
       dockerfile: Dockerfile
     container_name: scan-app-worker
     user: "0:0"  # root — entrypoint fixes volume permissions then drops to appuser
-    command: celery -A app.core.celery_app worker --loglevel=${LOG_LEVEL:-INFO} --concurrency=${MAX_AI_CONCURRENCY:-4}
+    command: celery -A app.core.celery_app worker --loglevel=${LOG_LEVEL:-INFO} --concurrency=${MAX_AI_CONCURRENCY:-2}
     volumes:
       - image_data:/app/data/images
     environment:
@@ -225,6 +241,10 @@ services:
       - app-network
       - data-network
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
     healthcheck:
       # CMD-SHELL so a shell inside the container expands HOSTNAME (Docker
       # injects it = the container's own auto-assigned hostname, which is the
@@ -316,6 +336,11 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+    deploy:
+      resources:
+        limits:
+          memory: 64m
 
 # ============================================================================
 # NETWORKS — Tiered isolation

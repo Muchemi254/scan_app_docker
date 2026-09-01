@@ -27,7 +27,7 @@ class AISettings(BaseModel):
     provider: AIProvider = AIProvider.GEMINI
     model_id: str = "gemini-3-flash-preview"
     configs: dict[str, ProviderConfig] = {}
-    max_ai_concurrency: int = 4
+    max_ai_concurrency: int = 2
 
 class AISettingsUpdate(BaseModel):
     provider: Optional[AIProvider] = None
