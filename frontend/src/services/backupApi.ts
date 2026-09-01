@@ -1,4 +1,4 @@
-import { getAuthHeader, getUserId } from './authUtils';
+import { getAuthHeader, getToken, getUserId } from './authUtils';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '/api/v1';
 
@@ -63,17 +63,26 @@ export interface BackupQuota {
   max_count: number;
 }
 
+/** Trigger a native browser download of a backup — streams straight to disk. */
+function triggerDownload(url: string, filename: string) {
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename || 'scanapp_backup.tar.gz';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
 export const backupApi = {
-  /** Create and download a backup with progress callback */
+  /** Create a backup on the server, then download it natively (no blob buffering). */
   async exportBackup(onProgress?: (pct: number, status: string) => void): Promise<void> {
-    const authorization = await getAuthHeader();
     const userId = getUserId();
     const url = `${API_BASE_URL}/users/${userId}/backup/export`;
 
-    onProgress?.(5, 'Connecting...');
+    onProgress?.(5, 'Building archive on server…');
     const response = await fetch(url, {
       method: 'POST',
-      headers: { Authorization: authorization },
+      headers: { Authorization: await getAuthHeader() },
     });
 
     if (!response.ok) {
@@ -81,37 +90,18 @@ export const backupApi = {
       throw new Error(err.detail || 'Export failed');
     }
 
-    const contentLength = response.headers.get('Content-Length');
-    const total = contentLength ? parseInt(contentLength) : 0;
-    const reader = response.body?.getReader();
-    if (!reader) throw new Error('No response body');
+    const meta = await response.json();
+    onProgress?.(70, 'Downloading…');
 
-    onProgress?.(10, 'Downloading...');
-    const chunks: Uint8Array[] = [];
-    let received = 0;
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value);
-      received += value.length;
-      if (total > 0) {
-        const pct = Math.round(10 + (received / total) * 80);
-        onProgress?.(pct, `Downloading ${(received / 1024 / 1024).toFixed(1)} MB...`);
-      }
-    }
-
-    onProgress?.(95, 'Finalizing...');
-    const blob = new Blob(chunks);
-    const disposition = response.headers.get('Content-Disposition') || '';
-    const match = disposition.match(/filename="?(.+?)"?$/);
-    const filename = match ? match[1] : 'scanapp_backup.tar.gz';
-    const url_blob = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url_blob;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url_blob);
+    // Headerless direct link — the browser streams the archive to disk,
+    // so even multi-GB backups never sit in the tab's memory and there is
+    // no blob: URL to revoke mid-download.
+    const token = getToken();
+    if (!token) throw new Error('Authentication failed');
+    triggerDownload(
+      `${API_BASE_URL}/users/${userId}/backup/download/${meta.id}?token=${encodeURIComponent(token)}`,
+      meta.filename || 'scanapp_backup.tar.gz',
+    );
     onProgress?.(100, 'Complete');
   },
 
@@ -129,27 +119,13 @@ export const backupApi = {
 
   /** Download a specific backup (cross-device: any device with the account's session can fetch it) */
   async downloadBackup(backupId: string, filename: string): Promise<void> {
-    const authorization = await getAuthHeader();
     const userId = getUserId();
-    const response = await fetch(
-      `${API_BASE_URL}/users/${userId}/backup/download/${backupId}`,
-      { headers: { Authorization: authorization } }
+    const token = getToken();
+    if (!token) throw new Error('Authentication failed');
+    triggerDownload(
+      `${API_BASE_URL}/users/${userId}/backup/download/${backupId}?token=${encodeURIComponent(token)}`,
+      filename,
     );
-
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      throw new Error(err.detail || 'Download failed');
-    }
-
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename || 'scanapp_backup.tar.gz';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
   },
 
   /** Per-user backup quota usage (for the Settings UI space meter) */

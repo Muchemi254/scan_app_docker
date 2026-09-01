@@ -160,14 +160,16 @@ async def create_backup(
     # Enforce the per-user quota/retention — prunes this user's oldest archives.
     await _prune_backups(userId)
 
-    return FileResponse(
-        path=filepath,
-        media_type="application/gzip",
-        filename=filename,
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-        },
-    )
+    # Return metadata, not the file: the frontend then triggers a direct
+    # GET /backup/download/{id} (browser streams straight to disk — no
+    # JS-side blob buffering of a possibly >1 GB archive).
+    return {
+        "id": backup_id,
+        "filename": filename,
+        "size_bytes": result["size_bytes"],
+        "image_count": result.get("image_count", 0),
+        "missing_images": result.get("missing_images", 0),
+    }
 
 
 # ── List ─────────────────────────────────────────────────────────────────────

@@ -1,3 +1,3 @@
-import { getAuthHeader, getUserId } from './auth';
+import { getAuthHeader, getToken, getUserId } from './auth';
 
-export { getAuthHeader, getUserId };
+export { getAuthHeader, getToken, getUserId };

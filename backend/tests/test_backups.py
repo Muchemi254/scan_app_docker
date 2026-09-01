@@ -26,9 +26,11 @@ async def _user(client, admin_headers, email):
 
 
 async def _export(client, headers, uid):
+    """POST /backup/export now returns JSON metadata (the file is fetched
+    separately via GET /backup/download/{id})."""
     resp = await client.post(f"/api/v1/users/{uid}/backup/export", headers=headers)
     assert resp.status_code == 200, resp.text
-    return resp.content
+    return json.loads(resp.content)
 
 
 async def _list(client, headers, uid):
@@ -59,8 +61,9 @@ async def test_export_lists_and_downloads(client):
     headers, _, token = await login(client, "bkp1@pytest.local", "pass-123")
     uid = user["uid"]
 
-    content = await _export(client, headers, uid)
-    assert len(content) > 100  # real tar.gz bytes streamed back
+    meta = await _export(client, headers, uid)
+    assert meta["id"] and meta["filename"].endswith(".tar.gz")
+    assert meta["size_bytes"] > 100
 
     rows = await _list(client, headers, uid)
     assert len(rows) == 1
@@ -69,12 +72,13 @@ async def test_export_lists_and_downloads(client):
     assert entry["user_id"] == uid
     assert entry["size_bytes"] > 0
 
-    # Download via Authorization header.
+    # Download via Authorization header — raw gzip stream, one request.
     resp = await client.get(
         f"/api/v1/users/{uid}/backup/download/{entry['id']}", headers=headers
     )
     assert resp.status_code == 200, resp.text
-    assert resp.content == content
+    assert resp.content[:2] == b"\x1f\x8b"  # gzip magic
+    assert len(resp.content) == meta["size_bytes"]
 
     # Quota summary matches.
     q = await _quota(client, headers, uid)

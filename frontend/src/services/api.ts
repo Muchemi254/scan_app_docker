@@ -806,8 +806,12 @@ export const exportApi = {
     const a = document.createElement('a');
     a.href = url_blob;
     a.download = filename;
+    document.body.appendChild(a);
     a.click();
-    URL.revokeObjectURL(url_blob);
+    document.body.removeChild(a);
+    // Deferred revoke: revoking right after click() kills large downloads
+    // that lose the race against the blob snapshot.
+    setTimeout(() => URL.revokeObjectURL(url_blob), 60_000);
   },
 };
 
