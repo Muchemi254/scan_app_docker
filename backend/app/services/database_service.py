@@ -89,6 +89,20 @@ def _to_numeric(val: Any) -> Optional[Decimal]:
 # Row → dict serializer
 # ═══════════════════════════════════════════════════════════════════════════
 
+# Metadata columns of receipts — exactly what _receipt_row_to_dict reads.
+# Deliberately EXCLUDES image_bytes / thumb_bytes (TOAST payloads, hundreds
+# of KB per row): listing/analysing receipts must never drag the image
+# mirror into process memory (dashboard/cleaning/export fetch thousands of
+# rows — with the bytes that OOMs the backend on data-heavy accounts).
+# Bytes are fetched per-id only where actually needed.
+_RECEIPT_COLS = (
+    "id, user_id, status, entry_type, supplier, total_amount, tax_amount, "
+    "receipt_date, category, invoice_number, kra_pin, buyer_kra_pin, "
+    "cu_invoice, batch_title, image_filename, legacy_image_url, location, "
+    "tax_rate, file_type, pdf_page_count, scanned_at, created_at, updated_at"
+)
+
+
 def _receipt_row_to_dict(
     row, items: Optional[List[dict]] = None
 ) -> Dict[str, Any]:
@@ -335,7 +349,7 @@ class DatabaseService:
         pool = await get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT * FROM receipts WHERE id = $1 AND user_id = $2",
+                f"SELECT {_RECEIPT_COLS} FROM receipts WHERE id = $1 AND user_id = $2",
                 receipt_id, user_id,
             )
             if not row:
@@ -351,7 +365,7 @@ class DatabaseService:
         pool = await get_pool()
         async with pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT * FROM receipts WHERE user_id = $1 AND id = ANY($2::text[])",
+                f"SELECT {_RECEIPT_COLS} FROM receipts WHERE user_id = $1 AND id = ANY($2::text[])",
                 user_id, receipt_ids,
             )
             results = []
@@ -439,9 +453,15 @@ class DatabaseService:
             where_clause = " AND ".join(conditions)
             params.extend([limit, skip])
 
+            # Explicit column list — NEVER `SELECT *` here: receipts carries
+            # image_bytes/thumb_bytes TOAST payloads (~hundreds of KB each).
+            # Listing 1000s of rows for analytics/list views would pull the
+            # whole mirror into memory and OOM the backend on data-heavy
+            # accounts (dashboard + cleaning pages). _receipt_row_to_dict
+            # only reads the columns below.
             rows = await conn.fetch(
                 f"""
-                SELECT *, COUNT(*) OVER() AS full_count
+                SELECT {_RECEIPT_COLS}, COUNT(*) OVER() AS full_count
                 FROM receipts
                 WHERE {where_clause}
                 ORDER BY created_at DESC
@@ -684,7 +704,7 @@ class DatabaseService:
             where = " AND ".join(conditions)
             rows = await conn.fetch(
                 f"""
-                SELECT * FROM receipts
+                SELECT {_RECEIPT_COLS} FROM receipts
                 WHERE {where}
                 ORDER BY receipt_date DESC
                 """,
@@ -709,8 +729,8 @@ class DatabaseService:
 
             if invoiceNumber:
                 rows = await conn.fetch(
-                    """
-                    SELECT * FROM receipts
+                    f"""
+                    SELECT {_RECEIPT_COLS} FROM receipts
                     WHERE user_id = $1 AND invoice_number = $2 AND id != $3
                     """,
                     user_id, invoiceNumber, exclude_uuid,
@@ -724,8 +744,8 @@ class DatabaseService:
                 date_val = _parse_date_mmddyyyy(receiptDate) if receiptDate else None
                 amount = sanitize_numeric(totalAmount)
                 rows = await conn.fetch(
-                    """
-                    SELECT * FROM receipts
+                    f"""
+                    SELECT {_RECEIPT_COLS} FROM receipts
                     WHERE user_id = $1 AND supplier = $2
                       AND total_amount = $3::numeric
                       AND id != $4
