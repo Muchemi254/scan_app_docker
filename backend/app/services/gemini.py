@@ -12,8 +12,8 @@ import asyncio
 import base64
 import json
 import logging
+import threading
 from typing import Optional, Tuple, Any
-import google.generativeai as genai
 from openai import AsyncOpenAI
 from app.core.config import settings
 
@@ -202,12 +202,32 @@ from app.core.encryption import decrypt_api_key
 
 logger = logging.getLogger(__name__)
 
-# genai.configure() modifies global state. Serialize all Gemini SDK calls
-# that depend on it so concurrent requests with different per-user API keys
-# cannot leak one user's data to another user's API key.
-# Track current configured key to avoid redundant global re-configs
+_genai_sdk: Any = None
+
+
+def _genai():
+    """Lazy-load the heavy google-generativeai SDK (~40-60 MB per process).
+
+    gemini.py is imported at boot by the backend API and every Celery worker,
+    but the SDK should only materialize when an actual AI call runs — idle
+    processes stay far smaller on low-RAM VMs.
+    """
+    global _genai_sdk
+    if _genai_sdk is None:
+        import google.generativeai  # noqa: PLC0415 — intentional lazy load
+
+        _genai_sdk = google.generativeai
+    return _genai_sdk
+
+
+# genai.configure() modifies process-global state. Serialize configure +
+# generate with a THREADING lock: the asyncio.Lock previously used only
+# serialized within one event loop, which is unsafe under Celery's threads
+# pool or concurrent FastAPI handlers (different loops would race on
+# per-user API keys). Concurrent calls wait on the lock, so at most one SDK
+# call is in flight per worker process — the price of multi-tenant safety.
+_genai_thread_lock = threading.Lock()
 _current_configured_key: Optional[str] = None
-_gemini_lock = asyncio.Lock()
 
 
 async def _gemini_generate_content(
@@ -230,21 +250,19 @@ async def _gemini_generate_content(
     """
     global _current_configured_key
 
-    def _sync_call():
-        model = genai.GenerativeModel(model_id)
-        return model.generate_content(contents, generation_config=generation_config)
+    def _serialized_call():
+        global _current_configured_key
+        with _genai_thread_lock:
+            if _current_configured_key != api_key:
+                logger.info("Re-configuring Gemini SDK with new API key")
+                _genai().configure(api_key=api_key)
+                _current_configured_key = api_key
+            model = _genai().GenerativeModel(model_id)
+            return model.generate_content(
+                contents, generation_config=generation_config
+            )
 
-    # Hot path: same key as currently configured, no lock needed.
-    if _current_configured_key == api_key:
-        return await asyncio.to_thread(_sync_call)
-
-    # Cold path: key change requires serialized re-configure of global SDK state.
-    async with _gemini_lock:
-        if _current_configured_key != api_key:
-            logger.info("Re-configuring Gemini SDK with new API key")
-            genai.configure(api_key=api_key)
-            _current_configured_key = api_key
-        return await asyncio.to_thread(_sync_call)
+    return await asyncio.to_thread(_serialized_call)
 
 
 async def get_gemini_config(user_id: Optional[str]) -> Tuple[str, str, str]:
@@ -313,22 +331,10 @@ async def get_gemini_config(user_id: Optional[str]) -> Tuple[str, str, str]:
     return api_key, model_id, provider
 
 def get_model(api_key: str, model_id: str):
-    """Get a configured GenerativeModel instance."""
-    # Note: genai.configure is global, but we can pass api_key to GenerativeModel?
-    # Actually, the best way with the current SDK is to use a specific client or just re-configure.
-    # For multi-tenant, we should ideally use different client instances if possible.
-    # In current google-generativeai, it's mostly global.
-    # However, we can use the 'google.generativeai.GenerativeModel' constructor.
-    
-    # Let's use a simple approach: re-configure if key changed (not ideal for high concurrency)
-    # Better: use the underlying client or hope it doesn't cause race conditions.
-    # Actually, genai.configure is not strictly global if we use the right objects.
-    
-    # REVISED: genai.configure IS global. For a truly multi-tenant app with different keys
-    # per request, we should use the Vertex AI SDK or the Discovery API directly.
-    # But for now, we'll re-configure.
-    genai.configure(api_key=api_key)
-    return genai.GenerativeModel(model_id)
+    """Get a configured GenerativeModel instance (shares the global genai config)."""
+    g = _genai()
+    g.configure(api_key=api_key)
+    return g.GenerativeModel(model_id)
 
 # Pricing for Gemini models
 MODEL_PRICING = {
@@ -666,7 +672,7 @@ async def extract_receipt_data(
             response = await _gemini_generate_content(
                 api_key, model_id,
                 [*parts, prompt],
-                generation_config=genai.types.GenerationConfig(
+                generation_config=_genai().types.GenerationConfig(
                     response_mime_type="application/json",
                     temperature=0.1,
                 )
@@ -790,7 +796,7 @@ async def extract_receipt_batch(
             response = await _gemini_generate_content(
                 api_key, model_id,
                 content,
-                generation_config=genai.types.GenerationConfig(
+                generation_config=_genai().types.GenerationConfig(
                     response_mime_type="application/json",
                     temperature=0.1,
                 )

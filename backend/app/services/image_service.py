@@ -16,7 +16,6 @@ import io
 import logging
 import os
 from typing import Tuple, Optional
-from PIL import Image
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +54,8 @@ MAX_AI_CONCURRENCY = int(os.getenv("MAX_AI_CONCURRENCY", "2"))
 
 def _open_and_normalise(file_data: bytes, content_type: str):
     """Open an image, handle HEIC, EXIF rotate, and convert to RGB."""
+    from PIL import Image  # lazy: keeps worker/backend idle RSS low
+
     if content_type.lower() in ("image/heic", "image/heif"):
         try:
             import pillow_heif
@@ -109,11 +110,12 @@ def _detect_image_format(file_data: bytes) -> Optional[str]:
 
 
 def process_image(file_data: bytes, content_type: str) -> Tuple[bytes, str]:
-    """
-    Normalise an uploaded image for storage and AI processing.
+    """Normalise an uploaded image for storage and AI processing.
 
     Validates format by magic bytes (not Content-Type header).
     """
+    from PIL import Image  # lazy: keeps worker/backend idle RSS low
+
     # Validate by magic bytes
     detected = _detect_image_format(file_data)
     if not detected:
@@ -162,6 +164,8 @@ def prepare_for_ai(jpeg_bytes: bytes) -> bytes:
     token count identical to the pre-split pipeline (1024px / q=75) even
     though we now store a higher-quality copy on disk.
     """
+    from PIL import Image  # lazy: keeps worker/backend idle RSS low
+
     try:
         with Image.open(io.BytesIO(jpeg_bytes)) as img:
             if img.mode != "RGB":
@@ -191,6 +195,8 @@ def generate_thumbnail(file_data: bytes, content_type: str) -> bytes | None:
     Returns:
         JPEG bytes or None (when image is already small enough)
     """
+    from PIL import Image  # lazy: keeps worker/backend idle RSS low
+
     try:
         with _open_and_normalise(file_data, content_type) as img:
             if img.width <= THUMB_DIMENSION and img.height <= THUMB_DIMENSION:

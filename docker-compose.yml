@@ -235,7 +235,7 @@ services:
       dockerfile: Dockerfile
     container_name: scan-app-worker
     user: "0:0"  # root — entrypoint fixes volume permissions then drops to appuser
-    command: celery -A app.core.celery_app worker --loglevel=${LOG_LEVEL:-INFO} --concurrency=${MAX_AI_CONCURRENCY:-2} --max-tasks-per-child=${CELERY_MAX_TASKS_PER_CHILD:-50}
+    command: celery -A app.core.celery_app worker --loglevel=${LOG_LEVEL:-INFO} --pool=threads --concurrency=${MAX_AI_CONCURRENCY:-2}
     volumes:
       - image_data:/app/data/images
     environment:
