@@ -57,8 +57,8 @@ class TaxPreferenceUpdate(BaseModel):
     default_tax_rate: float = Field(..., ge=0, le=100, description="Default tax rate percent")
 
 
-class AISummaryToggle(BaseModel):
-    """Global master switch for the AI summary feature (disabled by default)."""
+class GlobalToggle(BaseModel):
+    """Generic {enabled: bool} body for admin global feature switches."""
     enabled: bool
 
 

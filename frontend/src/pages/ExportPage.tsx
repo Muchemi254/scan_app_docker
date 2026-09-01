@@ -405,17 +405,6 @@ const ExportPage = ({ userId, customReceipts, onClose }: ExportPageProps) => {
                     </div>
                   </div>
                 )}
-
-                {summary.ai_summary && (
-                  <div className="bg-gray-50 rounded-lg p-3 border text-xs text-gray-700 whitespace-pre-line leading-relaxed">
-                    {summary.ai_summary}
-                  </div>
-                )}
-                {!summary.ai_summary && (
-                  <div className="text-xs text-gray-400 italic">
-                    AI narrative is disabled by the administrator.
-                  </div>
-                )}
               </div>
             )}
           </div>

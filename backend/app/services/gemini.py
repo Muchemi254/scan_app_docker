@@ -907,42 +907,6 @@ async def extract_receipt_batch(
         raise ValueError(f"Batch extraction failed: {str(e)}")
 
 
-async def generate_ai_summary(receipts_data: str, api_key: Optional[str] = None) -> str:
-    try:
-        if not api_key:
-            from app.services import admin_keys_service
-            admin = await admin_keys_service.get_provider_override("gemini")
-            if admin and admin.get("enabled") and admin.get("api_key"):
-                api_key = admin["api_key"]
-        if not api_key:
-            return "AI summary unavailable."
-        key = api_key
-        prompt = f"""You are a financial analyst. Analyze these receipt records and generate a concise spending summary.
-
-Receipt data:
-{receipts_data}
-
-Provide:
-1. Total spending overview
-2. Spending by category (with percentages)
-3. Top suppliers by spend
-4. Notable patterns or observations
-
-Use bullet points. Be concise but insightful."""
-        response = await _gemini_generate_content(
-            key, "gemini-3.1-flash-lite-preview",
-            prompt,
-            generation_config=genai.types.GenerationConfig(
-                temperature=0.2,
-                max_output_tokens=500,
-            )
-        )
-        return response.text.strip()
-    except Exception as e:
-        logger.error(f"AI summary generation failed: {e}")
-        return "AI summary unavailable."
-
-
 async def test_api_key(api_key: str, model_id: str = "gemini-3-flash-preview", provider: str = "gemini") -> Tuple[bool, Optional[str]]:
     """
     Test if an API key is valid by making a minimal request.

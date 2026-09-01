@@ -3,7 +3,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from app.core.security import get_current_user_id
 from app.core.encryption import encrypt_api_key, decrypt_api_key
-from app.schemas.settings import AISettings, AISettingsUpdate, AIModel, AIProvider, AITestRequest, AITestResponse, TaxPreferenceOut, TaxPreferenceUpdate, BackupLimitsOut, BackupLimitsUpdate, AISummaryToggle
+from app.schemas.settings import AISettings, AISettingsUpdate, AIModel, AIProvider, AITestRequest, AITestResponse, TaxPreferenceOut, TaxPreferenceUpdate, BackupLimitsOut, BackupLimitsUpdate, GlobalToggle
 from app.services.data_adapter import DataService
 from app.services.gemini import test_api_key
 from app.services.model_registry import get_all_models
@@ -241,28 +241,6 @@ async def set_backup_limits_endpoint(
     return await set_backup_limits(body.max_backup_bytes_per_user, body.max_backups_per_user)
 
 
-@global_router.get("/settings/global/ai-summary")
-async def get_ai_summary_enabled_endpoint():
-    """Whether the AI summary feature is enabled (admin-managed; disabled by default)."""
-    from app.services.app_settings_service import get_ai_summary_enabled
-    return {"enabled": await get_ai_summary_enabled()}
-
-
-@global_router.put("/settings/global/ai-summary")
-async def set_ai_summary_enabled_endpoint(
-    body: AISummaryToggle,
-    _admin: str = Depends(require_admin),
-):
-    """Enable/disable the AI summary feature for all users (ADMIN ONLY).
-
-    When disabled, no LLM tokens are spent: the dashboard auto-analysis and the
-    Export-page summary button both skip the Gemini call.
-    """
-    from app.services.app_settings_service import set_ai_summary_enabled
-    await set_ai_summary_enabled(body.enabled)
-    return {"enabled": body.enabled}
-
-
 @global_router.get("/settings/global/user-messaging")
 async def get_user_messaging_enabled_endpoint():
     """Whether non-admin users may message each other (admin-managed; default OFF)."""
@@ -272,7 +250,7 @@ async def get_user_messaging_enabled_endpoint():
 
 @global_router.put("/settings/global/user-messaging")
 async def set_user_messaging_enabled_endpoint(
-    body: AISummaryToggle,
+    body: GlobalToggle,
     _admin: str = Depends(require_admin),
 ):
     """Enable/disable user-to-user messaging (ADMIN ONLY).

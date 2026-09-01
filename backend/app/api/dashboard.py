@@ -144,7 +144,6 @@ async def dashboard_insights(
         data = await DashboardService.get_insights(userId, date_from, date_to)
         return DashboardInsights(
             insights=[DashboardInsight(**i) for i in data["insights"]],
-            ai_summary=data.get("ai_summary"),
         )
     except Exception as e:
         logger.error(f"Dashboard insights failed: {e}")

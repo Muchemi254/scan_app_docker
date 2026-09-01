@@ -13,7 +13,6 @@ from typing import Optional, List, Dict, Any
 from collections import defaultdict
 
 from app.services.data_adapter import DataService
-from app.services.gemini import generate_ai_summary
 
 logger = logging.getLogger(__name__)
 
@@ -307,15 +306,14 @@ class DashboardService:
         date_to: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Generate dashboard insights — a mix of rule-based heuristics and an
-        optional AI summary.
+        Generate dashboard insights — rule-based heuristics.
         """
         receipts = await DashboardService._fetch_receipts(user_id, date_from, date_to)
 
         insights: List[Dict[str, str]] = []
         n = len(receipts)
         if n == 0:
-            return {"insights": [], "ai_summary": None}
+            return {"insights": []}
 
         # ── rule-based insights ──────────────────────────────────────────
 
@@ -393,19 +391,4 @@ class DashboardService:
                 "importance": "low",
             })
 
-        # ── AI summary (best-effort, disabled by default) ─────────────────
-
-        ai_summary = None
-        if n >= 3:
-            from app.services.app_settings_service import get_ai_summary_enabled
-            if await get_ai_summary_enabled():
-                try:
-                    summary_input = "\n".join(
-                        f"{r.get('receiptDate','')}|{r.get('supplier','')}|{r.get('totalAmount',0)}|{r.get('category','Other')}"
-                        for r in receipts[:200]
-                    )
-                    ai_summary = await generate_ai_summary(summary_input)
-                except Exception:
-                    logger.warning("AI summary generation failed", exc_info=True)
-
-        return {"insights": insights, "ai_summary": ai_summary}
+        return {"insights": insights}

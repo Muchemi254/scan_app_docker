@@ -90,4 +90,3 @@ class DashboardInsight(BaseModel):
 class DashboardInsights(BaseModel):
     """Collection of insights for the dashboard."""
     insights: List[DashboardInsight] = []
-    ai_summary: Optional[str] = None

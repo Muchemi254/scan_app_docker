@@ -227,4 +227,3 @@ class SpendingSummaryResponse(BaseModel):
     category_breakdown: List[CategoryBreakdown]
     top_suppliers: List[SupplierBreakdown]
     monthly_trend: List[MonthlyTrend]
-    ai_summary: Optional[str] = None

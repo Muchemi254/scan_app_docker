@@ -38,7 +38,7 @@ from app.services.receipt_workflow_service import (
 )
 from app.services.database_service import save_image, save_thumbnail, save_pdf, save_pdf_thumbnail, delete_receipt_images
 from app.services.firebase_service import StorageService
-from app.services.gemini import extract_receipt_data, generate_ai_summary
+from app.services.gemini import extract_receipt_data
 from app.services.image_service import process_image, generate_thumbnail, prepare_for_ai
 from app.services.task_service import TaskService
 from app.services.audit_service import AuditService
@@ -918,16 +918,6 @@ async def generate_summary(
             for m, tot in sorted(monthly_totals.items())
         ]
 
-        # Generate AI summary (respects the admin global switch, off by default)
-        ai_summary = None
-        from app.services.app_settings_service import get_ai_summary_enabled
-        if await get_ai_summary_enabled():
-            summary_input = "\n".join(
-                f"{r.get('receiptDate','')}|{r.get('supplier','')}|{r.get('totalAmount',0)}|{r.get('category','Other')}"
-                for r in filtered[:200]
-            )
-            ai_summary = await generate_ai_summary(summary_input)
-
         return SpendingSummaryResponse(
             total_spent=round(total_spent, 2),
             total_receipts=total_receipts,
@@ -936,7 +926,6 @@ async def generate_summary(
             category_breakdown=category_breakdown,
             top_suppliers=top_suppliers,
             monthly_trend=monthly_trend,
-            ai_summary=ai_summary,
         )
     except Exception as e:
         logger.error(f"Summary generation failed: {e}")

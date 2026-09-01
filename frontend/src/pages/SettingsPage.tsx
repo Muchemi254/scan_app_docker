@@ -209,30 +209,6 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
   const [taxNotice, setTaxNotice] = useState('');
   const [taxError, setTaxError] = useState('');
 
-  // ── AI summary master switch (admin-only, disabled by default) ──
-  const [aiSummaryEnabled, setAiSummaryEnabled] = useState(false);
-  const [aiSummarySaving, setAiSummarySaving] = useState(false);
-  const [aiSummaryNotice, setAiSummaryNotice] = useState('');
-
-  const loadAiSummarySetting = useCallback(async () => {
-    try {
-      const r = await settingsApi.getGlobalAiSummaryEnabled();
-      setAiSummaryEnabled(r.enabled);
-    } catch (e: any) { /* admin-only; ignore */ }
-  }, []);
-
-  useEffect(() => { if (userId) loadAiSummarySetting(); }, [userId, loadAiSummarySetting]);
-
-  const saveAiSummarySetting = async () => {
-    setAiSummarySaving(true); setAiSummaryNotice('');
-    try {
-      const r = await settingsApi.setGlobalAiSummaryEnabled(aiSummaryEnabled);
-      setAiSummaryEnabled(r.enabled);
-      setAiSummaryNotice(r.enabled ? 'AI Summary enabled for all users.' : 'AI Summary disabled — no LLM tokens will be spent.');
-    } catch (e: any) { setAiSummaryNotice(e.message || 'Failed to save AI summary setting'); }
-    finally { setAiSummarySaving(false); }
-  };
-
   // ── User-to-user messaging switch (admin-only, default OFF) ──
   const [userMessagingEnabled, setUserMessagingEnabled] = useState(false);
   const [userMessagingSaving, setUserMessagingSaving] = useState(false);
@@ -566,41 +542,6 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
       {/* ── Export Tab ── */}
       {activeTab === 'export' && (
         <div className="space-y-6">
-          {authUser?.is_admin && (
-            <div className="bg-white rounded-lg shadow p-6 space-y-3">
-              <h2 className="font-semibold text-gray-800 flex items-center gap-2">
-                <Sparkles className="h-5 w-5 text-purple-600" /> AI Spending Summary — Global
-              </h2>
-              <p className="text-xs text-gray-500">
-                Master switch for the AI narrative on the Dashboard and the Export page. Disabled
-                by default so no LLM tokens are consumed until you opt in.
-              </p>
-              {aiSummaryNotice && (
-                <div className={`text-xs px-3 py-2 rounded ${aiSummaryNotice.includes('Failed') ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-700'}`}>
-                  {aiSummaryNotice}
-                </div>
-              )}
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={aiSummaryEnabled}
-                  onChange={e => setAiSummaryEnabled(e.target.checked)}
-                  className="h-4 w-4 text-purple-600 rounded"
-                />
-                Enable AI Summary for all users
-              </label>
-              <div className="flex gap-2">
-                <button
-                  onClick={saveAiSummarySetting}
-                  disabled={aiSummarySaving}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-purple-600 text-white rounded-lg text-sm font-medium hover:bg-purple-700 disabled:opacity-50"
-                >
-                  <Save className="h-4 w-4" />{aiSummarySaving ? 'Saving...' : 'Save'}
-                </button>
-              </div>
-            </div>
-          )}
-
           {authUser?.is_admin && (
             <div className="bg-white rounded-lg shadow p-6 space-y-3">
               <h2 className="font-semibold text-gray-800 flex items-center gap-2">

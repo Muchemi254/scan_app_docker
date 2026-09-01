@@ -393,7 +393,6 @@ export const receiptApi = {
     category_breakdown: { category: string; total: number; count: number; percentage: number }[];
     top_suppliers: { supplier: string; total: number; count: number }[];
     monthly_trend: { month: string; total: number; count: number }[];
-    ai_summary: string | null;
   }> {
     return apiRequest('POST', '/receipts/summary', filters || {});
   },
@@ -713,16 +712,6 @@ export const settingsApi = {
     return apiGlobalRequest('PUT', '/settings/global/tax-rate', { default_tax_rate });
   },
 
-  /** Whether the AI summary feature is enabled (admin, disabled by default). */
-  async getGlobalAiSummaryEnabled(): Promise<{ enabled: boolean }> {
-    return apiGlobalRequest('GET', '/settings/global/ai-summary');
-  },
-
-  /** Enable/disable the AI summary feature for all users (admin only). */
-  async setGlobalAiSummaryEnabled(enabled: boolean): Promise<{ enabled: boolean }> {
-    return apiGlobalRequest('PUT', '/settings/global/ai-summary', { enabled });
-  },
-
   /** Whether non-admin users may message each other (admin, default OFF). */
   async getGlobalUserMessagingEnabled(): Promise<{ enabled: boolean }> {
     return apiGlobalRequest('GET', '/settings/global/user-messaging');
@@ -883,10 +872,9 @@ export const dashboardApi = {
     return apiRequest('GET', `/dashboard/breakdown${qs ? `?${qs}` : ''}`);
   },
 
-  /** Computed insights + optional AI summary */
+  /** Computed insights */
   async insights(date_from?: string, date_to?: string): Promise<{
     insights: { type: string; title: string; description: string; importance: string }[];
-    ai_summary: string | null;
   }> {
     const params = new URLSearchParams();
     if (date_from) params.append('date_from', date_from);

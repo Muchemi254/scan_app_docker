@@ -60,7 +60,6 @@ interface Breakdown {
 
 interface InsightsData {
   insights: { type: string; title: string; description: string; importance: string }[];
-  ai_summary: string | null;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -368,17 +367,6 @@ const DashboardPage = ({ userId }: { userId: string | null }) => {
               <Skeleton className="h-[280px]" />
             ) : (
               <div className="h-[280px] overflow-y-auto space-y-3 pr-1">
-                {/* AI summary */}
-                {insights?.ai_summary && (
-                  <div className="p-3 rounded-xl bg-indigo-50/50 border border-indigo-100">
-                    <div className="flex gap-2 mb-1">
-                      <Sparkles className="w-4 h-4 text-indigo-500 flex-shrink-0" />
-                      <span className="text-xs font-semibold text-indigo-700">AI Analysis</span>
-                    </div>
-                    <p className="text-xs text-indigo-800 leading-relaxed">{insights.ai_summary}</p>
-                  </div>
-                )}
-
                 {/* Rule-based insights */}
                 {insights?.insights.map((ins, i) => (
                   <div key={i} className="p-3 rounded-xl bg-gray-50/80 border border-gray-100">
@@ -391,7 +379,7 @@ const DashboardPage = ({ userId }: { userId: string | null }) => {
                   </div>
                 ))}
 
-                {!insights?.ai_summary && !insights?.insights.length && (
+                {!insights?.insights.length && (
                   <div className="flex items-center justify-center h-full text-sm text-gray-400">
                     <div className="text-center space-y-2">
                       <Sparkles className="w-8 h-8 mx-auto text-gray-300" />
