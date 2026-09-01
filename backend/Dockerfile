@@ -17,12 +17,12 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install -r requirements.txt
 
 # Dev/test dependencies (pytest). Installed into the same venv so tests can
 # run inside the container: docker exec ... python -m pytest tests
 COPY requirements-dev.txt .
-RUN pip install --no-cache-dir -r requirements-dev.txt
+RUN pip install -r requirements-dev.txt
 
 # Runtime stage
 FROM python:3.11-slim

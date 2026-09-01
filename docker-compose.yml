@@ -22,7 +22,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 192m
+          memory: 128m
 
   # ========================================================================
   # Postgres collation auto-fix — one-shot, runs BEFORE postgres.
@@ -79,11 +79,24 @@ services:
       postgres-collation-fix:
         condition: service_completed_successfully
     # Continuous WAL archiving to the encrypted backup store (§ system backups).
+    # Low-RAM VM tuning: shared_buffers 32MB (was 128MB default), bounded
+    # connections/work_mem so a few pooled conns per process can't push the
+    # container past its memory cap.
     command:
       - -c
       - archive_mode=on
       - -c
       - archive_command=wal-g wal-push %p
+      - -c
+      - shared_buffers=32MB
+      - -c
+      - max_connections=40
+      - -c
+      - work_mem=2048kB
+      - -c
+      - maintenance_work_mem=32MB
+      - -c
+      - effective_cache_size=256MB
     volumes:
       - pgdata:/var/lib/postgresql/data
       - backup_data:/backups
@@ -111,7 +124,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256m
+          memory: 192m
 
   # ========================================================================
   # FastAPI Backend
@@ -124,14 +137,15 @@ services:
     user: "0:0"  # root — entrypoint fixes volume permissions then drops to appuser
     ports:
       - "8003:8000"
-    volumes:
-      # Persist SQLite review batch database across container rebuilds
-      - review_batch_data:/app/data
-      # Local image storage
-      - image_data:/app/data/images
-      # Backup storage
-      - backup_data:/app/backups
     environment:
+      # Low-RAM VM tuning: give freed Python/glibc memory back to the OS
+      # instead of holding RSS (biggest win on long-running processes), and
+      # stop BLAS-style libs spawning a thread (8 MB stack) per CPU.
+      PYTHONMALLOC: malloc
+      MALLOC_TRIM_THRESHOLD_: "65536"
+      MALLOC_MMAP_THRESHOLD_: "131072"
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
       # SQLite database path for review batches (transitional — migrating to PG)
       REVIEW_BATCH_DB_PATH: ${REVIEW_BATCH_DB_PATH}
       # PostgreSQL
@@ -221,10 +235,16 @@ services:
       dockerfile: Dockerfile
     container_name: scan-app-worker
     user: "0:0"  # root — entrypoint fixes volume permissions then drops to appuser
-    command: celery -A app.core.celery_app worker --loglevel=${LOG_LEVEL:-INFO} --concurrency=${MAX_AI_CONCURRENCY:-2}
+    command: celery -A app.core.celery_app worker --loglevel=${LOG_LEVEL:-INFO} --concurrency=${MAX_AI_CONCURRENCY:-2} --max-tasks-per-child=${CELERY_MAX_TASKS_PER_CHILD:-50}
     volumes:
       - image_data:/app/data/images
     environment:
+      # Low-RAM VM tuning (see backend service above)
+      PYTHONMALLOC: malloc
+      MALLOC_TRIM_THRESHOLD_: "65536"
+      MALLOC_MMAP_THRESHOLD_: "131072"
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
       FIREBASE_CREDENTIALS_PATH: ${FIREBASE_CREDENTIALS_PATH}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
@@ -284,6 +304,9 @@ services:
       # Retention
       BACKUP_RETAIN_FULL: ${BACKUP_RETAIN_FULL:-7}
       BACKUP_RETAIN_DUMPS: ${BACKUP_RETAIN_DUMPS:-14}
+      # Cheapest zstd level: backups run nightly on a low-RAM box; level 1
+      # cuts the wal-g base's memory/CPU spike (bigger archives, fewer kills).
+      WALG_ZSTD_LEVEL: "1"
       # Schedules (UTC); one full job covers DB + images in a single process
       CRON_FULL: ${BACKUP_CRON_FULL:-0 2 * * *}
       CRON_VERIFY: ${BACKUP_CRON_VERIFY:-0 4 * * 0}
@@ -292,6 +315,12 @@ services:
         condition: service_healthy
     networks:
       - data-network
+    # Nightly job (wal-g base + pg_dump + images tarball) must stay within a
+    # bounded budget on low-RAM VMs so it can't thrash the data containers.
+    deploy:
+      resources:
+        limits:
+          memory: 512m
     logging:
       driver: "json-file"
       options:
