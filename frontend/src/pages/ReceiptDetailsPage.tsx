@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
-import { receiptApi, locationsApi, settingsApi } from '../services/api';
+import { receiptApi, locationsApi, entryTypesApi, settingsApi } from '../services/api';
 import { useReceiptStore } from '../stores/receiptStore';
 import ReceiptForm from '../components/ReceiptForm';
 import { lineTotalOf, sumItemTotals } from '../utils/itemTotals';
@@ -22,6 +22,7 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
   const [editing, setEditing] = useState(false);
   const [newImage, setNewImage] = useState<File | null>(null);
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
+  const [entryTypes, setEntryTypes] = useState<{ id: string; name: string; label: string }[]>([]);
   const [defaultTaxRate, setDefaultTaxRate] = useState(16);
 
   useEffect(() => {
@@ -44,6 +45,7 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
     // Reference data + the user's personal tax default for the editor.
     const fetchMeta = async () => {
       try { setLocations((await locationsApi.list()).items); } catch { /* non-fatal */ }
+      try { setEntryTypes((await entryTypesApi.list()).items); } catch { /* non-fatal */ }
       try { setDefaultTaxRate((await settingsApi.getTaxPreference()).default_tax_rate); } catch { /* non-fatal */ }
     };
     fetchMeta();
@@ -172,6 +174,7 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
                 onImageChange={setNewImage}
                 loading={loading}
                 locations={locations}
+                entryTypes={entryTypes}
                 defaultTaxRate={defaultTaxRate}
               />
             </div>

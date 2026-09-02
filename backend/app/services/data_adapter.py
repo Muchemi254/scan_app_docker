@@ -149,6 +149,43 @@ class DataService:
             return await db.delete_location(location_id)
         return False
 
+    # ── Entry types (admin-managed reference data) ─────────────────────────
+
+    @classmethod
+    async def list_entry_types(cls, active_only: bool = False) -> List[Dict[str, Any]]:
+        db, _ = cls._backend()
+        if hasattr(db, "list_entry_types"):
+            return await db.list_entry_types(active_only=active_only)
+        return []
+
+    @classmethod
+    async def get_entry_type(cls, entry_type_id: str) -> Optional[Dict[str, Any]]:
+        db, _ = cls._backend()
+        if hasattr(db, "get_entry_type"):
+            return await db.get_entry_type(entry_type_id)
+        return None
+
+    @classmethod
+    async def create_entry_type(cls, name: str, label: Optional[str] = None, created_by: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        db, _ = cls._backend()
+        if hasattr(db, "create_entry_type"):
+            return await db.create_entry_type(name, label, created_by)
+        return None
+
+    @classmethod
+    async def update_entry_type(cls, entry_type_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        db, _ = cls._backend()
+        if hasattr(db, "update_entry_type"):
+            return await db.update_entry_type(entry_type_id, data)
+        return None
+
+    @classmethod
+    async def delete_entry_type(cls, entry_type_id: str) -> bool:
+        db, _ = cls._backend()
+        if hasattr(db, "delete_entry_type"):
+            return await db.delete_entry_type(entry_type_id)
+        return False
+
     @classmethod
     async def find_receipts_by_image_hashes(
         cls, user_id: str, hashes: List[str]

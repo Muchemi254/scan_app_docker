@@ -770,6 +770,30 @@ export const locationsApi = {
 };
 
 // ============================================================================
+// Entry Types API - admin-managed reference data for receipt entry types
+// ============================================================================
+
+export const entryTypesApi = {
+  /** List active entry types (any authenticated user). */
+  async list(): Promise<{ total: number; items: { id: string; name: string; label: string; is_active: boolean; is_system: boolean }[] }> {
+    return apiGlobalRequest('GET', '/entry-types');
+  },
+  /** List all entry types including inactive (admin). */
+  async listAll(): Promise<{ total: number; items: { id: string; name: string; label: string; is_active: boolean; is_system: boolean }[] }> {
+    return apiGlobalRequest('GET', '/entry-types/all');
+  },
+  async create(name: string, label?: string): Promise<{ id: string; name: string; label: string; is_active: boolean; is_system: boolean }> {
+    return apiGlobalRequest('POST', '/entry-types', { name, label });
+  },
+  async update(id: string, body: { name?: string; label?: string; is_active?: boolean }): Promise<{ id: string; name: string; label: string; is_active: boolean; is_system: boolean }> {
+    return apiGlobalRequest('PUT', `/entry-types/${id}`, body);
+  },
+  async remove(id: string): Promise<void> {
+    return apiGlobalRequest('DELETE', `/entry-types/${id}`);
+  },
+};
+
+// ============================================================================
 // Export API - Server-side report generation
 // ============================================================================
 

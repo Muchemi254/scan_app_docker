@@ -63,7 +63,7 @@ class ReceiptBase(BaseModel):
     location: Optional[str] = Field(None, description="Manual recipient location (from admin-managed list; not AI-extracted)")
     taxRate: Optional[str] = Field(None, description="Receipt-level tax rate override (falls back to user default)")
     items: List[ReceiptItemCreate] = Field(default_factory=list, description="Receipt items")
-    entryType: EntryType = Field(default=EntryType.EXPENSE, description="expense (counts in totals) or quotation/proforma/deposit/note (excluded but retained)")
+    entryType: str = Field(default="expense", description="expense (counts in totals) or quotation/proforma/deposit/note/custom (excluded but retained) – admin-managed")
 
 
 class ReceiptCreate(ReceiptBase):
@@ -88,7 +88,7 @@ class ReceiptUpdate(BaseModel):
     items: Optional[List[ReceiptItemCreate]] = None
     location: Optional[str] = None
     taxRate: Optional[str] = None
-    entryType: Optional[EntryType] = None
+    entryType: Optional[str] = None
 
 
 class Receipt(ReceiptBase):
@@ -96,7 +96,7 @@ class Receipt(ReceiptBase):
     id: str = Field(..., description="Receipt ID")
     userId: str = Field(..., description="User who owns this receipt")
     status: ReceiptStatus = Field(default=ReceiptStatus.PROCESSED)
-    entryType: EntryType = Field(default=EntryType.EXPENSE)
+    entryType: str = Field(default="expense")
     imageUrl: Optional[str] = Field(None, description="Image URL in storage")
     thumbnailUrl: Optional[str] = Field(None, description="Thumbnail image URL for fast preview")
     fileType: Optional[str] = Field(None, description="Stored file MIME: image/jpeg or application/pdf")

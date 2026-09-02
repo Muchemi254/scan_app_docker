@@ -1154,6 +1154,96 @@ class DatabaseService:
             )
             return result == "DELETE 1"
 
+    # ── Entry types (admin-managed reference data) ────────────────────────
+
+    @staticmethod
+    async def list_entry_types(active_only: bool = False) -> List[Dict[str, Any]]:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            if active_only:
+                rows = await conn.fetch(
+                    """
+                    SELECT * FROM entry_types
+                    WHERE is_active = TRUE
+                    ORDER BY name ASC
+                    """
+                )
+            else:
+                rows = await conn.fetch(
+                    "SELECT * FROM entry_types ORDER BY name ASC"
+                )
+            return [dict(r) for r in rows]
+
+    @staticmethod
+    async def get_entry_type(entry_type_id: str) -> Optional[Dict[str, Any]]:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM entry_types WHERE id = $1", entry_type_id
+            )
+            return dict(row) if row else None
+
+    @staticmethod
+    async def create_entry_type(name: str, label: Optional[str] = None, created_by: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            try:
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO entry_types (name, label, created_by)
+                    VALUES ($1, $2, $3)
+                    RETURNING *
+                    """,
+                    name.strip().lower(), (label.strip() if label else name.strip()), created_by,
+                )
+            except Exception:
+                return None
+            return dict(row) if row else None
+
+    @staticmethod
+    async def update_entry_type(entry_type_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        set_parts = ["updated_at = now()"]
+        params: List[Any] = []
+        p_idx = 1
+        if "name" in data and data["name"] is not None:
+            set_parts.append(f"name = ${p_idx}")
+            params.append(str(data["name"]).strip().lower())
+            p_idx += 1
+        if "label" in data and data["label"] is not None:
+            set_parts.append(f"label = ${p_idx}")
+            params.append(str(data["label"]).strip())
+            p_idx += 1
+        if "is_active" in data and data["is_active"] is not None:
+            set_parts.append(f"is_active = ${p_idx}")
+            params.append(bool(data["is_active"]))
+            p_idx += 1
+        if not params:
+            return await DatabaseService.get_entry_type(entry_type_id)
+        set_clause = ", ".join(set_parts)
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            try:
+                row = await conn.fetchrow(
+                    f"UPDATE entry_types SET {set_clause} WHERE id = ${p_idx} RETURNING *",
+                    *params, entry_type_id,
+                )
+            except Exception:
+                return None
+            return dict(row) if row else None
+
+    @staticmethod
+    async def delete_entry_type(entry_type_id: str) -> bool:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            # prevent deletion of system types at DB level as well
+            row = await conn.fetchrow("SELECT is_system FROM entry_types WHERE id = $1", entry_type_id)
+            if row and row["is_system"]:
+                return False
+            result = await conn.execute(
+                "DELETE FROM entry_types WHERE id = $1 AND is_system = FALSE", entry_type_id
+            )
+            return result == "DELETE 1"
+
     # ── User preferences (per-user defaults) ───────────────────────────────
 
     @staticmethod

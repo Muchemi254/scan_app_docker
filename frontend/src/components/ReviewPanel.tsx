@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { receiptApi, locationsApi, settingsApi } from '../services/api';
+import { receiptApi, locationsApi, entryTypesApi, settingsApi } from '../services/api';
 import { useReceiptStore } from '../stores/receiptStore';
 import ReceiptForm from './ReceiptForm';
 import AuditTrail from './AuditTrail';
@@ -176,6 +176,7 @@ const ReviewPanel = ({
   const [showUnsavedModal, setShowUnsavedModal] = useState(false);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
+  const [entryTypes, setEntryTypes] = useState<{ id: string; name: string; label: string }[]>([]);
   const [defaultTaxRate, setDefaultTaxRate] = useState(16);
 
   // Approval-action modals (replace slow browser alert/prompt/confirm)
@@ -191,6 +192,7 @@ const ReviewPanel = ({
   // Reference data + the user's personal tax default for the editor.
   useEffect(() => {
     locationsApi.list().then((r) => setLocations(r.items)).catch(() => {});
+    entryTypesApi.list().then((r) => setEntryTypes(r.items)).catch(() => {});
     settingsApi.getTaxPreference().then((r) => setDefaultTaxRate(r.default_tax_rate)).catch(() => {});
   }, []);
 
@@ -437,6 +439,7 @@ const ReviewPanel = ({
                       loading={loading}
                       isAdmin={isAdmin}
                       locations={locations}
+                      entryTypes={entryTypes}
                       defaultTaxRate={defaultTaxRate}
                     />
                   </div>
@@ -626,6 +629,7 @@ const ReviewPanel = ({
                 loading={loading}
                 isAdmin={isAdmin}
                 locations={locations}
+                entryTypes={entryTypes}
                 defaultTaxRate={defaultTaxRate}
               />
             </div>

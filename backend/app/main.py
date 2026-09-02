@@ -21,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from app.core.config import settings
-from app.api import health, receipts, tasks, images, batches, exports, cleaning, dashboard, review_batches, backup_api, scan_errors, settings as settings_api, auth as auth_api, admin_receipts, locations, ops, messages as messages_api, reports
+from app.api import health, receipts, tasks, images, batches, exports, cleaning, dashboard, review_batches, backup_api, scan_errors, settings as settings_api, auth as auth_api, admin_receipts, locations, entry_types, ops, messages as messages_api, reports
 
 # Configure logging
 logging.basicConfig(
@@ -330,9 +330,13 @@ def create_app() -> FastAPI:
             prefix=settings.API_V1_STR,
         )
 
-    # Location reference data (authenticated list + admin write)
+    # Location + entry-type reference data (authenticated list + admin write)
     app.include_router(
         locations.router,
+        prefix=settings.API_V1_STR,
+    )
+    app.include_router(
+        entry_types.router,
         prefix=settings.API_V1_STR,
     )
 

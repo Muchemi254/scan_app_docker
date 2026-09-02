@@ -14,7 +14,7 @@ import {
   type AuthUser,
 } from '../services/auth';
 import { opsApi } from '../services/opsApi';
-import { settingsApi, locationsApi } from '../services/api';
+import { settingsApi, locationsApi, entryTypesApi } from '../services/api';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import { toast } from '../stores/toastStore';
 import {
@@ -83,6 +83,11 @@ const AdminPage = ({ userId }: Props) => {
   const [locations, setLocations] = useState<{ id: string; name: string; is_active: boolean }[]>([]);
   const [locationInput, setLocationInput] = useState('');
   const [savingLocations, setSavingLocations] = useState(false);
+  // Entry types reference data
+  const [entryTypes, setEntryTypes] = useState<{ id: string; name: string; label: string; is_active: boolean; is_system: boolean }[]>([]);
+  const [entryTypeName, setEntryTypeName] = useState('');
+  const [entryTypeLabel, setEntryTypeLabel] = useState('');
+  const [savingEntryTypes, setSavingEntryTypes] = useState(false);
 
   const loadUsers = useCallback(async () => {
     setLoadingUsers(true);
@@ -185,6 +190,14 @@ const AdminPage = ({ userId }: Props) => {
       setError(err?.message || 'Failed to load locations');
     }
   }, []);
+  const loadEntryTypes = useCallback(async () => {
+    setError('');
+    try {
+      setEntryTypes((await entryTypesApi.listAll()).items);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to load entry types');
+    }
+  }, []);
 
   useEffect(() => {
     loadUsers();
@@ -192,7 +205,8 @@ const AdminPage = ({ userId }: Props) => {
     loadAIProviders();
     loadModels();
     loadLocations();
-  }, [loadUsers, loadHosts, loadAIProviders, loadModels, loadLocations]);
+    loadEntryTypes();
+  }, [loadUsers, loadHosts, loadAIProviders, loadModels, loadLocations, loadEntryTypes]);
 
   const addLocation = async () => {
     const name = locationInput.trim();
@@ -250,6 +264,37 @@ const AdminPage = ({ userId }: Props) => {
     } finally {
       setSavingLocations(false);
     }
+  };
+
+  const addEntryType = async () => {
+    const name = entryTypeName.trim().toLowerCase().replace(/\s+/g, '_');
+    const label = entryTypeLabel.trim() || name;
+    if (!name) return;
+    setSavingEntryTypes(true); setError(''); setNotice('');
+    try {
+      await entryTypesApi.create(name, label);
+      setEntryTypeName(''); setEntryTypeLabel('');
+      setNotice(`Added entry type "${label}"`);
+      await loadEntryTypes();
+    } catch (err: any) { setError(err?.message || 'Failed to add entry type'); }
+    finally { setSavingEntryTypes(false); }
+  };
+  const toggleEntryType = async (et: { id: string; name: string; label: string; is_active: boolean }) => {
+    setSavingEntryTypes(true); setError(''); setNotice('');
+    try {
+      await entryTypesApi.update(et.id, { is_active: !et.is_active });
+      setNotice(et.is_active ? `Deactivated "${et.label}"` : `Activated "${et.label}"`);
+      await loadEntryTypes();
+    } catch (err: any) { setError(err?.message || 'Failed to update entry type'); }
+    finally { setSavingEntryTypes(false); }
+  };
+  const deleteEntryType = async (et: { id: string; name: string; label: string; is_system: boolean }) => {
+    if (et.is_system) { setError('System entry types cannot be deleted (deactivate instead)'); return; }
+    if (!(await confirm({ title: 'Delete entry type?', message: <>Delete <strong>{et.label}</strong> ({et.name})? Receipts keep their stored type.</> }))) return;
+    setSavingEntryTypes(true); setError(''); setNotice('');
+    try { await entryTypesApi.remove(et.id); setNotice(`Deleted "${et.label}"`); toast.success('Entry type deleted', `"${et.label}" was removed.`); await loadEntryTypes(); }
+    catch (err: any) { setError(err?.message || 'Failed to delete entry type'); toast.error('Delete failed', err?.message || 'Failed to delete entry type'); }
+    finally { setSavingEntryTypes(false); }
   };
 
   const handleCreate = async (e: React.FormEvent) => {
@@ -752,6 +797,72 @@ const AdminPage = ({ userId }: Props) => {
                       onClick={() => deleteLocation(loc)}
                       disabled={savingLocations}
                       className="text-xs px-2 py-1 rounded border border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        {/* Entry Types reference data */}
+        <div className="bg-white rounded-xl shadow p-6 space-y-4">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
+              <MapPin className="h-5 w-5 text-purple-600" /> Entry Types
+            </h2>
+            <p className="text-sm text-gray-500 mt-1">
+              Shared list for receipt entry type. Default <code className="text-xs bg-gray-100 px-1 rounded">expense</code> counts toward totals; others are retained but excluded. Deactivating hides the option; deleting is blocked for system types.
+            </p>
+          </div>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <input
+              type="text"
+              value={entryTypeName}
+              onChange={e => setEntryTypeName(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addEntryType(); } }}
+              className="flex-1 border border-gray-300 rounded-md p-2 text-sm"
+              placeholder="value e.g. refund, credit_note"
+            />
+            <input
+              type="text"
+              value={entryTypeLabel}
+              onChange={e => setEntryTypeLabel(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addEntryType(); } }}
+              className="flex-1 border border-gray-300 rounded-md p-2 text-sm"
+              placeholder="Label e.g. Refund"
+            />
+            <button
+              onClick={addEntryType}
+              disabled={savingEntryTypes || !entryTypeName.trim()}
+              className="px-4 py-2 rounded-lg bg-white border border-gray-300 text-gray-700 text-sm hover:bg-gray-100 transition-colors disabled:opacity-50"
+            >
+              <Plus className="h-4 w-4 inline -mt-0.5" /> Add
+            </button>
+          </div>
+          {entryTypes.length === 0 ? (
+            <p className="text-sm text-gray-400">No entry types yet — add one above.</p>
+          ) : (
+            <ul className="divide-y divide-gray-100 border border-gray-100 rounded-lg">
+              {entryTypes.map(et => (
+                <li key={et.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                  <span className={`text-sm ${et.is_active ? 'text-gray-800' : 'text-gray-400 line-through'}`}>
+                    {et.label} <span className="text-xs text-gray-400">({et.name})</span> {et.is_system && <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">system</span>}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => toggleEntryType(et)}
+                      disabled={savingEntryTypes}
+                      className={`text-xs px-2 py-1 rounded border transition-colors disabled:opacity-50 ${et.is_active ? 'border-gray-300 text-gray-600 hover:bg-gray-50' : 'border-green-300 text-green-700 hover:bg-green-50'}`}
+                    >
+                      {et.is_active ? 'Deactivate' : 'Activate'}
+                    </button>
+                    <button
+                      onClick={() => deleteEntryType(et)}
+                      disabled={savingEntryTypes || et.is_system}
+                      className="text-xs px-2 py-1 rounded border border-red-200 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50 disabled:text-gray-400 disabled:border-gray-200"
+                      title={et.is_system ? 'System types cannot be deleted' : 'Delete'}
                     >
                       Delete
                     </button>

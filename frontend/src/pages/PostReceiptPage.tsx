@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { receiptApi } from '../services/api';
+import { receiptApi, locationsApi, entryTypesApi } from '../services/api';
 import { useReceiptStore } from '../stores/receiptStore';
 import ReceiptForm from '../components/ReceiptForm';
 
@@ -9,6 +9,12 @@ const PostReceiptPage = ({ userId }: { userId: string | null }) => {
   const navigate = useNavigate();
   const [imageFile, setImageFile] = useState<File | null>(null);
   const { add } = useReceiptStore();
+  const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
+  const [entryTypes, setEntryTypes] = useState<{ id: string; name: string; label: string }[]>([]);
+  useEffect(() => {
+    locationsApi.list().then(r => setLocations(r.items)).catch(() => {});
+    entryTypesApi.list().then(r => setEntryTypes(r.items)).catch(() => {});
+  }, []);
 
   const handleSubmit = async (data: any) => {
     if (!userId) return;
@@ -43,6 +49,8 @@ const PostReceiptPage = ({ userId }: { userId: string | null }) => {
         onSubmit={handleSubmit}
         onImageChange={(file) => setImageFile(file)}
         loading={loading}
+        locations={locations}
+        entryTypes={entryTypes}
       />
     </div>
   );

@@ -3,7 +3,7 @@ import Decimal from 'decimal.js';
 import { parseCurrencyToNumber } from '../utils/helpers';
 import { addTax, splitTax } from '../utils/taxCalc';
 import type { ReceiptData } from '../types/gemini';
-import { ENTRY_TYPE_OPTIONS } from '../types/gemini';
+import { ENTRY_TYPE_OPTIONS, entryTypeLabel } from '../types/gemini';
 
 const ReceiptForm = ({
   initialData,
@@ -12,6 +12,7 @@ const ReceiptForm = ({
   loading,
   isAdmin = false,
   locations = [],
+  entryTypes,
   defaultTaxRate = 16,
 }: {
   initialData: any;
@@ -20,6 +21,7 @@ const ReceiptForm = ({
   loading: boolean;
   isAdmin?: boolean;
   locations?: { id: string; name: string }[];
+  entryTypes?: { id: string; name: string; label: string }[];
   defaultTaxRate?: number;
 }) => {
   const [formData, setFormData] = useState<ReceiptData>(() => ({
@@ -542,11 +544,24 @@ const ReceiptForm = ({
             value={formData.entryType || 'expense'}
             onChange={(e) => setFormData({ ...formData, entryType: e.target.value })}
             className="w-full px-2 py-1 border rounded text-sm bg-white"
-            title="Non-expense entries (quotations, proformas, deposits, notes) are retained but excluded from totals and exports"
+            title="Admin-managed entry types; non-expense excluded from totals"
           >
-            {ENTRY_TYPE_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
+            {(() => {
+              const opts = entryTypes && entryTypes.length > 0
+                ? entryTypes.map(et => ({ value: et.name, label: et.label }))
+                : ENTRY_TYPE_OPTIONS as any;
+              const hasCurrent = opts.some((o: any) => o.value === formData.entryType);
+              return (
+                <>
+                  {!hasCurrent && formData.entryType && (
+                    <option value={formData.entryType}>{entryTypeLabel(formData.entryType)} ({formData.entryType})</option>
+                  )}
+                  {opts.map((o: any) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </>
+              );
+            })()}
           </select>
         </div>
         <div>
@@ -556,22 +571,20 @@ const ReceiptForm = ({
               <span className="ml-1 text-red-500">(required)</span>
             )}
           </label>
-          <input
-            list="receipt-location-options"
-            type="text"
+          <select
             name="location"
             value={formData.location || ''}
-            onChange={handleChange}
-            className="w-full px-2 py-1 border rounded text-sm"
-            placeholder={locations.length ? 'Select or type a location' : 'Type a location'}
-          />
-          {locations.length > 0 && (
-            <datalist id="receipt-location-options">
-              {locations.map((loc) => (
-                <option key={loc.id} value={loc.name} />
-              ))}
-            </datalist>
-          )}
+            onChange={(e) => setFormData({ ...formData, location: e.target.value })}
+            className="w-full px-2 py-1 border rounded text-sm bg-white"
+          >
+            <option value="">Select a location</option>
+            {locations.map((loc) => (
+              <option key={loc.id} value={loc.name}>{loc.name}</option>
+            ))}
+            {formData.location && !locations.some(l => l.name === formData.location) && (
+              <option value={formData.location}>{formData.location} (previous)</option>
+            )}
+          </select>
         </div>
         <div>
           <label className="block text-xs font-medium text-gray-600 mb-0.5">

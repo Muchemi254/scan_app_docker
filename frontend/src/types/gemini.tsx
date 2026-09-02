@@ -58,8 +58,12 @@ export const ENTRY_TYPE_OPTIONS = [
   { value: 'note', label: 'Note' },
 ] as const;
 
-export const entryTypeLabel = (t?: string): string =>
-  ENTRY_TYPE_OPTIONS.find((o) => o.value === t)?.label ?? 'Expense';
+export const entryTypeLabel = (t?: string): string => {
+  const found = ENTRY_TYPE_OPTIONS.find((o) => o.value === t)?.label;
+  if (found) return found;
+  if (!t) return 'Expense';
+  return t.charAt(0).toUpperCase() + t.slice(1).replace(/_/g, ' ');
+};
 
 export interface ReceiptItem {
   name: string;
