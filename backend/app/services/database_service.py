@@ -102,6 +102,22 @@ _RECEIPT_COLS = (
     "tax_rate, file_type, pdf_page_count, scanned_at, created_at, updated_at"
 )
 
+# Allowlisted sort keys for GET /receipts etc. (server-side ORDER BY).
+# Invalid/unknown keys fall back to created_at — never interpolate raw input.
+_RECEIPT_SORT_COLUMNS = {
+    "created_at": "created_at",
+    "updated_at": "updated_at",
+    "receipt_date": "receipt_date",
+    "supplier": "supplier",
+    "total_amount": "total_amount",
+    "tax_amount": "tax_amount",
+    "category": "category",
+    "status": "status",
+    "invoice_number": "invoice_number",
+    "entry_type": "entry_type",
+    "batch_title": "batch_title",
+}
+
 
 def _receipt_row_to_dict(
     row, items: Optional[List[dict]] = None
@@ -424,12 +440,16 @@ class DatabaseService:
         has_image: Optional[bool] = None,
         entry_type: Optional[str] = None,
         has_pdf: Optional[bool] = None,
+        sort_by: Optional[str] = None,
+        order: str = "desc",
     ) -> tuple:
         """List receipts with filters and pagination. Returns (receipts, total).
 
         entry_type: 'expense' | 'quotation' | 'proforma' | 'deposit' | 'note'
         | 'non_expense' (any non-expense type) | None (all).
         has_pdf: restrict to PDF receipts (True) or image-only (False).
+        sort_by/order: allowlisted server-side sorting (id tiebreaker keeps
+        OFFSET pagination stable when rows share a sort key).
         """
         pool = await get_pool()
         async with pool.acquire() as conn:
@@ -491,18 +511,19 @@ class DatabaseService:
             where_clause = " AND ".join(conditions)
             params.extend([limit, skip])
 
-            # Explicit column list — NEVER `SELECT *` here: receipts carries
-            # image_bytes/thumb_bytes TOAST payloads (~hundreds of KB each).
-            # Listing 1000s of rows for analytics/list views would pull the
-            # whole mirror into memory and OOM the backend on data-heavy
-            # accounts (dashboard + cleaning pages). _receipt_row_to_dict
-            # only reads the columns below.
+            # Server-side sorting — allowlisted; anything unknown falls back
+            # to created_at. A deterministic id tiebreaker keeps OFFSET
+            # pagination stable when many rows share the sort value.
+            direction = "ASC" if (order or "").lower() == "asc" else "DESC"
+            sort_col = _RECEIPT_SORT_COLUMNS.get(sort_by or "", "created_at")
+            order_clause = f"{sort_col} {direction}, id {direction}"
+
             rows = await conn.fetch(
                 f"""
                 SELECT {_RECEIPT_COLS}, COUNT(*) OVER() AS full_count
                 FROM receipts
                 WHERE {where_clause}
-                ORDER BY created_at DESC
+                ORDER BY {order_clause}
                 LIMIT ${param_idx} OFFSET ${param_idx + 1}
                 """,
                 *params,

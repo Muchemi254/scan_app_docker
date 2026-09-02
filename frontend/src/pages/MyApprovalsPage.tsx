@@ -10,7 +10,9 @@ import {
 } from '../utils/receiptStatus';
 import ReviewPanel from '../components/ReviewPanel';
 import SearchBar from '../components/SearchBar';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import ReceiptsTableView from '../components/ReceiptsTableView';
+import { exportApi } from '../services/api';
+import { ChevronDown, ChevronRight, Table2, LayoutGrid } from 'lucide-react';
 
 type Tab = 'pending' | 'approved' | 'rejected';
 
@@ -58,6 +60,17 @@ const MyApprovalsPage = () => {
 
   // View modal — shows the shared ReviewPanel with admin actions disabled
   const [viewTarget, setViewTarget] = useState<any | null>(null);
+
+  // View mode toggle — table (default) vs grouped cards
+  const VIEW_KEY = 'scanapp-myapprovals-view';
+  const [viewMode, setViewMode] = useState<'table' | 'grouped'>(() =>
+    localStorage.getItem(VIEW_KEY) === 'grouped' ? 'grouped' : 'table'
+  );
+  const [tablePage, setTablePage] = useState(1);
+  const [tablePageSize, setTablePageSize] = useState(25);
+  const [tableSortBy, setTableSortBy] = useState<string | null>(null);
+  const [tableSortOrder, setTableSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [exporting, setExporting] = useState(false);
 
   // Collapsible batch groups (default collapsed so the list stays short)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -228,6 +241,44 @@ const MyApprovalsPage = () => {
     }
   }
 
+  // Table view — client-side sort + pagination over current tab's filtered rows
+  const tableSorted = useMemo(() => {
+    if (!tableSortBy) return listForTab;
+    const dir = tableSortOrder === 'asc' ? 1 : -1;
+    const colMap: Record<string, string> = {
+      receipt_date: 'receiptDate', receiptDate: 'receiptDate',
+      supplier: 'supplier', total_amount: 'totalAmount', totalAmount: 'totalAmount',
+      tax_amount: 'taxAmount', taxAmount: 'taxAmount', category: 'category',
+      status: 'status', invoice_number: 'invoiceNumber', invoiceNumber: 'invoiceNumber',
+      entry_type: 'entryType', entryType: 'entryType', batch_title: 'batchTitle', batchTitle: 'batchTitle',
+    };
+    const key = colMap[tableSortBy] || tableSortBy;
+    return [...listForTab].sort((a: any, b: any) => {
+      const av = String(a[key] ?? a[key.replace(/([A-Z])/g, '_$1').toLowerCase()] ?? '').toLowerCase();
+      const bv = String(b[key] ?? b[key.replace(/([A-Z])/g, '_$1').toLowerCase()] ?? '').toLowerCase();
+      if (!isNaN(Number(av)) && !isNaN(Number(bv)) && av && bv) return (Number(av) - Number(bv)) * dir;
+      return av.localeCompare(bv) * dir;
+    });
+  }, [listForTab, tableSortBy, tableSortOrder]);
+  const tableTotal = tableSorted.length;
+  const tableRows = useMemo(() => tableSorted.slice((tablePage - 1) * tablePageSize, tablePage * tablePageSize), [tableSorted, tablePage, tablePageSize]);
+  const tablePages = Math.max(1, Math.ceil(tableTotal / tablePageSize));
+  const handleTableSort = (sortBy: string | null, order: 'asc' | 'desc') => { setTableSortBy(sortBy); setTableSortOrder(order); setTablePage(1); };
+  const handleTablePage = (p: number, s: number) => { setTablePage(p); setTablePageSize(s); };
+  const handleTableExport = async () => {
+    setExporting(true);
+    try {
+      const cols = JSON.parse(localStorage.getItem(`scanapp-receipt-table-cols-${effectiveUid}`) || 'null') || undefined;
+      await exportApi.downloadReport({
+        format: 'csv', reportType: 'receipts', columns: cols,
+        status: tab === 'rejected' ? undefined : tab === 'pending' ? 'pending_approval' : 'processed',
+        rejected: tab === 'rejected' ? true : undefined,
+        category: filters.category || undefined, q: searchQuery.trim() || undefined,
+      });
+    } catch (e: any) { alert(e?.message || 'Export failed'); } finally { setExporting(false); }
+  };
+  useEffect(() => { setTablePage(1); }, [tab, filters, searchResults]);
+
   const totalPages = Math.max(1, Math.ceil((searchResults !== null ? searchTotal : listForTab.length) / 25));
 
   const TABS: { key: Tab; label: string }[] = [
@@ -290,6 +341,34 @@ const MyApprovalsPage = () => {
         </div>
       </div>
 
+      {/* View toggle */}
+      <div className="flex items-center justify-between mb-3 gap-2">
+        <div className="inline-flex rounded-lg border border-gray-300 bg-white p-0.5">
+          <button onClick={() => { setViewMode('table'); localStorage.setItem(VIEW_KEY, 'table'); }} className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium ${viewMode === 'table' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><Table2 className="h-4 w-4" /> Table</button>
+          <button onClick={() => { setViewMode('grouped'); localStorage.setItem(VIEW_KEY, 'grouped'); }} className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium ${viewMode === 'grouped' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><LayoutGrid className="h-4 w-4" /> Grouped</button>
+        </div>
+        <span className="text-xs text-gray-400">{searchResults !== null ? `${searchTotal} match${searchTotal === 1 ? '' : 'es'}` : `${listForTab.length} receipt${listForTab.length === 1 ? '' : 's'} · ${groups.length} batch${groups.length === 1 ? '' : 'es'}`}</span>
+      </div>
+
+      {viewMode === 'table' ? (
+        <ReceiptsTableView
+          userId={effectiveUid || null}
+          rows={tableRows}
+          total={tableTotal}
+          page={Math.min(tablePage, tablePages)}
+          pageSize={tablePageSize}
+          onPageChange={handleTablePage}
+          sortBy={tableSortBy}
+          sortOrder={tableSortOrder}
+          onSortChange={handleTableSort}
+          loading={loading}
+          onRowClick={(r: any) => setViewTarget(r)}
+          onExport={handleTableExport}
+          exporting={exporting}
+          emptyText={searchResults !== null ? 'No matches' : tab === 'pending' ? 'Nothing pending approval' : tab === 'approved' ? 'No approved documents yet' : 'No rejected documents'}
+        />
+      ) : (
+      <>
       {/* Expand/collapse all + count */}
       {groups.length > 0 && (
         <div className="flex items-center justify-between mb-2">
@@ -405,8 +484,8 @@ const MyApprovalsPage = () => {
           })}
         </div>
       )}
-
-      {searchResults !== null && totalPages > 1 && (
+      </> )}
+      {viewMode === 'grouped' && searchResults !== null && totalPages > 1 && (
         <div className="flex items-center justify-center gap-3 mt-4 text-sm text-gray-500">
           <button
             onClick={() => { const next = Math.max(1, page - 1); setPage(next); loadSearchPage(next); }}

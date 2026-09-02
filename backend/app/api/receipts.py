@@ -367,6 +367,8 @@ async def list_receipts(
     has_image: Optional[bool] = Query(None, alias="hasImage"),
     entry_type: Optional[str] = Query(None, alias="entryType"),
     has_pdf: Optional[bool] = Query(None, alias="hasPdf"),
+    sort_by: Optional[str] = Query(None, alias="sortBy"),
+    order: str = Query("desc", pattern="^(asc|desc)$"),
     current_user_id: str = Depends(get_current_user_id),
 ):
     """
@@ -381,6 +383,9 @@ async def list_receipts(
         batch_title: Filter by batchTitle (for gallery groupings)
         rejected: Only receipts whose latest admin decision was a rejection
         entry_type: expense | quotation | proforma | deposit | note | non_expense
+        sort_by: created_at | updated_at | receipt_date | supplier |
+            total_amount | category | status | invoice_number | entry_type
+        order: asc | desc (ignored unless sort_by is valid)
         current_user_id: Authenticated user
 
     Returns:
@@ -393,6 +398,7 @@ async def list_receipts(
             userId, skip=skip, limit=limit, status=status_filter,
             category=category, batch_title=batch_title, rejected=rejected,
             has_image=has_image, entry_type=entry_type, has_pdf=has_pdf,
+            sort_by=sort_by, order=order,
         )
 
         return ReceiptList(

@@ -6,7 +6,8 @@ import { useAuthStore } from '../stores/authStore';
 import { receiptStatusLabel, receiptStatusClass } from '../utils/receiptStatus';
 import ReviewPanel from '../components/ReviewPanel';
 import SearchBar from '../components/SearchBar';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import ReceiptsTableView from '../components/ReceiptsTableView';
+import { Table2, LayoutGrid, ChevronLeft, ChevronRight } from 'lucide-react';
 
 const PAGE_SIZE = 25;
 
@@ -37,6 +38,14 @@ const ApprovalsPage = () => {
   const [isEditing, setIsEditing] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 1024);
   const [page, setPage] = useState(1);
+  const VIEW_KEY = 'scanapp-approvals-view';
+  const [viewMode, setViewMode] = useState<'table' | 'cards'>(() =>
+    localStorage.getItem(VIEW_KEY) === 'cards' ? 'cards' : 'table'
+  );
+  const [tPage, setTPage] = useState(1);
+  const [tPageSize, setTPageSize] = useState(25);
+  const [tSortBy, setTSortBy] = useState<string | null>(null);
+  const [tSortOrder, setTSortOrder] = useState<'asc' | 'desc'>('desc');
   // Unsaved-changes confirm when switching receipts mid-edit (modal, no browser confirm)
   const [discardTarget, setDiscardTarget] = useState<string | null>(null);
 
@@ -199,7 +208,7 @@ const ApprovalsPage = () => {
     [sourceRows, filters],
   );
 
-  useEffect(() => { setPage(1); }, [filters, searchResults]);
+  useEffect(() => { setPage(1); setTPage(1); }, [filters, searchResults]);
 
   if (!isAdmin) {
     return (
@@ -241,6 +250,23 @@ const ApprovalsPage = () => {
   const pageItems = searchResults !== null
     ? filteredRows
     : filteredRows.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);
+
+  // Table view — client sort over filteredRows
+  const tableSorted = (() => {
+    if (!tSortBy) return filteredRows;
+    const dir = tSortOrder === 'asc' ? 1 : -1;
+    const m: Record<string, string> = { receipt_date: 'receipt_date', supplier: 'supplier', total_amount: 'total_amount', category: 'category', status: 'status', invoice_number: 'invoice_number', entry_type: 'entry_type', batch_title: 'batch_title', created_at: 'createdAt' };
+    const k = m[tSortBy] || tSortBy;
+    return [...filteredRows].sort((a: any, b: any) => {
+      const av = String(a[k] ?? '').toLowerCase();
+      const bv = String(b[k] ?? '').toLowerCase();
+      if (!isNaN(Number(av)) && !isNaN(Number(bv)) && av && bv) return (Number(av) - Number(bv)) * dir;
+      return av.localeCompare(bv) * dir;
+    });
+  })();
+  const tableTotal = tableSorted.length;
+  const tablePages = Math.max(1, Math.ceil(tableTotal / tPageSize));
+  const tableRows = tableSorted.slice((Math.min(tPage, tablePages) - 1) * tPageSize, Math.min(tPage, tablePages) * tPageSize);
 
   /* ── Sidebar contents (shared between desktop inline & mobile overlay) ── */
   const SidebarBody = (
@@ -357,7 +383,7 @@ const ApprovalsPage = () => {
   return (
     <div className="flex flex-col w-full h-[calc(100vh-4rem)] bg-gray-100">
 
-      {/* ── Top bar with sidebar toggle ── */}
+      {/* ── Top bar with sidebar toggle + view toggle ── */}
       <div className="flex-shrink-0 flex items-center gap-2 px-3 py-2 bg-white border-b shadow-sm">
         <button
           onClick={() => setSidebarOpen(o => !o)}
@@ -368,9 +394,29 @@ const ApprovalsPage = () => {
         </button>
         <h1 className="font-semibold text-sm text-gray-700">Pending Approvals</h1>
         <span className="text-xs text-gray-400">{displayTotal} across all users</span>
+        <div className="ml-auto inline-flex rounded-lg border border-gray-300 bg-white p-0.5">
+          <button onClick={() => { setViewMode('table'); localStorage.setItem(VIEW_KEY, 'table'); }} className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium ${viewMode === 'table' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><Table2 className="h-3.5 w-3.5" /> Table</button>
+          <button onClick={() => { setViewMode('cards'); localStorage.setItem(VIEW_KEY, 'cards'); }} className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium ${viewMode === 'cards' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><LayoutGrid className="h-3.5 w-3.5" /> Cards</button>
+        </div>
       </div>
 
-      {/* ── Main body: sidebar + detail ── */}
+      {viewMode === 'table' ? (
+        <div className="flex-1 overflow-auto p-4 bg-gray-100">
+          <ReceiptsTableView
+            userId={user?.uid || null}
+            rows={tableRows}
+            total={tableTotal}
+            page={Math.min(tPage, tablePages)}
+            pageSize={tPageSize}
+            onPageChange={(p, s) => { setTPage(p); setTPageSize(s); }}
+            sortBy={tSortBy}
+            sortOrder={tSortOrder}
+            onSortChange={(sb, o) => { setTSortBy(sb); setTSortOrder(o); setTPage(1); }}
+            loading={loading}
+            onRowClick={(r: any) => handleSelect(r.id)}
+          />
+        </div>
+      ) : (
       <div className="flex flex-1 overflow-hidden relative">
 
         {/* Desktop sidebar (inline, width-transitions) */}
@@ -417,6 +463,7 @@ const ApprovalsPage = () => {
           )}
         </div>
       </div>
+      )}
 
       {/* ── Unsaved-changes modal when switching receipts mid-edit ── */}
       {discardTarget && (

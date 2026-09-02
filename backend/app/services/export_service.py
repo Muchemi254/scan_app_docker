@@ -16,7 +16,7 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 
 logger = logging.getLogger(__name__)
 
-RECEIPT_FIELDS = ["supplier", "totalAmount", "taxAmount", "receiptDate", "category", "invoiceNumber", "kraPin", "buyerKraPin", "cuInvoice", "batchTitle", "status"]
+RECEIPT_FIELDS = ["supplier", "totalAmount", "taxAmount", "receiptDate", "category", "invoiceNumber", "kraPin", "buyerKraPin", "cuInvoice", "batchTitle", "status", "entryType", "location", "fileType"]
 RECEIPT_LABELS = {
     "supplier": "Supplier", "totalAmount": "Total", "taxAmount": "Tax",
     "receiptDate": "Date", "category": "Category", "invoiceNumber": "Invoice #",

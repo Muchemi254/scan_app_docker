@@ -50,3 +50,12 @@ class ExportRequest(BaseModel):
     # non-expense entries in the unfiltered export.
     entryType: Optional[str] = None
     includeNonExpense: bool = False
+    # Table-view "export the current filter" support — mirrors the same
+    # filters the list endpoints accept so the table export matches the
+    # on-screen selection exactly.
+    status: Optional[str] = None
+    batchTitle: Optional[str] = None
+    rejected: bool = False
+    hasImage: Optional[bool] = None
+    hasPdf: Optional[bool] = None
+    q: Optional[str] = None

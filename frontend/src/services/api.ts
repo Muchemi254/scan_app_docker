@@ -241,6 +241,10 @@ export const receiptApi = {
     if (filters?.batchTitle) params.append('batchTitle', filters.batchTitle);
     if (filters?.rejected) params.append('rejected', String(filters.rejected));
     if (filters?.hasImage !== undefined) params.append('hasImage', String(filters.hasImage));
+    if (filters?.entryType) params.append('entryType', filters.entryType);
+    if (filters?.hasPdf !== undefined) params.append('hasPdf', String(filters.hasPdf));
+    if (filters?.sortBy) params.append('sortBy', filters.sortBy);
+    if (filters?.order) params.append('order', filters.order);
 
     return apiRequest('GET', `/receipts?${params.toString()}`);
   },
@@ -778,6 +782,12 @@ export const exportApi = {
     includeNonExpense?: boolean;
     pivotConfig?: { rowField: string; colField: string; valueField: string };
     columns?: string[];
+    status?: string;
+    batchTitle?: string;
+    rejected?: boolean;
+    hasImage?: boolean;
+    hasPdf?: boolean;
+    q?: string;
   }): Promise<void> {
     const authorization = await getAuthHeader();
     const userId = getScopeUid();

@@ -1,14 +1,16 @@
 import { useEffect, useState, useCallback } from 'react';
-import { receiptApi } from '../services/api';
+import { receiptApi, exportApi } from '../services/api';
 import ImageViewer from '../components/ImageViewer';
 import SearchBar from '../components/SearchBar';
+import ReceiptsTableView, { RECEIPT_TABLE_COLUMNS } from '../components/ReceiptsTableView';
 import { entryTypeLabel } from '../types/gemini';
 import {
-  Image, X, ChevronLeft, ChevronRight,
+  Image, X, ChevronLeft, ChevronRight, LayoutGrid, Table2,
   FolderOpen, Calendar, Layers, ArrowLeft
 } from 'lucide-react';
 
 const PAGE_SIZE = 20;
+const VIEW_MODE_KEY = 'scanapp-gallery-view';
 
 interface ReceiptGroup {
   batchTitle: string;
@@ -20,6 +22,15 @@ interface ReceiptGroup {
 }
 
 const GalleryPage = ({ userId }: { userId: string | null }) => {
+  // View mode: text table (default) vs image gallery — persisted per browser.
+  const [viewMode, setViewMode] = useState<'table' | 'gallery'>(() =>
+    localStorage.getItem(VIEW_MODE_KEY) === 'gallery' ? 'gallery' : 'table'
+  );
+  const switchView = (mode: 'table' | 'gallery') => {
+    setViewMode(mode);
+    localStorage.setItem(VIEW_MODE_KEY, mode);
+  };
+
   // Groups state
   const [groups, setGroups] = useState<ReceiptGroup[]>([]);
   const [loadingGroups, setLoadingGroups] = useState(true);
@@ -30,6 +41,17 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
   const [loadingReceipts, setLoadingReceipts] = useState(false);
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
+
+  // Table view state (server-side sort + pagination)
+  const [tableRows, setTableRows] = useState<any[]>([]);
+  const [tableTotal, setTableTotal] = useState(0);
+  const [tableLoading, setTableLoading] = useState(false);
+  const [tPage, setTPage] = useState(1);
+  const [tPageSize, setTPageSize] = useState(50);
+  const [tSortBy, setTSortBy] = useState<string | null>(null);
+  const [tSortOrder, setTSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [batchFilter, setBatchFilter] = useState<string>('__all__');
+  const [exporting, setExporting] = useState(false);
 
   // Search
   const [searchResults, setSearchResults] = useState<any[] | null>(null);
@@ -61,6 +83,84 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
       .finally(() => setLoadingGroups(false));
   }, [userId]);
 
+  // Reset table page on scope changes
+  useEffect(() => { setTPage(1); setSearchResults(null); setSearchTotal(0); setSearchQuery(''); }, [activeGroup, batchFilter, tPageSize]);
+
+  // Initial table load (default view) and reload when scope changes
+  useEffect(() => {
+    if (viewMode !== 'table' || loadingGroups) return;
+    const scope = activeGroup ?? batchFilter;
+    if (!activeGroup) {
+      loadTable(1, tPageSize, tSortBy, tSortOrder, scope === '__all__' ? undefined : scope);
+    }
+  }, [viewMode, batchFilter, tPageSize, loadingGroups]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (viewMode !== 'table' || !activeGroup) return;
+    loadTable(1, tPageSize, tSortBy, tSortOrder, activeGroup);
+  }, [activeGroup]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Table fetch — scoped to activeGroup when inside one, else batchFilter
+  const loadTable = useCallback(async (p: number, size: number, sortBy: string | null, order: 'asc' | 'desc', batch?: string) => {
+    if (!userId) return;
+    setTableLoading(true);
+    try {
+      const filters: any = { hasImage: true, sortBy: sortBy ?? undefined, order };
+      const scope = batch ?? batchFilter;
+      if (scope && scope !== '__all__') {
+        filters.batchTitle = scope === 'Ungrouped' ? '__ungrouped__' : scope;
+      }
+      const res = await receiptApi.list((p - 1) * size, size, filters);
+      setTableRows((res.items || []).filter((r: any) => r.imageUrl));
+      setTableTotal(res.total);
+    } catch (err) {
+      console.error('Failed to load receipts table:', err);
+    } finally {
+      setTableLoading(false);
+    }
+  }, [userId, batchFilter]);
+
+  const handleSortChange = (sortBy: string | null, order: 'asc' | 'desc') => {
+    if (searchResults !== null) return; // search results are relevance-ordered
+    setTSortBy(sortBy);
+    setTSortOrder(order);
+    setTPage(1);
+    loadTable(1, tPageSize, sortBy, order);
+  };
+
+  const handleTablePage = (p: number, size: number) => {
+    setTPage(p);
+    setTPageSize(size);
+    if (searchResults !== null) {
+      if (!searchQuery.trim() || !activeGroup) return;
+      loadSearchPage(p, size);
+      return;
+    }
+    loadTable(p, size, tSortBy, tSortOrder);
+  };
+
+  const tableExport = async () => {
+    if (!userId) return;
+    setExporting(true);
+    try {
+      const scope = activeGroup ?? batchFilter;
+      await exportApi.downloadReport({
+        format: 'csv',
+        reportType: 'receipts',
+        columns: RECEIPT_TABLE_COLUMNS.map(c => c.key),
+        includeNonExpense: true,
+        q: searchQuery.trim() || undefined,
+        batchTitle: scope && scope !== '__all__'
+          ? (scope === 'Ungrouped' ? '__ungrouped__' : scope)
+          : undefined,
+      });
+    } catch (e: any) {
+      console.error('Export failed:', e);
+      alert(e?.message || 'Export failed');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   // Load receipts for active group
   const loadReceipts = useCallback(async (groupTitle: string, pageNum: number) => {
     if (!userId) return;
@@ -89,7 +189,11 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
     setPage(1);
     setSearchResults(null);
     setSearchTotal(0);
-    loadReceipts(groupTitle, 1);
+    if (viewMode === 'table') {
+      loadTable(1, tPageSize, null, 'desc', groupTitle);
+    } else {
+      loadReceipts(groupTitle, 1);
+    }
   };
 
   // Back to groups
@@ -111,11 +215,11 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
     }
   };
 
-  async function loadSearchPage(pageNum: number) {
+  async function loadSearchPage(pageNum: number, size: number = PAGE_SIZE) {
     if (!searchQuery.trim() || !activeGroup) return;
     try {
       const batchTitle = activeGroup === 'Ungrouped' ? '__ungrouped__' : activeGroup;
-      const result = await receiptApi.search(searchQuery.trim(), PAGE_SIZE, (pageNum - 1) * PAGE_SIZE, {
+      const result = await receiptApi.search(searchQuery.trim(), size, (pageNum - 1) * size, {
         batchTitle,
         hasImage: true,
       });
@@ -144,16 +248,112 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
     );
   }
 
-  // ── Group grid view ──
+  // View-mode toggle (shared by both layouts)
+  const viewToggle = (
+    <div className="inline-flex rounded-lg border border-gray-300 bg-white p-0.5">
+      <button
+        onClick={() => switchView('table')}
+        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium ${
+          viewMode === 'table' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'
+        }`}
+        title="Text table view"
+      >
+        <Table2 className="h-4 w-4" /> Table
+      </button>
+      <button
+        onClick={() => switchView('gallery')}
+        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium ${
+          viewMode === 'gallery' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'
+        }`}
+        title="Image gallery view"
+      >
+        <LayoutGrid className="h-4 w-4" /> Gallery
+      </button>
+    </div>
+  );
+
+  // ── Group grid view (or all-receipts table at the top level) ──
   if (!activeGroup) {
+    if (viewMode === 'table') {
+      return (
+        <div className="max-w-7xl mx-auto px-4 py-6">
+          <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
+            <div className="flex items-center gap-3">
+              <Table2 className="h-7 w-7 text-blue-600" />
+              <div>
+                <h1 className="text-2xl font-bold text-gray-900">All Receipts</h1>
+                <p className="text-sm text-gray-500">
+                  {tableTotal.toLocaleString()} receipt{tableTotal !== 1 ? 's' : ''}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <select
+                value={batchFilter}
+                onChange={e => { setBatchFilter(e.target.value); setTPage(1); loadTable(1, tPageSize, null, 'desc', e.target.value === '__all__' ? undefined : e.target.value); }}
+                className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg bg-white"
+                aria-label="Filter by batch"
+              >
+                <option value="__all__">All batches</option>
+                {groups.map(g => (
+                  <option key={g.batchTitle} value={g.batchTitle}>{g.batchTitle}</option>
+                ))}
+              </select>
+              {viewToggle}
+            </div>
+          </div>
+
+          <ReceiptsTableView
+            userId={userId}
+            rows={tableRows}
+            total={tableTotal}
+            page={tPage}
+            pageSize={tPageSize}
+            onPageChange={handleTablePage}
+            sortBy={tSortBy}
+            sortOrder={tSortOrder}
+            onSortChange={handleSortChange}
+            loading={tableLoading}
+            onRowClick={setSelectedReceipt}
+            onExport={tableExport}
+            exporting={exporting}
+            emptyText="No receipts match the current filter"
+          />
+          {selectedReceipt && (
+            <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4" onClick={() => setSelectedReceipt(null)}>
+              <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                <div className="flex items-center justify-between px-5 py-4 border-b sticky top-0 bg-white z-10">
+                  <div className="min-w-0">
+                    <h2 className="font-bold text-lg truncate">{selectedReceipt.supplier}</h2>
+                    <p className="text-sm text-gray-500 truncate">
+                      {selectedReceipt.category} — {selectedReceipt.receiptDate}
+                    </p>
+                  </div>
+                  <button onClick={() => setSelectedReceipt(null)} className="p-1.5 rounded hover:bg-gray-100 text-gray-500 flex-shrink-0">
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+                <div className="p-4">
+                  <ImageViewer imageUrl={selectedReceipt.imageUrl} altText={selectedReceipt.supplier || 'Receipt'} containerClass="min-h-[50vh] max-h-[70vh]" fileType={selectedReceipt.fileType} />
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
     return (
       <div className="max-w-7xl mx-auto px-4 py-6">
-        <div className="flex items-center gap-3 mb-6">
-          <FolderOpen className="h-7 w-7 text-blue-600" />
-          <h1 className="text-2xl font-bold text-gray-900">Receipt Gallery</h1>
-          <span className="text-sm text-gray-500 font-medium">
-            ({groups.length} {groups.length === 1 ? 'group' : 'groups'})
-          </span>
+        <div className="flex items-center justify-between gap-3 mb-6 flex-wrap">
+          <div className="flex items-center gap-3">
+            <FolderOpen className="h-7 w-7 text-blue-600" />
+            <h1 className="text-2xl font-bold text-gray-900">Receipt Gallery</h1>
+            <span className="text-sm text-gray-500 font-medium">
+              ({groups.length} {groups.length === 1 ? 'group' : 'groups'})
+            </span>
+          </div>
+          {viewToggle}
         </div>
 
         {groups.length === 0 ? (
@@ -261,8 +461,29 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
             })}
           />
         </div>
+        {viewToggle}
       </div>
 
+      {/* Table mode: same group scope, text rows */}
+      {viewMode === 'table' ? (
+        <ReceiptsTableView
+          userId={userId}
+          rows={searchResults !== null ? (searchResults || []) : tableRows}
+          total={searchResults !== null ? searchTotal : tableTotal}
+          page={tPage}
+          pageSize={tPageSize}
+          onPageChange={handleTablePage}
+          sortBy={searchResults !== null ? null : tSortBy}
+          sortOrder={tSortOrder}
+          onSortChange={handleSortChange}
+          loading={searchResults !== null ? false : tableLoading}
+          onRowClick={setSelectedReceipt}
+          onExport={tableExport}
+          exporting={exporting}
+          emptyText={searchResults !== null ? 'No matches found' : 'No receipts in this group'}
+        />
+      ) : (
+      <>
       {/* Loading spinner */}
       {loadingReceipts ? (
         <div className="flex items-center justify-center py-20">
@@ -363,6 +584,8 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
             </div>
           )}
         </>
+      )}
+      </>
       )}
 
       {/* Fullscreen receipt viewer */}

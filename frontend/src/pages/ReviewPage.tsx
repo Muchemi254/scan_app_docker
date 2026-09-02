@@ -7,7 +7,8 @@ import { receiptApi } from '../services/api';
 import type { ReceiptData } from '../types/gemini';
 import ReviewPanel from '../components/ReviewPanel';
 import SearchBar from '../components/SearchBar';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import ReceiptsTableView from '../components/ReceiptsTableView';
+import { Table2, LayoutGrid, ChevronLeft, ChevronRight } from 'lucide-react';
 
 const PAGE_SIZE = 25;
 
@@ -60,6 +61,14 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 1024);
   const [page, setPage] = useState(1);
+  const VIEW_KEY = 'scanapp-review-view';
+  const [viewMode, setViewMode] = useState<'table' | 'cards'>(() =>
+    localStorage.getItem(VIEW_KEY) === 'cards' ? 'cards' : 'table'
+  );
+  const [tPage, setTPage] = useState(1);
+  const [tPageSize, setTPageSize] = useState(25);
+  const [tSortBy, setTSortBy] = useState<string | null>(null);
+  const [tSortOrder, setTSortOrder] = useState<'asc' | 'desc'>('desc');
 
   useEffect(() => {
     if (!userId) return;
@@ -145,6 +154,22 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
     ? receipts
     : receipts.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);
   const selected = selectedReceipt || receipts.find(r => r.id === selectedId) || null;
+
+  const tableSorted = (() => {
+    if (!tSortBy) return receipts;
+    const dir = tSortOrder === 'asc' ? 1 : -1;
+    const m: Record<string, string> = { receipt_date: 'receiptDate', supplier: 'supplier', total_amount: 'totalAmount', category: 'category', status: 'status', invoice_number: 'invoiceNumber', batch_title: 'batchTitle' };
+    const k = m[tSortBy] || tSortBy;
+    return [...receipts].sort((a: any, b: any) => {
+      const av = String((a as any)[k] ?? '').toLowerCase();
+      const bv = String((b as any)[k] ?? '').toLowerCase();
+      if (!isNaN(Number(av)) && !isNaN(Number(bv)) && av && bv) return (Number(av) - Number(bv)) * dir;
+      return av.localeCompare(bv) * dir;
+    });
+  })();
+  const tableTotal = tableSorted.length;
+  const tablePages = Math.max(1, Math.ceil(tableTotal / tPageSize));
+  const tableRows = tableSorted.slice((Math.min(tPage, tablePages) - 1) * tPageSize, Math.min(tPage, tablePages) * tPageSize);
 
   if (loading && receipts.length === 0) {
     return (
@@ -249,7 +274,7 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
   return (
     <div className="flex flex-col w-full h-[calc(100vh-4rem)] bg-gray-100">
 
-      {/* ── Top bar with sidebar toggle ── */}
+      {/* ── Top bar with sidebar toggle + view toggle ── */}
       <div className="flex-shrink-0 flex items-center gap-2 px-3 py-2 bg-white border-b shadow-sm">
         <button
           onClick={() => setSidebarOpen(o => !o)}
@@ -259,9 +284,29 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
           {sidebarOpen ? <ChevronLeft className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
         </button>
         <span className="font-semibold text-sm text-gray-700">Needs Review</span>
+        <div className="ml-auto inline-flex rounded-lg border border-gray-300 bg-white p-0.5">
+          <button onClick={() => { setViewMode('table'); localStorage.setItem(VIEW_KEY, 'table'); }} className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium ${viewMode === 'table' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><Table2 className="h-3.5 w-3.5" /> Table</button>
+          <button onClick={() => { setViewMode('cards'); localStorage.setItem(VIEW_KEY, 'cards'); }} className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium ${viewMode === 'cards' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><LayoutGrid className="h-3.5 w-3.5" /> Cards</button>
+        </div>
       </div>
 
-      {/* ── Main body: sidebar + detail ── */}
+      {viewMode === 'table' ? (
+        <div className="flex-1 overflow-auto p-4 bg-gray-100">
+          <ReceiptsTableView
+            userId={userId}
+            rows={tableRows}
+            total={tableTotal}
+            page={Math.min(tPage, tablePages)}
+            pageSize={tPageSize}
+            onPageChange={(p, s) => { setTPage(p); setTPageSize(s); }}
+            sortBy={tSortBy}
+            sortOrder={tSortOrder}
+            onSortChange={(sb, o) => { setTSortBy(sb); setTSortOrder(o); setTPage(1); }}
+            loading={loading}
+            onRowClick={(r: any) => setSelectedId(r.id)}
+          />
+        </div>
+      ) : (
       <div className="flex flex-1 overflow-hidden relative">
 
         {/* Desktop sidebar (inline, width-transitions) */}
@@ -293,6 +338,7 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
           )}
         </div>
       </div>
+      )}
     </div>
   );
 };
