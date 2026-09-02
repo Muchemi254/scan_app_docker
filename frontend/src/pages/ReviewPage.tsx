@@ -69,6 +69,7 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
   const [tPageSize, setTPageSize] = useState(25);
   const [tSortBy, setTSortBy] = useState<string | null>(null);
   const [tSortOrder, setTSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!userId) return;
@@ -155,13 +156,27 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
     : receipts.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);
   const selected = selectedReceipt || receipts.find(r => r.id === selectedId) || null;
 
+  const tableFiltered = (() => {
+    const entries = Object.entries(columnFilters).filter(([, v]) => v);
+    if (entries.length === 0) return receipts;
+    return receipts.filter((r: any) => {
+      for (const [k, v] of entries) {
+        let val: string;
+        if (k === 'itemCount') val = String(r.items?.length ?? '');
+        else if (k === 'fileType') val = r.fileType === 'application/pdf' ? 'pdf' : '';
+        else val = String((r as any)[k] ?? '');
+        if (!val.toLowerCase().includes(String(v).toLowerCase())) return false;
+      }
+      return true;
+    });
+  })();
   const tableSorted = (() => {
-    if (!tSortBy) return receipts;
+    if (!tSortBy) return tableFiltered;
     const dir = tSortOrder === 'asc' ? 1 : -1;
-    const m: Record<string, string> = { receipt_date: 'receiptDate', supplier: 'supplier', total_amount: 'totalAmount', category: 'category', status: 'status', invoice_number: 'invoiceNumber', batch_title: 'batchTitle' };
+    const m: Record<string, string> = { receipt_date: 'receiptDate', supplier: 'supplier', total_amount: 'totalAmount', category: 'category', status: 'status', invoice_number: 'invoiceNumber', batch_title: 'batchTitle', location: 'location', kra_pin: 'kraPin', kraPin: 'kraPin', buyer_kra_pin: 'buyerKraPin', buyerKraPin: 'buyerKraPin', cu_invoice: 'cuInvoice', cuInvoice: 'cuInvoice', file_type: 'fileType', fileType: 'fileType' };
     const k = m[tSortBy] || tSortBy;
     const isDateKey = k === 'receiptDate';
-    return [...receipts].sort((a: any, b: any) => {
+    return [...tableFiltered].sort((a: any, b: any) => {
       const avRaw = (a as any)[k] ?? '';
       const bvRaw = (b as any)[k] ?? '';
       if (isDateKey) {
@@ -315,6 +330,8 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
             sortBy={tSortBy}
             sortOrder={tSortOrder}
             onSortChange={(sb, o) => { setTSortBy(sb); setTSortOrder(o); setTPage(1); }}
+            columnFilters={columnFilters}
+            onColumnFilter={(k, v) => { setColumnFilters(prev => { const n = { ...prev, [k]: v }; if (!v) delete n[k]; return n; }); setTPage(1); }}
             loading={loading}
             onRowClick={(r: any) => setSelectedId(r.id)}
           />

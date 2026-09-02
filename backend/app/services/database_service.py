@@ -116,6 +116,11 @@ _RECEIPT_SORT_COLUMNS = {
     "invoice_number": "invoice_number",
     "entry_type": "entry_type",
     "batch_title": "batch_title",
+    "location": "location",
+    "kra_pin": "kra_pin",
+    "buyer_kra_pin": "buyer_kra_pin",
+    "cu_invoice": "cu_invoice",
+    "file_type": "file_type",
 }
 
 
@@ -442,6 +447,12 @@ class DatabaseService:
         has_pdf: Optional[bool] = None,
         sort_by: Optional[str] = None,
         order: str = "desc",
+        supplier: Optional[str] = None,
+        location: Optional[str] = None,
+        invoice_number: Optional[str] = None,
+        kra_pin: Optional[str] = None,
+        buyer_kra_pin: Optional[str] = None,
+        cu_invoice: Optional[str] = None,
     ) -> tuple:
         """List receipts with filters and pagination. Returns (receipts, total).
 
@@ -507,6 +518,31 @@ class DatabaseService:
                 conditions.append(
                     "(file_type IS NULL OR file_type <> 'application/pdf')"
                 )
+            # Additional column filters (ILIKE contains for text search)
+            if supplier:
+                params.append(f"%{supplier}%")
+                conditions.append(f"supplier ILIKE ${param_idx}")
+                param_idx += 1
+            if location:
+                params.append(f"%{location}%")
+                conditions.append(f"location ILIKE ${param_idx}")
+                param_idx += 1
+            if invoice_number:
+                params.append(f"%{invoice_number}%")
+                conditions.append(f"invoice_number ILIKE ${param_idx}")
+                param_idx += 1
+            if kra_pin:
+                params.append(f"%{kra_pin}%")
+                conditions.append(f"kra_pin ILIKE ${param_idx}")
+                param_idx += 1
+            if buyer_kra_pin:
+                params.append(f"%{buyer_kra_pin}%")
+                conditions.append(f"buyer_kra_pin ILIKE ${param_idx}")
+                param_idx += 1
+            if cu_invoice:
+                params.append(f"%{cu_invoice}%")
+                conditions.append(f"cu_invoice ILIKE ${param_idx}")
+                param_idx += 1
 
             where_clause = " AND ".join(conditions)
             params.extend([limit, skip])

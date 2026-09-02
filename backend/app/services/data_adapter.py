@@ -60,11 +60,15 @@ class DataService:
         has_image: Optional[bool] = None, entry_type: Optional[str] = None,
         has_pdf: Optional[bool] = None, sort_by: Optional[str] = None,
         order: str = "desc",
+        supplier: Optional[str] = None, location: Optional[str] = None,
+        invoice_number: Optional[str] = None, kra_pin: Optional[str] = None,
+        buyer_kra_pin: Optional[str] = None, cu_invoice: Optional[str] = None,
     ) -> tuple:
         db, _ = cls._backend()
         return await db.list_receipts(
             user_id, skip, limit, status, category, batch_title, rejected,
             has_image, entry_type, has_pdf, sort_by, order,
+            supplier, location, invoice_number, kra_pin, buyer_kra_pin, cu_invoice,
         )
 
     @classmethod

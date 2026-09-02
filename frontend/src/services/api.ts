@@ -243,6 +243,12 @@ export const receiptApi = {
     if (filters?.hasImage !== undefined) params.append('hasImage', String(filters.hasImage));
     if (filters?.entryType) params.append('entryType', filters.entryType);
     if (filters?.hasPdf !== undefined) params.append('hasPdf', String(filters.hasPdf));
+    if (filters?.supplier) params.append('supplier', filters.supplier);
+    if (filters?.location) params.append('location', filters.location);
+    if (filters?.invoiceNumber) params.append('invoiceNumber', filters.invoiceNumber);
+    if (filters?.kraPin) params.append('kraPin', filters.kraPin);
+    if (filters?.buyerKraPin) params.append('buyerKraPin', filters.buyerKraPin);
+    if (filters?.cuInvoice) params.append('cuInvoice', filters.cuInvoice);
     if (filters?.sortBy) params.append('sortBy', filters.sortBy);
     if (filters?.order) params.append('order', filters.order);
 

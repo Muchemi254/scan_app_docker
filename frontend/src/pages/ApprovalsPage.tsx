@@ -46,6 +46,7 @@ const ApprovalsPage = () => {
   const [tPageSize, setTPageSize] = useState(25);
   const [tSortBy, setTSortBy] = useState<string | null>(null);
   const [tSortOrder, setTSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
   // Unsaved-changes confirm when switching receipts mid-edit (modal, no browser confirm)
   const [discardTarget, setDiscardTarget] = useState<string | null>(null);
 
@@ -251,14 +252,28 @@ const ApprovalsPage = () => {
     ? filteredRows
     : filteredRows.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);
 
-  // Table view — client sort over filteredRows (date-aware)
+  // Table view — client filter + sort over filteredRows (date-aware)
+  const tableFiltered = (() => {
+    const entries = Object.entries(columnFilters).filter(([, v]) => v);
+    if (entries.length === 0) return filteredRows;
+    return filteredRows.filter((r: any) => {
+      for (const [k, v] of entries) {
+        let val: string;
+        if (k === 'itemCount') val = String(r.items?.length ?? '');
+        else if (k === 'fileType') val = r.fileType === 'application/pdf' ? 'pdf' : '';
+        else val = String(r[k] ?? r[k.replace(/([A-Z])/g, (_: string, c: string) => `_${c.toLowerCase()}`)] ?? '');
+        if (!val.toLowerCase().includes(String(v).toLowerCase())) return false;
+      }
+      return true;
+    });
+  })();
   const tableSorted = (() => {
-    if (!tSortBy) return filteredRows;
+    if (!tSortBy) return tableFiltered;
     const dir = tSortOrder === 'asc' ? 1 : -1;
-    const m: Record<string, string> = { receipt_date: 'receipt_date', receiptDate: 'receipt_date', supplier: 'supplier', total_amount: 'total_amount', category: 'category', status: 'status', invoice_number: 'invoice_number', entry_type: 'entry_type', batch_title: 'batch_title', created_at: 'createdAt' };
+    const m: Record<string, string> = { receipt_date: 'receipt_date', receiptDate: 'receipt_date', supplier: 'supplier', total_amount: 'total_amount', category: 'category', status: 'status', invoice_number: 'invoice_number', entry_type: 'entry_type', batch_title: 'batch_title', created_at: 'createdAt', location: 'location', kra_pin: 'kraPin', kraPin: 'kraPin', buyer_kra_pin: 'buyerKraPin', buyerKraPin: 'buyerKraPin', cu_invoice: 'cuInvoice', cuInvoice: 'cuInvoice', file_type: 'fileType', fileType: 'fileType' };
     const k = m[tSortBy] || tSortBy;
     const isDateKey = k === 'receipt_date';
-    return [...filteredRows].sort((a: any, b: any) => {
+    return [...tableFiltered].sort((a: any, b: any) => {
       const avRaw = a[k] ?? '';
       const bvRaw = b[k] ?? '';
       if (isDateKey) {
@@ -425,6 +440,8 @@ const ApprovalsPage = () => {
             sortBy={tSortBy}
             sortOrder={tSortOrder}
             onSortChange={(sb, o) => { setTSortBy(sb); setTSortOrder(o); setTPage(1); }}
+            columnFilters={columnFilters}
+            onColumnFilter={(k, v) => { setColumnFilters(prev => { const n = { ...prev, [k]: v }; if (!v) delete n[k]; return n; }); setTPage(1); }}
             loading={loading}
             onRowClick={(r: any) => handleSelect(r.id)}
           />

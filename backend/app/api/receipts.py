@@ -369,6 +369,12 @@ async def list_receipts(
     has_pdf: Optional[bool] = Query(None, alias="hasPdf"),
     sort_by: Optional[str] = Query(None, alias="sortBy"),
     order: str = Query("desc", pattern="^(asc|desc)$"),
+    supplier: Optional[str] = Query(None),
+    location: Optional[str] = Query(None),
+    invoice_number: Optional[str] = Query(None, alias="invoiceNumber"),
+    kra_pin: Optional[str] = Query(None, alias="kraPin"),
+    buyer_kra_pin: Optional[str] = Query(None, alias="buyerKraPin"),
+    cu_invoice: Optional[str] = Query(None, alias="cuInvoice"),
     current_user_id: str = Depends(get_current_user_id),
 ):
     """
@@ -384,7 +390,8 @@ async def list_receipts(
         rejected: Only receipts whose latest admin decision was a rejection
         entry_type: expense | quotation | proforma | deposit | note | non_expense
         sort_by: created_at | updated_at | receipt_date | supplier |
-            total_amount | category | status | invoice_number | entry_type
+            total_amount | category | status | invoice_number | entry_type |
+            location | kra_pin | buyer_kra_pin | cu_invoice | file_type
         order: asc | desc (ignored unless sort_by is valid)
         current_user_id: Authenticated user
 
@@ -399,6 +406,8 @@ async def list_receipts(
             category=category, batch_title=batch_title, rejected=rejected,
             has_image=has_image, entry_type=entry_type, has_pdf=has_pdf,
             sort_by=sort_by, order=order,
+            supplier=supplier, location=location, invoice_number=invoice_number,
+            kra_pin=kra_pin, buyer_kra_pin=buyer_kra_pin, cu_invoice=cu_invoice,
         )
 
         return ReceiptList(

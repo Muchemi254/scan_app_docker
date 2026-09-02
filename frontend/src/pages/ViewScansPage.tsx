@@ -45,6 +45,7 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
   const [tPageSize, setTPageSize] = useState(50);
   const [tSortBy, setTSortBy] = useState<string | null>(null);
   const [tSortOrder, setTSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
   const [tableExporting, setTableExporting] = useState(false);
 
   // Search
@@ -208,14 +209,27 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
     : filteredReceipts.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);
   const selected     = filteredReceipts.find(r => r.id === selectedId);
 
-  // Table view — client sort over filteredReceipts (date-chronological)
+  // Table view — client filter + sort over filteredReceipts (date-chronological)
+  const tableFiltered = (() => {
+    const entries = Object.entries(columnFilters).filter(([, v]) => v);
+    if (entries.length === 0) return filteredReceipts;
+    return filteredReceipts.filter((r: any) => {
+      for (const [k, v] of entries) {
+        let val: string;
+        if (k === 'itemCount') val = String(r.items?.length ?? '');
+        else if (k === 'fileType') val = r.fileType === 'application/pdf' ? 'pdf' : '';
+        else val = String(r[k] ?? r[k.replace(/_([a-z])/g, (_: string, c: string) => `_${c.toLowerCase()}`)] ?? r[k.replace(/([A-Z])/g, (_: string, c: string) => `_${c.toLowerCase()}`)] ?? '');
+        if (!val.toLowerCase().includes(String(v).toLowerCase())) return false;
+      }
+      return true;
+    });
+  })();
   const tableSorted = (() => {
-    if (!tSortBy) return filteredReceipts;
+    if (!tSortBy) return tableFiltered;
     const dir = tSortOrder === 'asc' ? 1 : -1;
     const isDate = tSortBy === 'receipt_date';
-    return [...filteredReceipts].sort((a: any, b: any) => {
+    return [...tableFiltered].sort((a: any, b: any) => {
       const avRaw = isDate ? (a.receiptDate ?? '') : (a[tSortBy] ?? a[tSortBy.replace(/_([a-z])/g, (_: string, c: string) => c.toUpperCase())] ?? '');
-      const bvRaw = isDate ? (b.receiptDate ?? '') : (b[tSortBy] ?? b[tSortBy.replace(/_([a-z])/g, (_: string, c: string) => c.toUpperCase())] ?? '');
       if (isDate) {
         const parse = (v: string) => {
           if (!v) return 0;
@@ -481,6 +495,8 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
             sortBy={tSortBy}
             sortOrder={tSortOrder}
             onSortChange={handleTableSort}
+            columnFilters={columnFilters}
+            onColumnFilter={(k, v) => { setColumnFilters(prev => { const n = { ...prev, [k]: v }; if (!v) delete n[k]; return n; }); setTPage(1); }}
             loading={loading}
             onRowClick={(r: any) => handleSelect(r.id)}
             onExport={handleTableExport}

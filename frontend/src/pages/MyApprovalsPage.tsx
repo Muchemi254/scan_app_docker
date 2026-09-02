@@ -70,6 +70,7 @@ const MyApprovalsPage = () => {
   const [tablePageSize, setTablePageSize] = useState(25);
   const [tableSortBy, setTableSortBy] = useState<string | null>(null);
   const [tableSortOrder, setTableSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
   const [exporting, setExporting] = useState(false);
 
   // Collapsible batch groups (default collapsed so the list stays short)
@@ -241,9 +242,23 @@ const MyApprovalsPage = () => {
     }
   }
 
-  // Table view — client-side sort + pagination over current tab's filtered rows
+  // Table view — client-side filter + sort + pagination over current tab's rows
+  const tableFiltered = useMemo(() => {
+    const entries = Object.entries(columnFilters).filter(([, v]) => v);
+    if (entries.length === 0) return listForTab;
+    return listForTab.filter((r: any) => {
+      for (const [k, v] of entries) {
+        let val: string;
+        if (k === 'itemCount') val = String(r.items?.length ?? '');
+        else if (k === 'fileType') val = r.fileType === 'application/pdf' ? 'pdf' : '';
+        else val = String(r[k] ?? r[k.replace(/([A-Z])/g, (_: string, c: string) => `_${c.toLowerCase()}`)] ?? '');
+        if (!val.toLowerCase().includes(String(v).toLowerCase())) return false;
+      }
+      return true;
+    });
+  }, [listForTab, columnFilters]);
   const tableSorted = useMemo(() => {
-    if (!tableSortBy) return listForTab;
+    if (!tableSortBy) return tableFiltered;
     const dir = tableSortOrder === 'asc' ? 1 : -1;
     const colMap: Record<string, string> = {
       receipt_date: 'receiptDate', receiptDate: 'receiptDate',
@@ -251,12 +266,14 @@ const MyApprovalsPage = () => {
       tax_amount: 'taxAmount', taxAmount: 'taxAmount', category: 'category',
       status: 'status', invoice_number: 'invoiceNumber', invoiceNumber: 'invoiceNumber',
       entry_type: 'entryType', entryType: 'entryType', batch_title: 'batchTitle', batchTitle: 'batchTitle',
+      location: 'location', kra_pin: 'kraPin', kraPin: 'kraPin', buyer_kra_pin: 'buyerKraPin', buyerKraPin: 'buyerKraPin',
+      cu_invoice: 'cuInvoice', cuInvoice: 'cuInvoice', file_type: 'fileType', fileType: 'fileType',
     };
     const key = colMap[tableSortBy] || tableSortBy;
     const isDateKey = key === 'receiptDate';
-    return [...listForTab].sort((a: any, b: any) => {
-      const avRaw = a[key] ?? a[key.replace(/([A-Z])/g, '_$1').toLowerCase()] ?? '';
-      const bvRaw = b[key] ?? b[key.replace(/([A-Z])/g, '_$1').toLowerCase()] ?? '';
+    return [...tableFiltered].sort((a: any, b: any) => {
+      const avRaw = a[key] ?? a[key.replace(/([A-Z])/g, (_: string, c: string) => `_${c.toLowerCase()}`)] ?? '';
+      const bvRaw = b[key] ?? b[key.replace(/([A-Z])/g, (_: string, c: string) => `_${c.toLowerCase()}`)] ?? '';
       if (isDateKey) {
         const parse = (v: string) => {
           if (!v) return 0;
@@ -272,12 +289,13 @@ const MyApprovalsPage = () => {
       if (!isNaN(Number(av)) && !isNaN(Number(bv)) && av && bv) return (Number(av) - Number(bv)) * dir;
       return av.localeCompare(bv) * dir;
     });
-  }, [listForTab, tableSortBy, tableSortOrder]);
+  }, [tableFiltered, tableSortBy, tableSortOrder]);
   const tableTotal = tableSorted.length;
   const tableRows = useMemo(() => tableSorted.slice((tablePage - 1) * tablePageSize, tablePage * tablePageSize), [tableSorted, tablePage, tablePageSize]);
   const tablePages = Math.max(1, Math.ceil(tableTotal / tablePageSize));
   const handleTableSort = (sortBy: string | null, order: 'asc' | 'desc') => { setTableSortBy(sortBy); setTableSortOrder(order); setTablePage(1); };
   const handleTablePage = (p: number, s: number) => { setTablePage(p); setTablePageSize(s); };
+  const handleColumnFilter = (k: string, v: string) => { setColumnFilters(prev => { const n = { ...prev, [k]: v }; if (!v) delete n[k]; return n; }); setTablePage(1); };
   const handleTableExport = async () => {
     setExporting(true);
     try {
@@ -374,6 +392,8 @@ const MyApprovalsPage = () => {
           sortBy={tableSortBy}
           sortOrder={tableSortOrder}
           onSortChange={handleTableSort}
+          columnFilters={columnFilters}
+          onColumnFilter={handleColumnFilter}
           loading={loading}
           onRowClick={(r: any) => setViewTarget(r)}
           onExport={handleTableExport}

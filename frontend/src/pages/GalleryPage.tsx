@@ -52,6 +52,7 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
   const [tSortOrder, setTSortOrder] = useState<'asc' | 'desc'>('desc');
   const [batchFilter, setBatchFilter] = useState<string>('__all__');
   const [exporting, setExporting] = useState(false);
+  const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
 
   // Search
   const [searchResults, setSearchResults] = useState<any[] | null>(null);
@@ -100,11 +101,17 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
   }, [activeGroup]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Table fetch — scoped to activeGroup when inside one, else batchFilter
-  const loadTable = useCallback(async (p: number, size: number, sortBy: string | null, order: 'asc' | 'desc', batch?: string) => {
+  const loadTable = useCallback(async (p: number, size: number, sortBy: string | null, order: 'asc' | 'desc', batch?: string, colFilters?: Record<string, string>) => {
     if (!userId) return;
     setTableLoading(true);
     try {
-      const filters: any = { hasImage: true, sortBy: sortBy ?? undefined, order };
+      const cf = colFilters ?? columnFilters;
+      const filters: any = { hasImage: true, sortBy: sortBy ?? undefined, order, ...cf };
+      // map camelCase column keys to API param names where needed
+      if (cf.invoiceNumber) { filters.invoiceNumber = cf.invoiceNumber; delete filters.invoiceNumber; }
+      if (cf.kraPin) { filters.kraPin = cf.kraPin; }
+      if (cf.buyerKraPin) { filters.buyerKraPin = cf.buyerKraPin; }
+      if (cf.cuInvoice) { filters.cuInvoice = cf.cuInvoice; }
       const scope = batch ?? batchFilter;
       if (scope && scope !== '__all__') {
         filters.batchTitle = scope === 'Ungrouped' ? '__ungrouped__' : scope;
@@ -117,14 +124,14 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
     } finally {
       setTableLoading(false);
     }
-  }, [userId, batchFilter]);
+  }, [userId, batchFilter, columnFilters]);
 
   const handleSortChange = (sortBy: string | null, order: 'asc' | 'desc') => {
     if (searchResults !== null) return; // search results are relevance-ordered
     setTSortBy(sortBy);
     setTSortOrder(order);
     setTPage(1);
-    loadTable(1, tPageSize, sortBy, order);
+    loadTable(1, tPageSize, sortBy, order, undefined, columnFilters);
   };
 
   const handleTablePage = (p: number, size: number) => {
@@ -135,7 +142,15 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
       loadSearchPage(p, size);
       return;
     }
-    loadTable(p, size, tSortBy, tSortOrder);
+    loadTable(p, size, tSortBy, tSortOrder, undefined, columnFilters);
+  };
+
+  const handleColumnFilter = (key: string, value: string) => {
+    const next = { ...columnFilters, [key]: value };
+    if (!value) delete next[key];
+    setColumnFilters(next);
+    setTPage(1);
+    loadTable(1, tPageSize, tSortBy, tSortOrder, undefined, next);
   };
 
   const tableExport = async () => {
@@ -313,6 +328,8 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
             sortBy={tSortBy}
             sortOrder={tSortOrder}
             onSortChange={handleSortChange}
+            columnFilters={columnFilters}
+            onColumnFilter={handleColumnFilter}
             loading={tableLoading}
             onRowClick={setSelectedReceipt}
             onExport={tableExport}
@@ -476,6 +493,8 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
           sortBy={searchResults !== null ? null : tSortBy}
           sortOrder={tSortOrder}
           onSortChange={handleSortChange}
+          columnFilters={columnFilters}
+          onColumnFilter={handleColumnFilter}
           loading={searchResults !== null ? false : tableLoading}
           onRowClick={setSelectedReceipt}
           onExport={tableExport}

@@ -21,12 +21,12 @@ export const RECEIPT_TABLE_COLUMNS: ReceiptTableColumn[] = [
   { key: 'batchTitle', label: 'Batch', sortBy: 'batch_title', default: true },
   { key: 'invoiceNumber', label: 'Invoice #', sortBy: 'invoice_number', default: true },
   { key: 'entryType', label: 'Type', sortBy: 'entry_type', default: false },
-  { key: 'location', label: 'Location', sortBy: null, default: false },
+  { key: 'location', label: 'Location', sortBy: 'location', default: false },
   { key: 'itemCount', label: 'Items', sortBy: null, default: false, align: 'right' },
-  { key: 'kraPin', label: 'Seller PIN', sortBy: null, default: false },
-  { key: 'buyerKraPin', label: 'Buyer PIN', sortBy: null, default: false },
-  { key: 'cuInvoice', label: 'CU Invoice', sortBy: null, default: false },
-  { key: 'fileType', label: 'PDF', sortBy: null, default: false },
+  { key: 'kraPin', label: 'Seller PIN', sortBy: 'kra_pin', default: false },
+  { key: 'buyerKraPin', label: 'Buyer PIN', sortBy: 'buyer_kra_pin', default: false },
+  { key: 'cuInvoice', label: 'CU Invoice', sortBy: 'cu_invoice', default: false },
+  { key: 'fileType', label: 'PDF', sortBy: 'file_type', default: false },
 ];
 
 export const RECEIPT_TABLE_DEFAULT_COLUMNS = RECEIPT_TABLE_COLUMNS
@@ -95,6 +95,8 @@ export default function ReceiptsTableView({
   exporting = false,
   emptyText = 'No receipts found',
   topRight,
+  columnFilters,
+  onColumnFilter,
 }: {
   userId: string | null;
   rows: any[];
@@ -112,6 +114,8 @@ export default function ReceiptsTableView({
   exporting?: boolean;
   emptyText?: string;
   topRight?: React.ReactNode;
+  columnFilters?: Record<string, string>;
+  onColumnFilter?: (key: string, value: string) => void;
 }) {
   const [columns, setColumns] = useState<string[]>(() => loadColumns(userId));
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -220,6 +224,23 @@ export default function ReceiptsTableView({
                 </th>
               ))}
             </tr>
+            {onColumnFilter && (
+              <tr className="border-b border-gray-200 bg-white">
+                {columnDefs.map(col => (
+                  <th key={col.key} className="px-1 py-1">
+                    {col.key === 'itemCount' ? null : (
+                      <input
+                        type="text"
+                        placeholder={`Filter ${col.label}`}
+                        value={columnFilters?.[col.key] || ''}
+                        onChange={e => onColumnFilter(col.key, e.target.value)}
+                        className="w-full px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      />
+                    )}
+                  </th>
+                ))}
+              </tr>
+            )}
           </thead>
           <tbody>
             {loading ? (
