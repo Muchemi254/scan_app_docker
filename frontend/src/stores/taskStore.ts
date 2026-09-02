@@ -173,16 +173,20 @@ export const useTaskStore = create<TaskState>()(
       name: 'scan-app-task-store', // localStorage key
       version: 2,
       migrate: (persisted: any, _version: number) => {
-        if (!persisted || typeof persisted !== 'object') return persisted;
-        if (persisted.startTime !== undefined && typeof persisted.startTime !== 'number' && persisted.startTime !== null) persisted.startTime = null;
-        return persisted;
+        try {
+          if (!persisted || typeof persisted !== 'object') return persisted;
+          const s: any = (persisted as any).state ?? persisted;
+          if (s && s.startTime !== undefined && typeof s.startTime !== 'number' && s.startTime !== null) s.startTime = null;
+          if ((persisted as any).state) (persisted as any).state.startTime = s.startTime;
+          else if (persisted.startTime !== undefined) persisted.startTime = null;
+        } catch {}
+        return persisted as any;
       },
       onRehydrateStorage: () => (state, error) => {
-        if (error || !state) {
-          try { localStorage.removeItem('scan-app-task-store'); } catch { void 0; }
-          return;
-        }
-        if (state.startTime !== null && typeof state.startTime !== 'number') state.startTime = null;
+        try {
+          if (error || !state) { try { localStorage.removeItem('scan-app-task-store'); } catch { void 0; } return; }
+          if ((state as any).startTime !== null && typeof (state as any).startTime !== 'number') (state as any).startTime = null;
+        } catch {}
       },
       partialize: (state) => ({
         activeTaskId: (state as any)?.activeTaskId,

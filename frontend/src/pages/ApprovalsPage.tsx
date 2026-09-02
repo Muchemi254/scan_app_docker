@@ -47,6 +47,9 @@ const ApprovalsPage = () => {
   const [tSortBy, setTSortBy] = useState<string | null>(null);
   const [tSortOrder, setTSortOrder] = useState<'asc' | 'desc'>('desc');
   const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
+  // Table modal (mirrors cards detail panel capabilities)
+  const [tableModalId, setTableModalId] = useState<string | null>(null);
+  const [tableModalReceipt, setTableModalReceipt] = useState<any | null>(null);
   // Unsaved-changes confirm when switching receipts mid-edit (modal, no browser confirm)
   const [discardTarget, setDiscardTarget] = useState<string | null>(null);
 
@@ -147,6 +150,16 @@ const ApprovalsPage = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
 
+  // Table modal fetch (same cross-tenant)
+  useEffect(() => {
+    if (!tableModalId) { setTableModalReceipt(null); return; }
+    const row = (searchResults ?? items).find((r: any) => r.id === tableModalId) as any;
+    if (!row) { setTableModalReceipt(null); return; }
+    let cancelled = false;
+    receiptApi.get(row.id, row.owner_uid).then(full => { if (!cancelled) setTableModalReceipt(full); }).catch(() => { if (!cancelled) setTableModalReceipt(null); });
+    return () => { cancelled = true; };
+  }, [tableModalId, items, searchResults]);
+
   const handleSelect = (newId: string) => {
     if (isEditing) {
       setDiscardTarget(newId);
@@ -190,6 +203,13 @@ const ApprovalsPage = () => {
   };
 
   const handleDeleted = (id: string) => advancePast(id);
+  const handleTableSaved = (updated: any) => {
+    setTableModalReceipt(updated);
+    setItems(prev => prev.map((r: any) => r.id === updated.id ? { ...r, ...updated, receipt_date: updated.receiptDate || r.receipt_date } : r));
+    if (searchResults !== null) setSearchResults(prev => prev ? prev.map((r: any) => r.id === updated.id ? { ...r, ...updated } : r) : prev);
+    if (updated?.status !== 'pending_approval') { setTableModalId(null); setTableModalReceipt(null); advancePast(updated.id); }
+  };
+  const handleTableDeleted = (id: string) => { setTableModalId(null); setTableModalReceipt(null); advancePast(id); };
 
   // NOTE: all hooks must run on EVERY render — the early returns below make
   // the hook count vary (React #310 "rendered more hooks") if any hook sits
@@ -450,8 +470,28 @@ const ApprovalsPage = () => {
             columnFilters={columnFilters}
             onColumnFilter={(k, v) => { setColumnFilters(prev => { const n = { ...prev, [k]: v }; if (!v) delete n[k]; return n; }); setTPage(1); }}
             loading={loading}
-            onRowClick={(r: any) => handleSelect(r.id)}
+            onRowClick={(r: any) => setTableModalId(r.id)}
           />
+          {tableModalId && tableModalReceipt && (
+            <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-2 sm:p-4">
+              <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl lg:max-w-[95vw] xl:max-w-6xl 2xl:max-w-7xl max-h-[92vh] lg:h-[92vh] flex flex-col">
+                <div className="flex-shrink-0 flex items-center justify-between gap-3 px-4 py-3 border-b">
+                  <div className="min-w-0">
+                    <h3 className="font-semibold text-gray-900 truncate">{tableModalReceipt.supplier || (tableModalReceipt as any).supplier || 'Receipt'}</h3>
+                    <p className="text-xs text-gray-500 truncate">{tableModalReceipt.receiptDate || (tableModalReceipt as any).receipt_date || ''} · KES {Number(tableModalReceipt.totalAmount || (tableModalReceipt as any).total_amount || 0).toLocaleString()}</p>
+                  </div>
+                  <button onClick={() => { setTableModalId(null); setTableModalReceipt(null); }} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+                </div>
+                <div className="flex-1 overflow-y-auto">
+                  {(() => {
+                    const row = (searchResults ?? items).find((r: any) => r.id === tableModalId) as any;
+                    const owner = row?.owner_uid || tableModalReceipt.userId || '';
+                    return <ReviewPanel userId={owner} receipt={tableModalReceipt} setIsEditing={() => {}} isAdmin={isAdmin} useStore={false} onSaved={handleTableSaved} onDeleted={handleTableDeleted} />;
+                  })()}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       ) : (
       <div className="flex flex-1 overflow-hidden relative">
