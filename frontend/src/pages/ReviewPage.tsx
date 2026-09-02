@@ -8,6 +8,8 @@ import type { ReceiptData } from '../types/gemini';
 import ReviewPanel from '../components/ReviewPanel';
 import SearchBar from '../components/SearchBar';
 import ReceiptsTableView from '../components/ReceiptsTableView';
+import ExportNameModal from '../components/ExportNameModal';
+import { exportRowsAsCsv, visibleColumnKeys, defaultExportName } from '../utils/exportTableCsv';
 import { Table2, LayoutGrid, ChevronLeft, ChevronRight } from 'lucide-react';
 
 const PAGE_SIZE = 25;
@@ -70,6 +72,9 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
   const [tSortBy, setTSortBy] = useState<string | null>(null);
   const [tSortOrder, setTSortOrder] = useState<'asc' | 'desc'>('desc');
   const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
+  const [tableModalReceipt, setTableModalReceipt] = useState<any | null>(null);
+  const [exportModalOpen, setExportModalOpen] = useState(false);
+  const [tableExporting, setTableExporting] = useState(false);
 
   useEffect(() => {
     if (!userId) return;
@@ -116,10 +121,13 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
   };
 
   // If a receipt leaves the needs_review view (status change or delete),
-  // advance the panel to the next pending receipt so it never dangles on
-  // stale/blank data.
+  // advance the panel and optimistically remove from search results.
   const advancePast = (removedId: string) => {
     setSelectedReceipt(null);
+    if (searchResults !== null) {
+      setSearchResults(prev => prev ? prev.filter((r: any) => r.id !== removedId) : prev);
+      setSearchTotal(t => Math.max(0, t - 1));
+    }
     const remaining = receipts.filter(r => r.id !== removedId && r.status === 'needs_review');
     if (remaining.length > 0) setSelectedId(remaining[0].id);
     else setSelectedId(null);
@@ -130,6 +138,7 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
   const handleSaved = (updated: any) => {
     if (updated?.status === 'needs_review') {
       setSelectedReceipt(updated);
+      if (searchResults !== null) setSearchResults(prev => prev ? prev.map((r: any) => r.id === updated.id ? { ...r, ...updated } : r) : prev);
     } else {
       advancePast(updated?.id as string);
     }
@@ -198,6 +207,12 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
   const tableTotal = tableSorted.length;
   const tablePages = Math.max(1, Math.ceil(tableTotal / tPageSize));
   const tableRows = tableSorted.slice((Math.min(tPage, tablePages) - 1) * tPageSize, Math.min(tPage, tablePages) * tPageSize);
+  const handleTableExport = () => { if (tableTotal === 0) return; setExportModalOpen(true); };
+  const confirmTableExport = (filename: string) => {
+    setExportModalOpen(false);
+    setTableExporting(true);
+    try { exportRowsAsCsv(tableSorted, visibleColumnKeys(userId), filename); } catch (e: any) { alert(e?.message || 'Export failed'); } finally { setTableExporting(false); }
+  };
 
   if (loading && receipts.length === 0) {
     return (
@@ -333,8 +348,27 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
             columnFilters={columnFilters}
             onColumnFilter={(k, v) => { setColumnFilters(prev => { const n = { ...prev, [k]: v }; if (!v) delete n[k]; return n; }); setTPage(1); }}
             loading={loading}
-            onRowClick={(r: any) => setSelectedId(r.id)}
+            onRowClick={(r: any) => setTableModalReceipt(r)}
+            onExport={handleTableExport}
+            exporting={tableExporting}
           />
+          <ExportNameModal open={exportModalOpen} count={tableTotal} defaultName={defaultExportName('review', {}, tableTotal)} onConfirm={confirmTableExport} onCancel={() => setExportModalOpen(false)} />
+          {tableModalReceipt && (
+            <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-2 sm:p-4">
+              <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl lg:max-w-[95vw] xl:max-w-6xl 2xl:max-w-7xl max-h-[92vh] lg:h-[92vh] flex flex-col">
+                <div className="flex-shrink-0 flex items-center justify-between gap-3 px-4 py-3 border-b">
+                  <div className="min-w-0">
+                    <h3 className="font-semibold text-gray-900 truncate">{tableModalReceipt.supplier || 'Receipt'}</h3>
+                    <p className="text-xs text-gray-500 truncate">{tableModalReceipt.receiptDate || ''} · KES {Number(tableModalReceipt.totalAmount || 0).toLocaleString()}</p>
+                  </div>
+                  <button onClick={() => setTableModalReceipt(null)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+                </div>
+                <div className="flex-1 overflow-y-auto">
+                  <ReviewPanel userId={userId!} receipt={tableModalReceipt} setIsEditing={() => {}} isAdmin={isAdmin} onSaved={v => { setTableModalReceipt(v); handleSaved(v); }} onDeleted={id => { setTableModalReceipt(null); handleDeleted(id); }} />
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       ) : (
       <div className="flex flex-1 overflow-hidden relative">

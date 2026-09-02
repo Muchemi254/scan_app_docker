@@ -164,9 +164,14 @@ const ApprovalsPage = () => {
   };
 
   // When a receipt leaves the pending queue (approve/reject/delete), advance
-  // the panel to the next one so it never dangles on stale/blank data.
+  // the panel and optimistically remove from list without waiting for reload.
   const advancePast = (removedId: string) => {
     setSelectedReceipt(null);
+    setItems(prev => prev.filter((r: any) => r.id !== removedId));
+    if (searchResults !== null) {
+      setSearchResults(prev => prev ? prev.filter((r: any) => r.id !== removedId) : prev);
+      setSearchTotal(t => Math.max(0, t - 1));
+    }
     const remaining = items.filter((r: any) => r.id !== removedId);
     if (remaining.length > 0) setSelectedId(remaining[0].id);
     else setSelectedId(null);
@@ -176,6 +181,8 @@ const ApprovalsPage = () => {
   const handleSaved = (updated: any) => {
     if (updated?.status === 'pending_approval') {
       setSelectedReceipt(updated);
+      setItems(prev => prev.map((r: any) => r.id === updated.id ? { ...r, ...updated, receipt_date: updated.receiptDate || r.receipt_date } : r));
+      if (searchResults !== null) setSearchResults(prev => prev ? prev.map((r: any) => r.id === updated.id ? { ...r, ...updated } : r) : prev);
       load();
     } else {
       advancePast(updated?.id as string);

@@ -11,7 +11,8 @@ import {
 import ReviewPanel from '../components/ReviewPanel';
 import SearchBar from '../components/SearchBar';
 import ReceiptsTableView from '../components/ReceiptsTableView';
-import { exportApi } from '../services/api';
+import ExportNameModal from '../components/ExportNameModal';
+import { exportRowsAsCsv, visibleColumnKeys, defaultExportName } from '../utils/exportTableCsv';
 import { ChevronDown, ChevronRight, Table2, LayoutGrid } from 'lucide-react';
 
 type Tab = 'pending' | 'approved' | 'rejected';
@@ -72,6 +73,7 @@ const MyApprovalsPage = () => {
   const [tableSortOrder, setTableSortOrder] = useState<'asc' | 'desc'>('desc');
   const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
   const [exporting, setExporting] = useState(false);
+  const [exportModalOpen, setExportModalOpen] = useState(false);
 
   // Collapsible batch groups (default collapsed so the list stays short)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -137,17 +139,35 @@ const MyApprovalsPage = () => {
     [allLoaded],
   );
 
+  const parseReceiptTs = (v: string) => {
+    if (!v) return null;
+    const m = String(v).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (m) return new Date(Number(m[3]), Number(m[1]) - 1, Number(m[2])).getTime();
+    const iso = String(v).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (iso) return new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3])).getTime();
+    const t = Date.parse(String(v));
+    return isNaN(t) ? null : t;
+  };
+  const parseFilterBound = (v: string, end: boolean) => {
+    if (!v) return null;
+    const [yy, mm, dd] = v.split('-').map(Number);
+    if (!yy || !mm || !dd) return null;
+    const d = new Date(yy, mm - 1, dd);
+    if (end) d.setHours(23, 59, 59, 999);
+    else d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  };
   const applyFilters = useCallback(
     (list: any[]) =>
       list.filter((r: any) => {
         const catMatch = filters.category ? r.category === filters.category : true;
         const supMatch = filters.supplier ? r.supplier === filters.supplier : true;
-        const d = new Date(r.receiptDate || r.receipt_date || '');
-        const s = filters.dateStart ? new Date(filters.dateStart) : null;
-        const e = filters.dateEnd ? new Date(filters.dateEnd) : null;
-        if (e) e.setHours(23, 59, 59, 999);
-        const dateMatch = (!s || d >= s) && (!e || d <= e);
-        return catMatch && supMatch && dateMatch;
+        if (!filters.dateStart && !filters.dateEnd) return catMatch && supMatch;
+        const ts = parseReceiptTs(r.receiptDate || r.receipt_date || '');
+        if (ts === null) return false;
+        const s = parseFilterBound(filters.dateStart, false);
+        const e = parseFilterBound(filters.dateEnd, true);
+        return catMatch && supMatch && (s === null || ts >= s) && (e === null || ts <= e);
       }),
     [filters],
   );
@@ -214,11 +234,25 @@ const MyApprovalsPage = () => {
 
   const handleViewedSaved = (updated: any) => {
     setViewTarget(updated);
+    setItems(prev => prev.map(r => r.id === updated.id ? { ...r, ...updated } : r));
+    setApproved(prev => prev.map(r => r.id === updated.id ? { ...r, ...updated } : r));
+    setRejected(prev => prev.map(r => r.id === updated.id ? { ...r, ...updated } : r));
+    if (searchResults) setSearchResults(prev => prev ? prev.map((r: any) => r.id === updated.id ? { ...r, ...updated } : r) : prev);
     load();
   };
 
-  const handleViewedDeleted = () => {
+  const handleViewedDeleted = (id?: string) => {
+    const delId = id || (viewTarget as any)?.id;
     setViewTarget(null);
+    if (delId) {
+      setItems(prev => prev.filter(r => r.id !== delId));
+      setApproved(prev => prev.filter(r => r.id !== delId));
+      setRejected(prev => prev.filter(r => r.id !== delId));
+      if (searchResults) {
+        setSearchResults(prev => prev ? prev.filter((r: any) => r.id !== delId) : prev);
+        setSearchTotal(t => Math.max(0, t - 1));
+      }
+    }
     load();
   };
 
@@ -296,16 +330,13 @@ const MyApprovalsPage = () => {
   const handleTableSort = (sortBy: string | null, order: 'asc' | 'desc') => { setTableSortBy(sortBy); setTableSortOrder(order); setTablePage(1); };
   const handleTablePage = (p: number, s: number) => { setTablePage(p); setTablePageSize(s); };
   const handleColumnFilter = (k: string, v: string) => { setColumnFilters(prev => { const n = { ...prev, [k]: v }; if (!v) delete n[k]; return n; }); setTablePage(1); };
-  const handleTableExport = async () => {
+  const handleTableExport = () => { if (tableTotal === 0) return; setExportModalOpen(true); };
+  const confirmTableExport = (filename: string) => {
+    setExportModalOpen(false);
     setExporting(true);
     try {
-      const cols = JSON.parse(localStorage.getItem(`scanapp-receipt-table-cols-${effectiveUid}`) || 'null') || undefined;
-      await exportApi.downloadReport({
-        format: 'csv', reportType: 'receipts', columns: cols,
-        status: tab === 'rejected' ? undefined : tab === 'pending' ? 'pending_approval' : 'processed',
-        rejected: tab === 'rejected' ? true : undefined,
-        category: filters.category || undefined, q: searchQuery.trim() || undefined,
-      });
+      const cols = visibleColumnKeys(effectiveUid || null);
+      exportRowsAsCsv(tableSorted, cols, filename);
     } catch (e: any) { alert(e?.message || 'Export failed'); } finally { setExporting(false); }
   };
   useEffect(() => { setTablePage(1); }, [tab, filters, searchResults]);
@@ -382,24 +413,27 @@ const MyApprovalsPage = () => {
       </div>
 
       {viewMode === 'table' ? (
-        <ReceiptsTableView
-          userId={effectiveUid || null}
-          rows={tableRows}
-          total={tableTotal}
-          page={Math.min(tablePage, tablePages)}
-          pageSize={tablePageSize}
-          onPageChange={handleTablePage}
-          sortBy={tableSortBy}
-          sortOrder={tableSortOrder}
-          onSortChange={handleTableSort}
-          columnFilters={columnFilters}
-          onColumnFilter={handleColumnFilter}
-          loading={loading}
-          onRowClick={(r: any) => setViewTarget(r)}
-          onExport={handleTableExport}
-          exporting={exporting}
-          emptyText={searchResults !== null ? 'No matches' : tab === 'pending' ? 'Nothing pending approval' : tab === 'approved' ? 'No approved documents yet' : 'No rejected documents'}
-        />
+        <>
+          <ReceiptsTableView
+            userId={effectiveUid || null}
+            rows={tableRows}
+            total={tableTotal}
+            page={Math.min(tablePage, tablePages)}
+            pageSize={tablePageSize}
+            onPageChange={handleTablePage}
+            sortBy={tableSortBy}
+            sortOrder={tableSortOrder}
+            onSortChange={handleTableSort}
+            columnFilters={columnFilters}
+            onColumnFilter={handleColumnFilter}
+            loading={loading}
+            onRowClick={(r: any) => setViewTarget(r)}
+            onExport={handleTableExport}
+            exporting={exporting}
+            emptyText={searchResults !== null ? 'No matches' : tab === 'pending' ? 'Nothing pending approval' : tab === 'approved' ? 'No approved documents yet' : 'No rejected documents'}
+          />
+          <ExportNameModal open={exportModalOpen} count={tableTotal} defaultName={defaultExportName(`my_${tab}`, {}, tableTotal)} onConfirm={confirmTableExport} onCancel={() => setExportModalOpen(false)} />
+        </>
       ) : (
       <>
       {/* Expand/collapse all + count */}

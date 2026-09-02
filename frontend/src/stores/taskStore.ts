@@ -84,7 +84,7 @@ export const useTaskStore = create<TaskState>()(
       },
 
       updateProgress: (index: number, total: number, percentage: number) => {
-        const startTime = get().startTime;
+        const startTime = (get() as any)?.startTime ?? null;
         const elapsedSeconds = startTime ? Math.floor((Date.now() - startTime) / 1000) : 0;
 
         // Calculate estimated time remaining
@@ -158,8 +158,8 @@ export const useTaskStore = create<TaskState>()(
       },
 
       getResumeData: () => {
-        const state = get();
-        if (state.activeTaskId && state.files.length > 0) {
+        const state: any = get() as any;
+        if (state?.activeTaskId && state?.files?.length > 0) {
           return {
             taskId: state.activeTaskId,
             currentIndex: state.currentIndex,
@@ -171,18 +171,29 @@ export const useTaskStore = create<TaskState>()(
     }),
     {
       name: 'scan-app-task-store', // localStorage key
-      version: 1,
-      // Only persist certain fields
+      version: 2,
+      migrate: (persisted: any, _version: number) => {
+        if (!persisted || typeof persisted !== 'object') return persisted;
+        if (persisted.startTime !== undefined && typeof persisted.startTime !== 'number' && persisted.startTime !== null) persisted.startTime = null;
+        return persisted;
+      },
+      onRehydrateStorage: () => (state, error) => {
+        if (error || !state) {
+          try { localStorage.removeItem('scan-app-task-store'); } catch { void 0; }
+          return;
+        }
+        if (state.startTime !== null && typeof state.startTime !== 'number') state.startTime = null;
+      },
       partialize: (state) => ({
-        activeTaskId: state.activeTaskId,
-        batchTitle: state.batchTitle,
-        files: state.files,
-        currentProgress: state.currentProgress,
-        currentIndex: state.currentIndex,
-        totalFiles: state.totalFiles,
-        startTime: state.startTime,
-        elapsedTime: state.elapsedTime,
-        estimatedTimeRemaining: state.estimatedTimeRemaining,
+        activeTaskId: (state as any)?.activeTaskId,
+        batchTitle: (state as any)?.batchTitle,
+        files: (state as any)?.files,
+        currentProgress: (state as any)?.currentProgress,
+        currentIndex: (state as any)?.currentIndex,
+        totalFiles: (state as any)?.totalFiles,
+        startTime: (state as any)?.startTime ?? null,
+        elapsedTime: (state as any)?.elapsedTime,
+        estimatedTimeRemaining: (state as any)?.estimatedTimeRemaining,
       })
     }
   )

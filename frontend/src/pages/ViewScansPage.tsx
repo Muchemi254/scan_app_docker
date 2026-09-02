@@ -4,10 +4,12 @@ import { useNavigate } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Hash, Calendar, Clock, X, Table2, LayoutGrid } from 'lucide-react';
 import { useReceiptStore } from '../stores/receiptStore';
 import { useAuthStore } from '../stores/authStore';
-import { receiptApi, exportApi } from '../services/api';
+import { receiptApi } from '../services/api';
 import ReviewPanel from '../components/ReviewPanel';
 import SearchBar from '../components/SearchBar';
 import ReceiptsTableView from '../components/ReceiptsTableView';
+import ExportNameModal from '../components/ExportNameModal';
+import { exportRowsAsCsv, visibleColumnKeys, defaultExportName } from '../utils/exportTableCsv';
 import type { ReceiptData } from '../types/gemini';
 import ExportPage from './ExportPage';
 
@@ -47,6 +49,8 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
   const [tSortOrder, setTSortOrder] = useState<'asc' | 'desc'>('desc');
   const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
   const [tableExporting, setTableExporting] = useState(false);
+  const [tableModalReceipt, setTableModalReceipt] = useState<any | null>(null);
+  const [exportModalOpen, setExportModalOpen] = useState(false);
 
   // Search
   const [searchQuery, setSearchQuery] = useState('');
@@ -128,10 +132,13 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
     if (window.innerWidth < 1024) setSidebarOpen(false);
   };
 
-  // After a delete, immediately move the panel to the next receipt instead of
-  // leaving the deleted receipt's details on screen.
+  // After a delete, move panel and optimistically remove from search results (store handles main list)
   const handleDeleted = (id: string) => {
     setSelectedId(null);
+    if (searchResults !== null) {
+      setSearchResults(prev => prev ? prev.filter((r: any) => r.id !== id) : prev);
+      setSearchTotal(t => Math.max(0, t - 1));
+    }
     const remaining = receipts.filter(r => r.id !== id);
     if (remaining.length > 0) setSelectedId(remaining[0].id);
   };
@@ -150,6 +157,25 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
     priceMax: filters.priceMax ? Number(filters.priceMax) : undefined,
     scanDateFrom: filters.scanDateStart || undefined,
     scanDateTo: filters.scanDateEnd || undefined,
+  };
+
+  const parseReceiptTs = (v: string) => {
+    if (!v) return null;
+    const m = String(v).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (m) return new Date(Number(m[3]), Number(m[1]) - 1, Number(m[2])).getTime();
+    const iso = String(v).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (iso) return new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3])).getTime();
+    const t = Date.parse(String(v));
+    return isNaN(t) ? null : t;
+  };
+  const parseFilterBound = (v: string, end: boolean) => {
+    if (!v) return null;
+    const [yy, mm, dd] = v.split('-').map(Number);
+    if (!yy || !mm || !dd) return null;
+    const d = new Date(yy, mm - 1, dd);
+    if (end) d.setHours(23, 59, 59, 999);
+    else d.setHours(0, 0, 0, 0);
+    return d.getTime();
   };
 
   const filteredReceipts = useMemo(() => {
@@ -174,18 +200,21 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
             && total <= (filters.priceMax ? Number(filters.priceMax) : Infinity);
       })();
       const dateMatch = (() => {
-        const d = new Date(r.receiptDate || '');
-        const s = filters.dateStart ? new Date(filters.dateStart) : null;
-        const e = filters.dateEnd   ? new Date(filters.dateEnd)   : null;
-        return (!s || d >= s) && (!e || d <= e);
+        if (!filters.dateStart && !filters.dateEnd) return true;
+        const ts = parseReceiptTs(r.receiptDate || '');
+        if (ts === null) return false;
+        const s = parseFilterBound(filters.dateStart, false);
+        const e = parseFilterBound(filters.dateEnd, true);
+        return (s === null || ts >= s) && (e === null || ts <= e);
       })();
       const scanDateMatch = (() => {
-        if (!r.scannedAt) return !filters.scanDateStart && !filters.scanDateEnd;
-        const d = new Date(r.scannedAt);
-        const s = filters.scanDateStart ? new Date(filters.scanDateStart) : null;
-        const e = filters.scanDateEnd   ? new Date(filters.scanDateEnd)   : null;
-        if (e) e.setHours(23, 59, 59, 999); // Include full end day
-        return (!s || d >= s) && (!e || d <= e);
+        if (!filters.scanDateStart && !filters.scanDateEnd) return true;
+        if (!r.scannedAt) return false;
+        const ts = new Date(r.scannedAt).getTime();
+        if (isNaN(ts)) return false;
+        const s = parseFilterBound(filters.scanDateStart, false);
+        const e = parseFilterBound(filters.scanDateEnd, true);
+        return (s === null || ts >= s) && (e === null || ts <= e);
       })();
       return batchMatch && categoryMatch && supplierMatch && statusMatch && zeroRatedMatch && priceMatch && dateMatch && scanDateMatch;
     });
@@ -193,7 +222,9 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
     // Apply Sorting
     result.sort((a, b) => {
       if (sortBy === 'date') {
-        return new Date(b.receiptDate || 0).getTime() - new Date(a.receiptDate || 0).getTime();
+        const at = parseReceiptTs(b.receiptDate || '') ?? 0;
+        const bt = parseReceiptTs(a.receiptDate || '') ?? 0;
+        return at - bt;
       } else {
         return new Date(b.scannedAt || 0).getTime() - new Date(a.scannedAt || 0).getTime();
       }
@@ -229,7 +260,8 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
     const dir = tSortOrder === 'asc' ? 1 : -1;
     const isDate = tSortBy === 'receipt_date';
     return [...tableFiltered].sort((a: any, b: any) => {
-      const avRaw = isDate ? (a.receiptDate ?? '') : (a[tSortBy] ?? a[tSortBy.replace(/_([a-z])/g, (_: string, c: string) => c.toUpperCase())] ?? '');
+      const avRaw = isDate ? (a.receiptDate ?? '') : (a[tSortBy!] ?? (a as any)[tSortBy!.replace(/_([a-z])/g, (_: string, c: string) => c.toUpperCase())] ?? '');
+      const bvRaw = isDate ? (b.receiptDate ?? '') : (b[tSortBy!] ?? (b as any)[tSortBy!.replace(/_([a-z])/g, (_: string, c: string) => c.toUpperCase())] ?? '');
       if (isDate) {
         const parse = (v: string) => {
           if (!v) return 0;
@@ -250,15 +282,28 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
   const tablePages = Math.max(1, Math.ceil(tableTotal / tPageSize));
   const tableRows = tableSorted.slice((Math.min(tPage, tablePages) - 1) * tPageSize, Math.min(tPage, tablePages) * tPageSize);
   const handleTableSort = (sb: string | null, o: 'asc' | 'desc') => { setTSortBy(sb); setTSortOrder(o); setTPage(1); };
-  const handleTableExport = async () => {
+  const handleTableExport = () => {
+    if (tableTotal === 0) return;
+    setExportModalOpen(true);
+  };
+  const confirmTableExport = (filename: string) => {
+    setExportModalOpen(false);
     setTableExporting(true);
     try {
-      const cols = JSON.parse(localStorage.getItem(`scanapp-receipt-table-cols-${userId}`) || 'null') || undefined;
-      await exportApi.downloadReport({
-        format: 'csv', reportType: 'receipts', columns: cols,
-        category: filters.category || undefined, q: searchQuery.trim() || undefined,
-      });
+      const cols = visibleColumnKeys(userId);
+      exportRowsAsCsv(tableSorted, cols, filename);
     } catch (e: any) { alert(e?.message || 'Export failed'); } finally { setTableExporting(false); }
+  };
+  const handleTableModalSaved = (updated: any) => {
+    setTableModalReceipt(updated);
+    if (searchResults !== null) setSearchResults(prev => prev ? prev.map((r: any) => r.id === updated.id ? { ...r, ...updated } : r) : prev);
+  };
+  const handleTableModalDeleted = (id: string) => {
+    setTableModalReceipt(null);
+    if (searchResults !== null) {
+      setSearchResults(prev => prev ? prev.filter((r: any) => r.id !== id) : prev);
+      setSearchTotal(t => Math.max(0, t - 1));
+    }
   };
 
   if (loading && receipts.length === 0) {
@@ -498,10 +543,33 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
             columnFilters={columnFilters}
             onColumnFilter={(k, v) => { setColumnFilters(prev => { const n = { ...prev, [k]: v }; if (!v) delete n[k]; return n; }); setTPage(1); }}
             loading={loading}
-            onRowClick={(r: any) => handleSelect(r.id)}
+            onRowClick={(r: any) => setTableModalReceipt(r)}
             onExport={handleTableExport}
             exporting={tableExporting}
           />
+          <ExportNameModal
+            open={exportModalOpen}
+            count={tableTotal}
+            defaultName={defaultExportName('receipts', { dateStart: filters.dateStart, dateEnd: filters.dateEnd, batch: batchParam || undefined }, tableTotal)}
+            onConfirm={confirmTableExport}
+            onCancel={() => setExportModalOpen(false)}
+          />
+          {tableModalReceipt && (
+            <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-2 sm:p-4">
+              <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl lg:max-w-[95vw] xl:max-w-6xl 2xl:max-w-7xl max-h-[92vh] lg:h-[92vh] flex flex-col">
+                <div className="flex-shrink-0 flex items-center justify-between gap-3 px-4 py-3 border-b">
+                  <div className="min-w-0">
+                    <h3 className="font-semibold text-gray-900 truncate">{tableModalReceipt.supplier || 'Receipt'}</h3>
+                    <p className="text-xs text-gray-500 truncate">{tableModalReceipt.receiptDate || ''} · KES {Number(tableModalReceipt.totalAmount || 0).toLocaleString()}</p>
+                  </div>
+                  <button onClick={() => setTableModalReceipt(null)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+                </div>
+                <div className="flex-1 overflow-y-auto">
+                  <ReviewPanel userId={userId!} receipt={tableModalReceipt} setIsEditing={() => {}} isAdmin={isAdmin} onSaved={handleTableModalSaved} onDeleted={handleTableModalDeleted} />
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       ) : (
       <div className="flex flex-1 overflow-hidden relative">

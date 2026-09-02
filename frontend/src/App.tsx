@@ -64,6 +64,20 @@ const AppContent = () => {
     restore();
   }, [restore]);
 
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('scan-app-task-store');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        const s = parsed?.state ?? parsed;
+        if (!s || typeof s.startTime !== 'number' && s.startTime !== null) {
+          const v = parsed?.version;
+          if (v === undefined || v < 2) localStorage.removeItem('scan-app-task-store');
+        }
+      }
+    } catch { try { localStorage.removeItem('scan-app-task-store'); } catch {} }
+  }, []);
+
   // Pages operate on the active user scope: an admin who selected a different
   // user in the Layout scope selector works inside that user's workspace.
   // For normal users this is their own uid. The scope applies only while a

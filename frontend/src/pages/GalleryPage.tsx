@@ -1,8 +1,11 @@
 import { useEffect, useState, useCallback } from 'react';
-import { receiptApi, exportApi } from '../services/api';
+import { receiptApi } from '../services/api';
 import ImageViewer from '../components/ImageViewer';
 import SearchBar from '../components/SearchBar';
-import ReceiptsTableView, { RECEIPT_TABLE_COLUMNS } from '../components/ReceiptsTableView';
+import ReceiptsTableView from '../components/ReceiptsTableView';
+import ReviewPanel from '../components/ReviewPanel';
+import ExportNameModal from '../components/ExportNameModal';
+import { exportRowsAsCsv, visibleColumnKeys, defaultExportName } from '../utils/exportTableCsv';
 import { entryTypeLabel } from '../types/gemini';
 import {
   Image, X, ChevronLeft, ChevronRight, LayoutGrid, Table2,
@@ -53,6 +56,8 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
   const [batchFilter, setBatchFilter] = useState<string>('__all__');
   const [exporting, setExporting] = useState(false);
   const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
+  const [tableModalReceipt, setTableModalReceipt] = useState<any | null>(null);
+  const [exportModalOpen, setExportModalOpen] = useState(false);
 
   // Search
   const [searchResults, setSearchResults] = useState<any[] | null>(null);
@@ -153,27 +158,65 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
     loadTable(1, tPageSize, tSortBy, tSortOrder, undefined, next);
   };
 
-  const tableExport = async () => {
+  const handleTableSaved = (updated: any) => {
+    setTableModalReceipt(updated);
+    setTableRows(prev => prev.map((r: any) => r.id === updated.id ? { ...r, ...updated } : r));
+    if (searchResults) setSearchResults(prev => prev ? prev.map((r: any) => r.id === updated.id ? { ...r, ...updated } : r) : prev);
+    setReceipts(prev => prev.map((r: any) => r.id === updated.id ? { ...r, ...updated } : r));
+  };
+  const handleTableDeleted = (id: string) => {
+    const deleted = tableModalReceipt;
+    setTableModalReceipt(null);
+    setTableRows(prev => prev.filter((r: any) => r.id !== id));
+    setTableTotal(t => Math.max(0, t - 1));
+    if (searchResults !== null) {
+      setSearchResults(prev => prev ? prev.filter((r: any) => r.id !== id) : prev);
+      setSearchTotal(t => Math.max(0, t - 1));
+    }
+    setReceipts(prev => prev.filter((r: any) => r.id !== id));
+    setTotal(t => Math.max(0, t - 1));
+    if (deleted?.batchTitle) {
+      setGroups(prev => prev.map(g => g.batchTitle === deleted.batchTitle ? { ...g, count: Math.max(0, g.count - 1), totalAmount: g.totalAmount - Number(deleted.totalAmount || 0) } : g).filter(g => g.count > 0));
+    }
+    receiptApi.getGroups().then(res => setGroups(res.groups || [])).catch(() => {});
+  };
+  const tableExport = () => {
+    if (!userId || tableTotal === 0) return;
+    setExportModalOpen(true);
+  };
+  const confirmTableExport = async (filename: string) => {
+    setExportModalOpen(false);
     if (!userId) return;
     setExporting(true);
     try {
       const scope = activeGroup ?? batchFilter;
-      await exportApi.downloadReport({
-        format: 'csv',
-        reportType: 'receipts',
-        columns: RECEIPT_TABLE_COLUMNS.map(c => c.key),
-        includeNonExpense: true,
-        q: searchQuery.trim() || undefined,
-        batchTitle: scope && scope !== '__all__'
-          ? (scope === 'Ungrouped' ? '__ungrouped__' : scope)
-          : undefined,
-      });
+      const batchTitle = scope && scope !== '__all__' ? (scope === 'Ungrouped' ? '__ungrouped__' : scope) : undefined;
+      const cf = columnFilters;
+      const filters: any = { hasImage: true, ...cf };
+      if (batchTitle) filters.batchTitle = batchTitle;
+      if (searchQuery.trim()) {
+        const fetched: any[] = [];
+        let off = 0;
+        const chunk = 200;
+        while (true) {
+          const res = await receiptApi.search(searchQuery.trim(), chunk, off, { batchTitle, hasImage: true });
+          fetched.push(...(res.results || []));
+          if (fetched.length >= res.total || (res.results || []).length < chunk) break;
+          off += chunk;
+          if (fetched.length >= 5000) break;
+        }
+        const cols = visibleColumnKeys(userId);
+        exportRowsAsCsv(fetched, cols, filename);
+      } else {
+        const res = await receiptApi.list(0, Math.min(tableTotal, 5000), filters);
+        const rows = (res.items || []).filter((r: any) => r.imageUrl || true);
+        const cols = visibleColumnKeys(userId);
+        exportRowsAsCsv(rows, cols, filename);
+      }
     } catch (e: any) {
       console.error('Export failed:', e);
       alert(e?.message || 'Export failed');
-    } finally {
-      setExporting(false);
-    }
+    } finally { setExporting(false); }
   };
 
   // Load receipts for active group
@@ -291,7 +334,7 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
   if (!activeGroup) {
     if (viewMode === 'table') {
       return (
-        <div className="max-w-7xl mx-auto px-4 py-6">
+        <div className="w-full px-4 py-6">
           <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
             <div className="flex items-center gap-3">
               <Table2 className="h-7 w-7 text-blue-600" />
@@ -331,11 +374,28 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
             columnFilters={columnFilters}
             onColumnFilter={handleColumnFilter}
             loading={tableLoading}
-            onRowClick={setSelectedReceipt}
+            onRowClick={(r: any) => setTableModalReceipt(r)}
             onExport={tableExport}
             exporting={exporting}
             emptyText="No receipts match the current filter"
           />
+          <ExportNameModal open={exportModalOpen} count={tableTotal} defaultName={defaultExportName('gallery', { batch: (activeGroup ?? batchFilter) !== '__all__' ? (activeGroup ?? batchFilter) : undefined }, tableTotal)} onConfirm={confirmTableExport} onCancel={() => setExportModalOpen(false)} />
+          {tableModalReceipt && (
+            <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-2 sm:p-4">
+              <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl lg:max-w-[95vw] xl:max-w-6xl 2xl:max-w-7xl max-h-[92vh] lg:h-[92vh] flex flex-col">
+                <div className="flex-shrink-0 flex items-center justify-between gap-3 px-4 py-3 border-b">
+                  <div className="min-w-0">
+                    <h3 className="font-semibold text-gray-900 truncate">{tableModalReceipt.supplier || 'Receipt'}</h3>
+                    <p className="text-xs text-gray-500 truncate">{tableModalReceipt.receiptDate || ''} · KES {Number(tableModalReceipt.totalAmount || 0).toLocaleString()}</p>
+                  </div>
+                  <button onClick={() => setTableModalReceipt(null)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+                </div>
+                <div className="flex-1 overflow-y-auto">
+                  <ReviewPanel userId={userId!} receipt={tableModalReceipt} setIsEditing={() => {}} isAdmin={false} useStore={false} onSaved={handleTableSaved} onDeleted={handleTableDeleted} />
+                </div>
+              </div>
+            </div>
+          )}
           {selectedReceipt && (
             <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4" onClick={() => setSelectedReceipt(null)}>
               <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
@@ -361,7 +421,7 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
     }
 
     return (
-      <div className="max-w-7xl mx-auto px-4 py-6">
+      <div className="w-full px-4 py-6">
         <div className="flex items-center justify-between gap-3 mb-6 flex-wrap">
           <div className="flex items-center gap-3">
             <FolderOpen className="h-7 w-7 text-blue-600" />
@@ -439,7 +499,7 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
 
   // ── Group detail view (paginated images) ──
   return (
-    <div className="max-w-7xl mx-auto px-4 py-6">
+    <div className="w-full px-4 py-6">
       {/* Header with back button */}
       <div className="flex items-center justify-between gap-4 mb-6 flex-wrap">
         <div className="flex items-center gap-3 min-w-0">
@@ -496,7 +556,7 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
           columnFilters={columnFilters}
           onColumnFilter={handleColumnFilter}
           loading={searchResults !== null ? false : tableLoading}
-          onRowClick={setSelectedReceipt}
+          onRowClick={(r: any) => setTableModalReceipt(r)}
           onExport={tableExport}
           exporting={exporting}
           emptyText={searchResults !== null ? 'No matches found' : 'No receipts in this group'}
