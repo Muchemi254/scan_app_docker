@@ -1,5 +1,6 @@
 import { useMemo, useState, useEffect } from 'react';
 import { ArrowDown, ArrowUp, ArrowUpDown, Columns3, Download, ChevronLeft, ChevronRight } from 'lucide-react';
+import { entryTypeLabel } from '../types/gemini';
 
 // ── Column catalog (frontend mirror of the export RECEIPT_FIELDS) ──────────
 
@@ -48,24 +49,41 @@ function loadColumns(userId: string | null): string[] {
   }
 }
 
-function cellValue(receipt: any, key: string): string {
+export function isBlankCellValue(v: any): boolean {
+  return v === undefined || v === null || String(v).trim() === '' || String(v).trim().toUpperCase() === 'N/A';
+}
+function getRaw(receipt: any, key: string): any {
+  if (receipt[key] !== undefined && receipt[key] !== null) return receipt[key];
+  const snake = key.replace(/([A-Z])/g, '_$1').toLowerCase();
+  if (receipt[snake] !== undefined && receipt[snake] !== null) return receipt[snake];
+  const camel = key.replace(/_([a-z])/g, (_: string, c: string) => c.toUpperCase());
+  if (receipt[camel] !== undefined && receipt[camel] !== null) return receipt[camel];
+  return undefined;
+}
+export function cellValue(receipt: any, key: string): string {
   switch (key) {
     case 'itemCount':
-      return String((receipt.items as any[] | undefined)?.length ?? '');
-    case 'fileType':
-      return receipt.fileType === 'application/pdf'
-        ? `PDF${receipt.pdfPageCount ? ` · ${receipt.pdfPageCount}p` : ''}`
+      return String((receipt.items as any[] | undefined)?.length ?? receipt.itemCount ?? '');
+    case 'fileType': {
+      const ft = getRaw(receipt, 'fileType') as string | undefined;
+      return ft === 'application/pdf'
+        ? `PDF${receipt.pdfPageCount ?? receipt.pdf_page_count ? ` · ${receipt.pdfPageCount ?? receipt.pdf_page_count}p` : ''}`
         : '';
-    case 'entryType':
-      return receipt.entryType && receipt.entryType !== 'expense' ? receipt.entryType : '';
+    }
+    case 'entryType': {
+      const raw = getRaw(receipt, 'entryType') as string | undefined;
+      return entryTypeLabel(raw || 'expense');
+    }
     case 'taxAmount':
-      return receipt.taxAmount || '';
+      return String(getRaw(receipt, 'taxAmount') ?? '');
     case 'totalAmount':
-      return receipt.totalAmount || '';
+      return String(getRaw(receipt, 'totalAmount') ?? '');
     case 'receiptDate':
-      return receipt.receiptDate || '';
-    default:
-      return receipt[key] ?? '';
+      return String(getRaw(receipt, 'receiptDate') ?? '');
+    default: {
+      const raw = getRaw(receipt, key);
+      return raw === undefined || raw === null ? '' : String(raw);
+    }
   }
 }
 
@@ -226,19 +244,39 @@ export default function ReceiptsTableView({
             </tr>
             {onColumnFilter && (
               <tr className="border-b border-gray-200 bg-white">
-                {columnDefs.map(col => (
-                  <th key={col.key} className="px-1 py-1">
-                    {col.key === 'itemCount' ? null : (
-                      <input
-                        type="text"
-                        placeholder={`Filter ${col.label}`}
-                        value={columnFilters?.[col.key] || ''}
-                        onChange={e => onColumnFilter(col.key, e.target.value)}
-                        className="w-full px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
-                      />
-                    )}
-                  </th>
-                ))}
+                {columnDefs.map(col => {
+                  const isBlank = columnFilters?.[col.key] === '__BLANK__';
+                  return (
+                    <th key={col.key} className="px-1 py-1">
+                      {col.key === 'itemCount' ? null : isBlank ? (
+                        <button
+                          onClick={() => onColumnFilter(col.key, '')}
+                          className="w-full px-1 py-0.5 text-[10px] leading-tight bg-blue-100 text-blue-700 border border-blue-300 rounded hover:bg-blue-200 flex items-center justify-center gap-1"
+                          title="Clear blanks filter"
+                        >
+                          blanks ×
+                        </button>
+                      ) : (
+                        <div className="flex gap-1">
+                          <input
+                            type="text"
+                            placeholder={`Filter ${col.label}`}
+                            value={columnFilters?.[col.key] || ''}
+                            onChange={e => onColumnFilter(col.key, e.target.value)}
+                            className="flex-1 min-w-0 px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+                          />
+                          <button
+                            onClick={() => onColumnFilter(col.key, '__BLANK__')}
+                            title={`Show only blank ${col.label}`}
+                            className="px-1.5 py-1 text-[11px] font-medium border border-gray-300 rounded bg-white hover:bg-gray-50 text-gray-500 flex-shrink-0"
+                          >
+                            ∅
+                          </button>
+                        </div>
+                      )}
+                    </th>
+                  );
+                })}
               </tr>
             )}
           </thead>

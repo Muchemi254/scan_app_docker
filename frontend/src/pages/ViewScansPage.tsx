@@ -7,7 +7,7 @@ import { useAuthStore } from '../stores/authStore';
 import { receiptApi } from '../services/api';
 import ReviewPanel from '../components/ReviewPanel';
 import SearchBar from '../components/SearchBar';
-import ReceiptsTableView from '../components/ReceiptsTableView';
+import ReceiptsTableView, { cellValue, isBlankCellValue } from '../components/ReceiptsTableView';
 import ExportNameModal from '../components/ExportNameModal';
 import { exportRowsAsCsv, visibleColumnKeys, defaultExportName } from '../utils/exportTableCsv';
 import type { ReceiptData } from '../types/gemini';
@@ -246,11 +246,10 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
     if (entries.length === 0) return filteredReceipts;
     return filteredReceipts.filter((r: any) => {
       for (const [k, v] of entries) {
-        let val: string;
-        if (k === 'itemCount') val = String(r.items?.length ?? '');
-        else if (k === 'fileType') val = r.fileType === 'application/pdf' ? 'pdf' : '';
-        else val = String(r[k] ?? r[k.replace(/_([a-z])/g, (_: string, c: string) => `_${c.toLowerCase()}`)] ?? r[k.replace(/([A-Z])/g, (_: string, c: string) => `_${c.toLowerCase()}`)] ?? '');
-        if (!val.toLowerCase().includes(String(v).toLowerCase())) return false;
+        const raw = String(v);
+        const val = cellValue(r, k);
+        if (raw === '__BLANK__') { if (!isBlankCellValue(val)) return false; }
+        else if (!val.toLowerCase().includes(raw.toLowerCase())) return false;
       }
       return true;
     });

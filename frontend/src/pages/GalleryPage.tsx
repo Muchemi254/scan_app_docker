@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { receiptApi } from '../services/api';
 import ImageViewer from '../components/ImageViewer';
 import SearchBar from '../components/SearchBar';
-import ReceiptsTableView from '../components/ReceiptsTableView';
+import ReceiptsTableView, { cellValue, isBlankCellValue } from '../components/ReceiptsTableView';
 import ReviewPanel from '../components/ReviewPanel';
 import ExportNameModal from '../components/ExportNameModal';
 import { exportRowsAsCsv, visibleColumnKeys, defaultExportName } from '../utils/exportTableCsv';
@@ -111,19 +111,29 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
     setTableLoading(true);
     try {
       const cf = colFilters ?? columnFilters;
-      const filters: any = { hasImage: true, sortBy: sortBy ?? undefined, order, ...cf };
-      // map camelCase column keys to API param names where needed
-      if (cf.invoiceNumber) { filters.invoiceNumber = cf.invoiceNumber; delete filters.invoiceNumber; }
-      if (cf.kraPin) { filters.kraPin = cf.kraPin; }
-      if (cf.buyerKraPin) { filters.buyerKraPin = cf.buyerKraPin; }
-      if (cf.cuInvoice) { filters.cuInvoice = cf.cuInvoice; }
+      const blankKeys = Object.entries(cf).filter(([, v]) => v === '__BLANK__').map(([k]) => k);
+      const serverFilters: any = { hasImage: true, sortBy: sortBy ?? undefined, order };
+      for (const [k, v] of Object.entries(cf)) {
+        if (v === '__BLANK__') continue;
+        serverFilters[k] = v;
+      }
       const scope = batch ?? batchFilter;
       if (scope && scope !== '__all__') {
-        filters.batchTitle = scope === 'Ungrouped' ? '__ungrouped__' : scope;
+        serverFilters.batchTitle = scope === 'Ungrouped' ? '__ungrouped__' : scope;
       }
-      const res = await receiptApi.list((p - 1) * size, size, filters);
-      setTableRows((res.items || []).filter((r: any) => r.imageUrl));
-      setTableTotal(res.total);
+      if (blankKeys.length > 0) {
+        const res = await receiptApi.list(0, 1000, serverFilters);
+        let rows = (res.items || []).filter((r: any) => r.imageUrl);
+        rows = rows.filter((r: any) => blankKeys.every(k => isBlankCellValue(cellValue(r, k))));
+        const total = rows.length;
+        const pageRows = rows.slice((p - 1) * size, p * size);
+        setTableRows(pageRows);
+        setTableTotal(total);
+      } else {
+        const res = await receiptApi.list((p - 1) * size, size, serverFilters);
+        setTableRows((res.items || []).filter((r: any) => r.imageUrl));
+        setTableTotal(res.total);
+      }
     } catch (err) {
       console.error('Failed to load receipts table:', err);
     } finally {
@@ -192,8 +202,11 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
       const scope = activeGroup ?? batchFilter;
       const batchTitle = scope && scope !== '__all__' ? (scope === 'Ungrouped' ? '__ungrouped__' : scope) : undefined;
       const cf = columnFilters;
-      const filters: any = { hasImage: true, ...cf };
-      if (batchTitle) filters.batchTitle = batchTitle;
+      const blankKeys = Object.entries(cf).filter(([, v]) => v === '__BLANK__').map(([k]) => k);
+      const serverFilters: any = { hasImage: true };
+      for (const [k, v] of Object.entries(cf)) if (v !== '__BLANK__') serverFilters[k] = v;
+      if (batchTitle) serverFilters.batchTitle = batchTitle;
+      const filterBlanks = (rows: any[]) => blankKeys.length ? rows.filter((r: any) => blankKeys.every(k => isBlankCellValue(cellValue(r, k)))) : rows;
       if (searchQuery.trim()) {
         const fetched: any[] = [];
         let off = 0;
@@ -206,12 +219,12 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
           if (fetched.length >= 5000) break;
         }
         const cols = visibleColumnKeys(userId);
-        exportRowsAsCsv(fetched, cols, filename);
+        exportRowsAsCsv(filterBlanks(fetched), cols, filename);
       } else {
-        const res = await receiptApi.list(0, Math.min(tableTotal, 5000), filters);
+        const res = await receiptApi.list(0, Math.min(Math.max(tableTotal, 1000), 5000), serverFilters);
         const rows = (res.items || []).filter((r: any) => r.imageUrl || true);
         const cols = visibleColumnKeys(userId);
-        exportRowsAsCsv(rows, cols, filename);
+        exportRowsAsCsv(filterBlanks(rows), cols, filename);
       }
     } catch (e: any) {
       console.error('Export failed:', e);

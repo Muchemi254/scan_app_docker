@@ -1,4 +1,4 @@
-import { RECEIPT_TABLE_COLUMNS } from '../components/ReceiptsTableView';
+import { RECEIPT_TABLE_COLUMNS, cellValue } from '../components/ReceiptsTableView';
 
 function csvEscape(v: string): string {
   const s = String(v ?? '');
@@ -6,14 +6,7 @@ function csvEscape(v: string): string {
   return s;
 }
 function cellForExport(receipt: any, key: string): string {
-  switch (key) {
-    case 'itemCount': return String(receipt.items?.length ?? '');
-    case 'fileType': return receipt.fileType === 'application/pdf' ? 'pdf' : '';
-    case 'taxAmount': return receipt.taxAmount ?? '';
-    case 'totalAmount': return receipt.totalAmount ?? '';
-    case 'receiptDate': return receipt.receiptDate ?? receipt.receipt_date ?? '';
-    default: return receipt[key] ?? receipt[key.replace(/([A-Z])/g, (_: string, c: string) => `_${c.toLowerCase()}`)] ?? '';
-  }
+  return cellValue(receipt, key);
 }
 export function visibleColumnKeys(userId: string | null): string[] {
   if (!userId) return RECEIPT_TABLE_COLUMNS.filter(c => c.default).map(c => c.key);

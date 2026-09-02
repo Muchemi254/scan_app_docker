@@ -7,7 +7,7 @@ import { receiptApi } from '../services/api';
 import type { ReceiptData } from '../types/gemini';
 import ReviewPanel from '../components/ReviewPanel';
 import SearchBar from '../components/SearchBar';
-import ReceiptsTableView from '../components/ReceiptsTableView';
+import ReceiptsTableView, { cellValue, isBlankCellValue } from '../components/ReceiptsTableView';
 import ExportNameModal from '../components/ExportNameModal';
 import { exportRowsAsCsv, visibleColumnKeys, defaultExportName } from '../utils/exportTableCsv';
 import { Table2, LayoutGrid, ChevronLeft, ChevronRight } from 'lucide-react';
@@ -170,11 +170,10 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
     if (entries.length === 0) return receipts;
     return receipts.filter((r: any) => {
       for (const [k, v] of entries) {
-        let val: string;
-        if (k === 'itemCount') val = String(r.items?.length ?? '');
-        else if (k === 'fileType') val = r.fileType === 'application/pdf' ? 'pdf' : '';
-        else val = String((r as any)[k] ?? '');
-        if (!val.toLowerCase().includes(String(v).toLowerCase())) return false;
+        const val = cellValue(r, k);
+        const raw = String(v);
+        if (raw === '__BLANK__') { if (!isBlankCellValue(val)) return false; }
+        else if (!val.toLowerCase().includes(raw.toLowerCase())) return false;
       }
       return true;
     });
