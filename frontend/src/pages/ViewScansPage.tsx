@@ -1,12 +1,13 @@
 // src/pages/ViewScansPage.tsx
 import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, Hash, Calendar, Clock, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Hash, Calendar, Clock, X, Table2, LayoutGrid } from 'lucide-react';
 import { useReceiptStore } from '../stores/receiptStore';
 import { useAuthStore } from '../stores/authStore';
-import { receiptApi } from '../services/api';
+import { receiptApi, exportApi } from '../services/api';
 import ReviewPanel from '../components/ReviewPanel';
 import SearchBar from '../components/SearchBar';
+import ReceiptsTableView from '../components/ReceiptsTableView';
 import type { ReceiptData } from '../types/gemini';
 import ExportPage from './ExportPage';
 
@@ -34,6 +35,17 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
   // Sidebar: open by default on lg+, closed on smaller screens
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 1024);
   const [sortBy, setSortBy] = useState<'date' | 'scanned'>('scanned');
+
+  // Table view (default) — server-side paginated, respects the same top-bar filters
+  const VIEW_KEY = 'scanapp-receipts-view';
+  const [viewMode, setViewMode] = useState<'table' | 'cards'>(() =>
+    localStorage.getItem(VIEW_KEY) === 'cards' ? 'cards' : 'table'
+  );
+  const [tPage, setTPage] = useState(1);
+  const [tPageSize, setTPageSize] = useState(50);
+  const [tSortBy, setTSortBy] = useState<string | null>(null);
+  const [tSortOrder, setTSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [tableExporting, setTableExporting] = useState(false);
 
   // Search
   const [searchQuery, setSearchQuery] = useState('');
@@ -102,7 +114,7 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
     }
   }, [isEditing]);
 
-  useEffect(() => { setPage(1); }, [filters]);
+  useEffect(() => { setPage(1); setTPage(1); }, [filters, searchResults]);
 
   useEffect(() => {
     if (!selectedId && receipts.length > 0) setSelectedId(receipts[0].id);
@@ -195,6 +207,45 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
     ? filteredReceipts
     : filteredReceipts.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);
   const selected     = filteredReceipts.find(r => r.id === selectedId);
+
+  // Table view — client sort over filteredReceipts (date-chronological)
+  const tableSorted = (() => {
+    if (!tSortBy) return filteredReceipts;
+    const dir = tSortOrder === 'asc' ? 1 : -1;
+    const isDate = tSortBy === 'receipt_date';
+    return [...filteredReceipts].sort((a: any, b: any) => {
+      const avRaw = isDate ? (a.receiptDate ?? '') : (a[tSortBy] ?? a[tSortBy.replace(/_([a-z])/g, (_: string, c: string) => c.toUpperCase())] ?? '');
+      const bvRaw = isDate ? (b.receiptDate ?? '') : (b[tSortBy] ?? b[tSortBy.replace(/_([a-z])/g, (_: string, c: string) => c.toUpperCase())] ?? '');
+      if (isDate) {
+        const parse = (v: string) => {
+          if (!v) return 0;
+          const m = String(v).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+          if (m) return new Date(`${m[3]}-${m[1].padStart(2,'0')}-${m[2].padStart(2,'0')}`).getTime();
+          const t = Date.parse(String(v));
+          return isNaN(t) ? 0 : t;
+        };
+        return (parse(avRaw) - parse(bvRaw)) * dir;
+      }
+      const av = String(avRaw).toLowerCase();
+      const bv = String(bvRaw).toLowerCase();
+      if (!isNaN(Number(av)) && !isNaN(Number(bv)) && av && bv) return (Number(av) - Number(bv)) * dir;
+      return av.localeCompare(bv) * dir;
+    });
+  })();
+  const tableTotal = tableSorted.length;
+  const tablePages = Math.max(1, Math.ceil(tableTotal / tPageSize));
+  const tableRows = tableSorted.slice((Math.min(tPage, tablePages) - 1) * tPageSize, Math.min(tPage, tablePages) * tPageSize);
+  const handleTableSort = (sb: string | null, o: 'asc' | 'desc') => { setTSortBy(sb); setTSortOrder(o); setTPage(1); };
+  const handleTableExport = async () => {
+    setTableExporting(true);
+    try {
+      const cols = JSON.parse(localStorage.getItem(`scanapp-receipt-table-cols-${userId}`) || 'null') || undefined;
+      await exportApi.downloadReport({
+        format: 'csv', reportType: 'receipts', columns: cols,
+        category: filters.category || undefined, q: searchQuery.trim() || undefined,
+      });
+    } catch (e: any) { alert(e?.message || 'Export failed'); } finally { setTableExporting(false); }
+  };
 
   if (loading && receipts.length === 0) {
     return (
@@ -405,6 +456,11 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
           )}
         </div>
 
+        <div className="ml-auto inline-flex rounded-lg border border-gray-300 bg-white p-0.5">
+          <button onClick={() => { setViewMode('table'); localStorage.setItem(VIEW_KEY, 'table'); }} className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium ${viewMode === 'table' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><Table2 className="h-3.5 w-3.5" /> Table</button>
+          <button onClick={() => { setViewMode('cards'); localStorage.setItem(VIEW_KEY, 'cards'); }} className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium ${viewMode === 'cards' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}><LayoutGrid className="h-3.5 w-3.5" /> Cards</button>
+        </div>
+
         <button
           onClick={() => setShowExportModal(true)}
           className="flex-shrink-0 px-3 py-1.5 text-xs sm:text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
@@ -413,7 +469,25 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
         </button>
       </div>
 
-      {/* ── Main body: sidebar + detail ── */}
+      {viewMode === 'table' ? (
+        <div className="flex-1 overflow-auto p-4 bg-gray-100">
+          <ReceiptsTableView
+            userId={userId}
+            rows={tableRows}
+            total={tableTotal}
+            page={Math.min(tPage, tablePages)}
+            pageSize={tPageSize}
+            onPageChange={(p, s) => { setTPage(p); setTPageSize(s); }}
+            sortBy={tSortBy}
+            sortOrder={tSortOrder}
+            onSortChange={handleTableSort}
+            loading={loading}
+            onRowClick={(r: any) => handleSelect(r.id)}
+            onExport={handleTableExport}
+            exporting={tableExporting}
+          />
+        </div>
+      ) : (
       <div className="flex flex-1 overflow-hidden relative">
 
         {/* Desktop sidebar (inline, width-transitions) */}
@@ -451,6 +525,7 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
           )}
         </div>
       </div>
+      )}
     </div>
   );
 };

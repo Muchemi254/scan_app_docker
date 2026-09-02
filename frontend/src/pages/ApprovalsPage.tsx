@@ -251,15 +251,28 @@ const ApprovalsPage = () => {
     ? filteredRows
     : filteredRows.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);
 
-  // Table view — client sort over filteredRows
+  // Table view — client sort over filteredRows (date-aware)
   const tableSorted = (() => {
     if (!tSortBy) return filteredRows;
     const dir = tSortOrder === 'asc' ? 1 : -1;
-    const m: Record<string, string> = { receipt_date: 'receipt_date', supplier: 'supplier', total_amount: 'total_amount', category: 'category', status: 'status', invoice_number: 'invoice_number', entry_type: 'entry_type', batch_title: 'batch_title', created_at: 'createdAt' };
+    const m: Record<string, string> = { receipt_date: 'receipt_date', receiptDate: 'receipt_date', supplier: 'supplier', total_amount: 'total_amount', category: 'category', status: 'status', invoice_number: 'invoice_number', entry_type: 'entry_type', batch_title: 'batch_title', created_at: 'createdAt' };
     const k = m[tSortBy] || tSortBy;
+    const isDateKey = k === 'receipt_date';
     return [...filteredRows].sort((a: any, b: any) => {
-      const av = String(a[k] ?? '').toLowerCase();
-      const bv = String(b[k] ?? '').toLowerCase();
+      const avRaw = a[k] ?? '';
+      const bvRaw = b[k] ?? '';
+      if (isDateKey) {
+        const parse = (v: string) => {
+          if (!v) return 0;
+          const mm = String(v).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+          if (mm) return new Date(`${mm[3]}-${mm[1].padStart(2,'0')}-${mm[2].padStart(2,'0')}`).getTime();
+          const t = Date.parse(String(v));
+          return isNaN(t) ? 0 : t;
+        };
+        return (parse(avRaw) - parse(bvRaw)) * dir;
+      }
+      const av = String(avRaw).toLowerCase();
+      const bv = String(bvRaw).toLowerCase();
       if (!isNaN(Number(av)) && !isNaN(Number(bv)) && av && bv) return (Number(av) - Number(bv)) * dir;
       return av.localeCompare(bv) * dir;
     });

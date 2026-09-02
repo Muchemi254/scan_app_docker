@@ -160,9 +160,22 @@ const ReviewPage = ({ userId }: { userId: string | null }) => {
     const dir = tSortOrder === 'asc' ? 1 : -1;
     const m: Record<string, string> = { receipt_date: 'receiptDate', supplier: 'supplier', total_amount: 'totalAmount', category: 'category', status: 'status', invoice_number: 'invoiceNumber', batch_title: 'batchTitle' };
     const k = m[tSortBy] || tSortBy;
+    const isDateKey = k === 'receiptDate';
     return [...receipts].sort((a: any, b: any) => {
-      const av = String((a as any)[k] ?? '').toLowerCase();
-      const bv = String((b as any)[k] ?? '').toLowerCase();
+      const avRaw = (a as any)[k] ?? '';
+      const bvRaw = (b as any)[k] ?? '';
+      if (isDateKey) {
+        const parse = (v: string) => {
+          if (!v) return 0;
+          const mm = String(v).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+          if (mm) return new Date(`${mm[3]}-${mm[1].padStart(2,'0')}-${mm[2].padStart(2,'0')}`).getTime();
+          const t = Date.parse(String(v));
+          return isNaN(t) ? 0 : t;
+        };
+        return (parse(avRaw) - parse(bvRaw)) * dir;
+      }
+      const av = String(avRaw).toLowerCase();
+      const bv = String(bvRaw).toLowerCase();
       if (!isNaN(Number(av)) && !isNaN(Number(bv)) && av && bv) return (Number(av) - Number(bv)) * dir;
       return av.localeCompare(bv) * dir;
     });

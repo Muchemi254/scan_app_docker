@@ -253,9 +253,22 @@ const MyApprovalsPage = () => {
       entry_type: 'entryType', entryType: 'entryType', batch_title: 'batchTitle', batchTitle: 'batchTitle',
     };
     const key = colMap[tableSortBy] || tableSortBy;
+    const isDateKey = key === 'receiptDate';
     return [...listForTab].sort((a: any, b: any) => {
-      const av = String(a[key] ?? a[key.replace(/([A-Z])/g, '_$1').toLowerCase()] ?? '').toLowerCase();
-      const bv = String(b[key] ?? b[key.replace(/([A-Z])/g, '_$1').toLowerCase()] ?? '').toLowerCase();
+      const avRaw = a[key] ?? a[key.replace(/([A-Z])/g, '_$1').toLowerCase()] ?? '';
+      const bvRaw = b[key] ?? b[key.replace(/([A-Z])/g, '_$1').toLowerCase()] ?? '';
+      if (isDateKey) {
+        const parse = (v: string) => {
+          if (!v) return 0;
+          const m = String(v).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+          if (m) return new Date(`${m[3]}-${m[1].padStart(2,'0')}-${m[2].padStart(2,'0')}`).getTime();
+          const t = Date.parse(String(v));
+          return isNaN(t) ? 0 : t;
+        };
+        return (parse(avRaw) - parse(bvRaw)) * dir;
+      }
+      const av = String(avRaw).toLowerCase();
+      const bv = String(bvRaw).toLowerCase();
       if (!isNaN(Number(av)) && !isNaN(Number(bv)) && av && bv) return (Number(av) - Number(bv)) * dir;
       return av.localeCompare(bv) * dir;
     });
