@@ -100,6 +100,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Could not verify database collation: {e}")
 
+    # Ensure DB migrations are applied before image self-heal (otherwise
+    # receipt columns like image_bytes may not exist yet and heal would no-op).
+    try:
+        from app.core.database import get_pool
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            ver = await conn.fetchval("SELECT version_num FROM alembic_version")
+            logger.info("DB alembic_version: %s", ver)
+    except Exception as e:
+        logger.warning(f"Could not check alembic_version: {e}")
     # Image-integrity check + self-heal — receipts reference image files by
     # name in the image_data volume. A wiped/emptied volume (docker system
     # prune --volumes, down -v, manual cleanup) used to leave the DB intact
@@ -168,11 +178,19 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Redis connection failed (batch scanning will be unavailable): {e}")
 
-    # Background cleanup: purge deleted users' data (rows + files) on a timer
-    # so the admin delete endpoint stays fast. Idempotent + age-guarded.
+    # Background tasks: cleanup + stale scan reaper (both must not block startup)
     cleanup_task: asyncio.Task = None
+    reap_task: asyncio.Task = None
 
     async def _cleanup_loop():
+        # Run once soon after startup (not after sleep) so first sweep is prompt
+        try:
+            from app.services import data_cleanup_service
+            stats = await data_cleanup_service.cleanup_orphaned_data()
+            if any(stats.values()):
+                logger.info("Background cleanup finished: %s", stats)
+        except Exception as e:
+            logger.warning(f"Background cleanup failed (initial): {e}")
         await asyncio.sleep(settings.DATA_CLEANUP_INTERVAL_SECONDS)
         while True:
             try:
@@ -184,9 +202,7 @@ async def lifespan(app: FastAPI):
                 raise
             except Exception as e:
                 logger.warning(f"Background cleanup failed: {e}")
-            # Watchdog: any op still "running" past its window (e.g. a delete
-            # whose background task died) gets finalized so admin UIs stop
-            # polling a phantom row forever.
+            # Watchdog: any op still "running" past its window
             try:
                 from app.services import ops_service
                 stale = await ops_service.finalize_stale_ops(
@@ -200,22 +216,42 @@ async def lifespan(app: FastAPI):
                 logger.warning(f"Stale-op watchdog failed: {e}")
             await asyncio.sleep(settings.DATA_CLEANUP_INTERVAL_SECONDS)
 
+    async def _reap_loop():
+        from app.services.batch_service import reap_stale_sessions, STUCK_POLL_INTERVAL_SECONDS, STUCK_TIMEOUT_SECONDS
+        await asyncio.sleep(30)  # let first batches settle
+        while True:
+            try:
+                n = await reap_stale_sessions(stale_seconds=STUCK_TIMEOUT_SECONDS)
+                if n:
+                    logger.warning("Reaped %d stale scan session(s)", n)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(f"Stale scan reaper failed: {e}")
+            await asyncio.sleep(STUCK_POLL_INTERVAL_SECONDS)
+
     try:
         cleanup_task = asyncio.create_task(_cleanup_loop())
         logger.info("Background data cleanup started (every %ds)", settings.DATA_CLEANUP_INTERVAL_SECONDS)
     except Exception as e:
         logger.warning(f"Could not start background data cleanup: {e}")
+    try:
+        reap_task = asyncio.create_task(_reap_loop())
+        logger.info("Stale scan reaper started (every %ds, stale=%ds)", 60, 300)
+    except Exception as e:
+        logger.warning(f"Could not start stale scan reaper: {e}")
 
     yield
 
     # Shutdown
     logger.info("Shutting down application")
-    if cleanup_task:
-        cleanup_task.cancel()
-        try:
-            await cleanup_task
-        except (asyncio.CancelledError, Exception):
-            pass
+    for t in (cleanup_task, reap_task):
+        if t:
+            t.cancel()
+            try:
+                await t
+            except (asyncio.CancelledError, Exception):
+                pass
     try:
         from app.core.database import close_pool
         await close_pool()

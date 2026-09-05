@@ -47,6 +47,8 @@ logger = logging.getLogger(__name__)
 # check, task N+1 can pick up task N's dead client and crash with
 # "Event loop is closed".
 _redis_cache: Dict[int, Tuple[asyncio.AbstractEventLoop, aioredis.Redis]] = {}
+import threading as _bs_threading
+_redis_thread_lock = _bs_threading.Lock()
 
 
 async def get_redis() -> aioredis.Redis:
@@ -57,21 +59,20 @@ async def get_redis() -> aioredis.Redis:
         return aioredis.from_url(settings.REDIS_URL, decode_responses=True)
 
     loop_id = id(loop)
-    cached = _redis_cache.get(loop_id)
-    if cached is not None:
-        cached_loop, cached_client = cached
-        # Identity check catches id() reuse after GC; is_closed() catches the
-        # rarer case where someone closed the loop without dropping the cache.
-        if cached_loop is loop and not loop.is_closed():
-            return cached_client
-        # Stale — pop and recreate.
-        _redis_cache.pop(loop_id, None)
-        logger.info(f"Dropping stale Redis client for reused loop id {loop_id}")
+    with _redis_thread_lock:
+        cached = _redis_cache.get(loop_id)
+        if cached is not None:
+            cached_loop, cached_client = cached
+            if cached_loop is loop and not loop.is_closed():
+                return cached_client
+            _redis_cache.pop(loop_id, None)
+            logger.info(f"Dropping stale Redis client for reused loop id {loop_id}")
 
     logger.info(f"Creating new Redis client for event loop {loop_id}")
     pool = aioredis.ConnectionPool.from_url(settings.REDIS_URL, decode_responses=True)
     client = aioredis.Redis(connection_pool=pool)
-    _redis_cache[loop_id] = (loop, client)
+    with _redis_thread_lock:
+        _redis_cache[loop_id] = (loop, client)
     return client
 
 
@@ -82,7 +83,8 @@ async def close_redis() -> None:
     except RuntimeError:
         return
     loop_id = id(loop)
-    cached = _redis_cache.pop(loop_id, None)
+    with _redis_thread_lock:
+        cached = _redis_cache.pop(loop_id, None)
     if cached is None:
         return
     _, client = cached
@@ -176,7 +178,10 @@ async def get_user_batches(user_id: str) -> List[str]:
         return [str(r["id"]) for r in rows]
 
 
-TRANSIENT_ITEM_STATUSES = {"pending", "optimizing", "extracting"}
+TRANSIENT_ITEM_STATUSES = {"pending", "optimizing", "processing", "extracting"}
+
+STUCK_TIMEOUT_SECONDS = 300  # matches Nginx 300s and celery soft limit
+STUCK_POLL_INTERVAL_SECONDS = 60
 
 
 def derive_session_status(batch: dict) -> str:
@@ -307,6 +312,7 @@ async def init_chunks(
         {
             "index": c["index"],
             "itemRange": c["itemRange"],
+            "indices": c.get("indices") or list(range(c["itemRange"][0], c["itemRange"][1] + 1)),
             "size": c["size"],
             "status": "pending",
             "attempts": 0,
@@ -327,14 +333,24 @@ async def init_chunks(
                 json.dumps(chunk_meta), batch_id, user_id,
             )
             for c in chunks:
-                lo, hi = c["itemRange"]
-                await conn.execute(
-                    """
-                    UPDATE scan_session_items SET chunk_index = $1, updated_at = now()
-                    WHERE session_id = $2 AND item_index BETWEEN $3 AND $4
-                    """,
-                    c["index"], batch_id, lo, hi,
-                )
+                indices = c.get("indices")
+                if indices is not None:
+                    await conn.execute(
+                        """
+                        UPDATE scan_session_items SET chunk_index = $1, updated_at = now()
+                        WHERE session_id = $2 AND item_index = ANY($3::int[])
+                        """,
+                        c["index"], batch_id, [int(x) for x in indices],
+                    )
+                else:
+                    lo, hi = c["itemRange"]
+                    await conn.execute(
+                        """
+                        UPDATE scan_session_items SET chunk_index = $1, updated_at = now()
+                        WHERE session_id = $2 AND item_index BETWEEN $3 AND $4
+                        """,
+                        c["index"], batch_id, lo, hi,
+                    )
 
 
 async def update_chunk(
@@ -393,6 +409,59 @@ async def delete_batch(user_id: str, batch_id: str) -> None:
         )
 
 
+async def reap_stale_sessions(stale_seconds: int = STUCK_TIMEOUT_SECONDS) -> int:
+    """Background reaper for stuck processing/uploading sessions.
+
+    Finds sessions with status in (uploading, processing) whose last activity
+    (session updated_at and max item updated_at) is older than stale_seconds,
+    marks in-flight items as failed AI_TIMEOUT and logs a durable scan_error.
+    Used by the backend periodic task so stuck detection does not depend on
+    frontend polling.
+    """
+    from datetime import datetime, timezone
+    from app.services.scan_error_service import log_error  # lazy to avoid cycle
+
+    pool = await get_pool()
+    now_ts = datetime.now(timezone.utc).timestamp()
+    reap_count = 0
+    # Find candidate sessions
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id, user_id, title FROM scan_sessions
+            WHERE status IN ('uploading','processing')
+              AND updated_at < now() - ($1::text || ' seconds')::interval
+            """,
+            str(stale_seconds),
+        )
+    for row in rows:
+        sid = str(row["id"])
+        uid = str(row["user_id"])
+        batch = await get_batch(uid, sid)
+        if not batch:
+            continue
+        # Compute last_activity including items (same as batches.py _load_batch)
+        last_activity = batch.get("lastActivity") or batch.get("createdAt") or 0
+        for it in batch.get("items") or []:
+            it_ts = it.get("updatedAt") or 0
+            if it_ts > last_activity:
+                last_activity = it_ts
+        if (now_ts - last_activity) <= stale_seconds:
+            continue
+        # Only in-flight items are stuck — keep prepared for later dispatch
+        msg = "Task timed out or was interrupted — please re-scan"
+        for item in batch["items"]:
+            if item["status"] in ("pending", "processing", "optimizing", "extracting"):
+                await update_item(uid, sid, item["index"], "failed", message=msg, stage="done", error_code="AI_TIMEOUT")
+        try:
+            await log_error(uid, kind="batch", code="AI_TIMEOUT", message=msg, title=batch.get("batchTitle") or "Receipt batch", batch_id=sid)
+        except Exception:
+            logger.warning("Failed to log reaped batch %s", sid, exc_info=True)
+        reap_count += 1
+        logger.warning("Reaped stale batch %s (title=%s) after %ds", sid, row["title"], stale_seconds)
+    return reap_count
+
+
 async def remove_batches_from_index(user_id: str, batch_ids) -> None:
     """No-op — sessions never expire in Postgres. Kept for API compatibility."""
     return
@@ -441,13 +510,14 @@ async def set_prepared(
 async def finalize_prepared(
     user_id: str, batch_id: str, prepared_count: int, group_count: int
 ) -> None:
-    """Flip a session to `prepared` (holding) once local prep is done."""
+    """Flip a session to holding/done/failed once local prep is done."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
             """
-            UPDATE scan_sessions SET status = 'prepared', image_count = $3,
-                group_count = $4, updated_at = now()
+            UPDATE scan_sessions SET
+                status = CASE WHEN $3 = 0 THEN 'failed' ELSE 'prepared' END,
+                image_count = $3, group_count = $4, updated_at = now()
             WHERE id = $1 AND user_id = $2
             """,
             batch_id, user_id, prepared_count, group_count,

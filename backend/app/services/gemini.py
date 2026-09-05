@@ -226,8 +226,16 @@ def _genai():
 # pool or concurrent FastAPI handlers (different loops would race on
 # per-user API keys). Concurrent calls wait on the lock, so at most one SDK
 # call is in flight per worker process — the price of multi-tenant safety.
-_genai_thread_lock = threading.Lock()
+_genai_lock_by_key: dict[str, threading.Lock] = {}
+_genai_locks_lock = threading.Lock()
 _current_configured_key: Optional[str] = None
+
+
+def _lock_for_key(key: str) -> threading.Lock:
+    with _genai_locks_lock:
+        if key not in _genai_lock_by_key:
+            _genai_lock_by_key[key] = threading.Lock()
+        return _genai_lock_by_key[key]
 
 
 async def _gemini_generate_content(
@@ -252,7 +260,10 @@ async def _gemini_generate_content(
 
     def _serialized_call():
         global _current_configured_key
-        with _genai_thread_lock:
+        # Per-key lock allows 4 concurrent Gemini calls with different keys in parallel;
+        # same-key calls remain serialized (global configure is per-key).
+        lock = _lock_for_key(api_key)
+        with lock:
             if _current_configured_key != api_key:
                 logger.info("Re-configuring Gemini SDK with new API key")
                 _genai().configure(api_key=api_key)
@@ -483,6 +494,52 @@ _BATCH_RESPONSE_SCHEMA = """Return ONLY ONE JSON object matching this structure:
     ...
   ]
 }}"""
+
+
+def _truncate_extra_data(text: str) -> str:
+    """Truncate concatenated JSON objects to the first balanced object/array.
+
+    Gemini sometimes returns back-to-back objects with trailing text resulting
+    in ``Extra data`` on ``json.loads``. We count braces to find the end of
+    the first JSON value and discard the rest.
+    """
+    s = text.strip()
+    if not s:
+        return s
+    # Find first { or [
+    start = -1
+    for i, ch in enumerate(s):
+        if ch in "{[":
+            start = i
+            break
+    if start == -1:
+        return s
+    opener = s[start]
+    closer = "}" if opener == "{" else "]"
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(start, len(s)):
+        ch = s[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+            continue
+        if ch == opener:
+            depth += 1
+        elif ch == closer:
+            depth -= 1
+            if depth == 0:
+                # Return up to this char plus any trailing whitespace before next char
+                return s[start : i + 1].strip()
+    return s
 
 
 def _clean_json_response(text: str) -> str:
@@ -766,7 +823,8 @@ async def extract_receipt_batch(
         # code fence that _clean_json_response can't strip and json.loads rejects
         # as "Expecting value: char 0" (misreported as AI_EMPTY_RESPONSE/AI_INVALID_JSON).
         base_budget = 8192 if (model_id and model_id.startswith("qwen-vl-ocr")) else 2048
-        max_tokens = min(8192, max(base_budget, 1024 * len(files)))
+        # Gemini can handle 16384 for verbose 10-receipt batches (800 tokens each ~8000) — avoid mid-array truncation
+        max_tokens = min(16384, max(base_budget, 1024 * len(files)))
 
         if provider == "deepseek":
             content = []
@@ -807,7 +865,24 @@ async def extract_receipt_batch(
         try:
             payload = json.loads(response_text)
         except json.JSONDecodeError as e:
-            raise ValueError(f"AI returned malformed JSON (decode failed): {str(e)}") from e
+            # Try truncation for Extra data / concatenated objects (common Gemini glitch)
+            if "Extra data" in str(e):
+                truncated = _truncate_extra_data(response_text)
+                if truncated != response_text:
+                    try:
+                        payload = json.loads(truncated)
+                        logger.warning("Truncated Extra data JSON to first object")
+                    except json.JSONDecodeError:
+                        raise ValueError(f"AI returned malformed JSON (decode failed): {str(e)}") from e
+                    else:
+                        # success via truncation — continue with truncated payload
+                        pass
+                else:
+                    raise ValueError(f"AI returned malformed JSON (decode failed): {str(e)}") from e
+            else:
+                raise ValueError(f"AI returned malformed JSON (decode failed): {str(e)}") from e
+            if "payload" not in locals():
+                raise ValueError(f"AI returned malformed JSON (decode failed): {str(e)}") from e
 
         # Normalize: expect ONE object wrapping a "receipts" array. Bare arrays
         # and bare single objects are accepted for backwards compatibility.

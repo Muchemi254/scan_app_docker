@@ -63,13 +63,23 @@ class DataService:
         supplier: Optional[str] = None, location: Optional[str] = None,
         invoice_number: Optional[str] = None, kra_pin: Optional[str] = None,
         buyer_kra_pin: Optional[str] = None, cu_invoice: Optional[str] = None,
+        include_items: bool = True,
     ) -> tuple:
         db, _ = cls._backend()
-        return await db.list_receipts(
-            user_id, skip, limit, status, category, batch_title, rejected,
-            has_image, entry_type, has_pdf, sort_by, order,
-            supplier, location, invoice_number, kra_pin, buyer_kra_pin, cu_invoice,
-        )
+        # DatabaseService supports include_items; Firestore fallback ignores it
+        try:
+            return await db.list_receipts(
+                user_id, skip, limit, status, category, batch_title, rejected,
+                has_image, entry_type, has_pdf, sort_by, order,
+                supplier, location, invoice_number, kra_pin, buyer_kra_pin, cu_invoice,
+                include_items=include_items,
+            )
+        except TypeError:
+            return await db.list_receipts(
+                user_id, skip, limit, status, category, batch_title, rejected,
+                has_image, entry_type, has_pdf, sort_by, order,
+                supplier, location, invoice_number, kra_pin, buyer_kra_pin, cu_invoice,
+            )
 
     @classmethod
     async def update_receipt(cls, user_id: str, receipt_id: str, receipt_data: Dict[str, Any]) -> bool:

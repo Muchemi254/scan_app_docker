@@ -23,6 +23,10 @@ RECEIPT_LABELS = {
     "kraPin": "Seller PIN", "buyerKraPin": "Buyer PIN", "cuInvoice": "CU Invoice",
     "batchTitle": "Batch", "status": "Status",
 }
+
+# Columns that must stay as text to preserve leading zeros (invoice numbers, PINs, CU)
+TEXT_CSV_COLS = {"invoiceNumber", "kraPin", "buyerKraPin", "cuInvoice"}
+TEXT_EXCEL_HEADERS = {"Invoice #", "Invoice", "Seller PIN", "Buyer PIN", "CU Invoice"}
 MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 
@@ -334,6 +338,19 @@ def style_header_row(ws, col_count: int):
         cell.border = THIN_BORDER
 
 
+def _is_text_header(header: str) -> bool:
+    h = header.strip()
+    return h in TEXT_EXCEL_HEADERS or "Invoice" in h or "PIN" in h or "CU" in h
+
+
+def _preserve_leading_zeros_csv(val: str) -> str:
+    """Wrap numeric strings with leading zeros so Excel keeps them as text.
+    Uses ="value" formula trick which Excel renders as text without evaluating."""
+    if isinstance(val, str) and len(val) > 1 and val[0] == "0" and val.isdigit():
+        return f'="{val}"'
+    return val
+
+
 def style_data_rows(ws, row_count: int, col_count: int):
     alt_fill = PatternFill(start_color="F8FAFC", end_color="F8FAFC", fill_type="solid")
     for row in range(2, row_count + 1):
@@ -465,6 +482,15 @@ def _add_excel_sheet(wb: Workbook, name: str, headers: List[str], data: List[lis
         ws.append(row)
     style_header_row(ws, len(headers))
     style_data_rows(ws, len(data) + 1, len(headers))
+    # Force text format for invoice/PIN columns to preserve leading zeros
+    for col_idx, h in enumerate(headers, start=1):
+        if _is_text_header(h):
+            for row in range(2, len(data) + 2):
+                cell = ws.cell(row=row, column=col_idx)
+                if cell.value is not None and str(cell.value) != "":
+                    cell.number_format = '@'
+                    # Ensure value is stored as string
+                    cell.value = str(cell.value)
     if date_cols:
         for col_idx in date_cols:
             for row in range(2, len(data) + 2):
@@ -613,6 +639,8 @@ def generate_csv(receipts: List[dict], report_type: str, date_from: Optional[str
                  columns: Optional[List[str]] = None) -> bytes:
     filtered = aggregate_receipts(receipts, date_from, date_to)
     buf = io.StringIO()
+    # Add BOM for Excel to recognize UTF-8
+    buf.write("\ufeff")
     writer = csv.writer(buf)
 
     uses_month = _report_uses_month(report_type, pivot_config)
@@ -621,14 +649,20 @@ def generate_csv(receipts: List[dict], report_type: str, date_from: Optional[str
         _detail_headers = ["Receipt ID", "Date", "Supplier", "Category", "Invoice", "Item", "Qty", "Price", "Tax", "Disc%", "Calculated Item Total", "Receipt Total"]
         writer.writerow(_detail_headers)
         for r in detailed_rows(filtered):
-            writer.writerow([r.get(h, "") for h in _detail_headers])
+            writer.writerow([_preserve_leading_zeros_csv(str(r.get(h, ""))) if h == "Invoice" else r.get(h, "") for h in _detail_headers])
 
     elif report_type == "receipts":
         cols = columns or RECEIPT_FIELDS
         headers = [RECEIPT_LABELS.get(c, c) for c in cols]
         writer.writerow(headers)
         for r in receipts_rows(filtered, cols):
-            writer.writerow([r.get(c, "") for c in cols])
+            row = []
+            for c in cols:
+                v = r.get(c, "")
+                if c in TEXT_CSV_COLS:
+                    v = _preserve_leading_zeros_csv(str(v)) if v != "" else v
+                row.append(v)
+            writer.writerow(row)
 
     elif report_type == "pivot" and pivot_config:
         pc = pivot_config

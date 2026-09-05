@@ -30,6 +30,9 @@ _current_user: ContextVar[str] = ContextVar("current_user_id", default="")
 # for the full rationale — same bug class: id() reuse across Celery tasks can
 # return a dead pool from a previous task's closed event loop.
 _pool_cache: dict[int, Tuple[asyncio.AbstractEventLoop, "_RLSPool"]] = {}
+_pool_lock = asyncio.Lock() if False else None  # replaced lazily with threading.Lock at runtime
+import threading as _db_threading
+_pool_thread_lock = _db_threading.Lock()
 _rls_initialized = False
 
 
@@ -90,14 +93,14 @@ async def init_pool() -> _RLSPool:
         raise RuntimeError("init_pool must be called within an active event loop")
 
     loop_id = id(loop)
-    cached = _pool_cache.get(loop_id)
-    if cached is not None:
-        cached_loop, cached_pool = cached
-        if cached_loop is loop and not loop.is_closed():
-            return cached_pool
-        # id() reused after a previous Celery task's loop was GC'd — drop it.
-        _pool_cache.pop(loop_id, None)
-        logger.info("Dropping stale Postgres pool for reused loop id %d", loop_id)
+    with _pool_thread_lock:
+        cached = _pool_cache.get(loop_id)
+        if cached is not None:
+            cached_loop, cached_pool = cached
+            if cached_loop is loop and not loop.is_closed():
+                return cached_pool
+            _pool_cache.pop(loop_id, None)
+            logger.info("Dropping stale Postgres pool for reused loop id %d", loop_id)
 
     logger.info(
         "Creating PostgreSQL pool for loop %d → %s (min=%d, max=%d)",
@@ -114,13 +117,13 @@ async def init_pool() -> _RLSPool:
         command_timeout=30,
     )
 
-    # Enable Row-Level Security once per process (tables are shared)
     if not _rls_initialized:
         await _enable_rls(raw_pool)
         _rls_initialized = True
 
     pool = _RLSPool(raw_pool)
-    _pool_cache[loop_id] = (loop, pool)
+    with _pool_thread_lock:
+        _pool_cache[loop_id] = (loop, pool)
     return pool
 
 
@@ -181,7 +184,8 @@ async def close_pool() -> None:
     except RuntimeError:
         return
     loop_id = id(loop)
-    cached = _pool_cache.pop(loop_id, None)
+    with _pool_thread_lock:
+        cached = _pool_cache.pop(loop_id, None)
     if cached is None:
         return
     _, pool = cached
@@ -200,14 +204,14 @@ async def get_pool() -> _RLSPool:
         raise RuntimeError("get_pool must be called within an active event loop")
 
     loop_id = id(loop)
-    cached = _pool_cache.get(loop_id)
-    if cached is not None:
-        cached_loop, cached_pool = cached
-        if cached_loop is loop and not loop.is_closed():
-            return cached_pool
-        # Stale — drop it and fall through to init_pool which will validate again.
-        _pool_cache.pop(loop_id, None)
-        logger.info("Dropping stale Postgres pool for reused loop id %d", loop_id)
+    with _pool_thread_lock:
+        cached = _pool_cache.get(loop_id)
+        if cached is not None:
+            cached_loop, cached_pool = cached
+            if cached_loop is loop and not loop.is_closed():
+                return cached_pool
+            _pool_cache.pop(loop_id, None)
+            logger.info("Dropping stale Postgres pool for reused loop id %d", loop_id)
 
     # Auto-initialize if missing or just-dropped (safer for deep service calls)
     return await init_pool()

@@ -47,60 +47,37 @@ def _require_owner(batch: dict, user_id: str) -> None:
 
 
 async def _load_batch(user_id: str, batch_id: str) -> Optional[dict]:
-    """Load a batch, applying the stuck detection, or None if it no longer exists."""
+    """Load a batch, applying the stuck detection, or None if it no longer exists.
+
+    Delegates to the shared reaper logic for consistency; keeps the per-GET
+    fast-path for UI responsiveness but the periodic background reaper
+    (batch_service.reap_stale_sessions) handles stuck sessions even without polling.
+    """
+    from app.services.batch_service import STUCK_TIMEOUT_SECONDS
+
     batch = await batch_service.get_batch(user_id, batch_id)
     if not batch:
         return None
 
-    created_at = batch.get("createdAt", 0)
-    last_activity = batch.get("lastActivity", created_at)
+    last_activity = batch.get("lastActivity") or batch.get("createdAt") or 0
     now_ts = datetime.now(timezone.utc).timestamp()
-
-    # Item-level progress keeps the session alive: the worker only bumps
-    # session `updated_at` on set_batch_status/chunk updates, so a long
-    # Gemini run must still count item updated_at as recent activity —
-    # otherwise a slow-but-alive batch would be judged "stuck".
     for it in batch.get("items") or []:
         it_ts = it.get("updatedAt") or 0
         if it_ts > last_activity:
             last_activity = it_ts
 
-    # If no activity for 5 minutes, it's stuck
-    is_stuck = batch["status"] in ("uploading", "processing") and (now_ts - last_activity > 300)
-
+    is_stuck = batch["status"] in ("uploading", "processing") and (now_ts - last_activity > STUCK_TIMEOUT_SECONDS)
     if is_stuck:
-        # ONLY in-flight items are stuck. Held `prepared` items were never
-        # dispatched — leave them alone so the session stays dispatchable
-        # and can still be sent later.
         msg = "Task timed out or was interrupted — please re-scan"
         for item in batch["items"]:
             if item["status"] in ("pending", "processing", "optimizing", "extracting"):
-                await batch_service.update_item(
-                    user_id, batch_id, item["index"], "failed",
-                    message=msg, stage="done", error_code="AI_TIMEOUT",
-                )
-        # Session status derives from items: if prepared items remain it is
-        # back to `prepared` (dispatchable), otherwise `failed`. No forced
-        # terminal status — that would lock out untouched held groups.
-
-        # Durable notification — the session is durable, but a notification
-        # makes the stuck batch visible without opening the Scans page.
-        # Best-effort.
+                await batch_service.update_item(user_id, batch_id, item["index"], "failed", message=msg, stage="done", error_code="AI_TIMEOUT")
         try:
             from app.services.scan_error_service import log_error
-            await log_error(
-                user_id,
-                kind="batch",
-                code="AI_TIMEOUT",
-                message=msg,
-                title=batch.get("batchTitle") or "Receipt batch",
-                batch_id=batch_id,
-            )
+            await log_error(user_id, kind="batch", code="AI_TIMEOUT", message=msg, title=batch.get("batchTitle") or "Receipt batch", batch_id=batch_id)
         except Exception:
             logger.warning("Failed to log stuck-batch error", exc_info=True)
-
         batch = await batch_service.get_batch(user_id, batch_id)
-
     return batch
 
 
@@ -185,13 +162,11 @@ async def start_processing(
         if len(contents) > settings.MAX_UPLOAD_SIZE:
             await batch_service.update_item(
                 userId, batchId, idx, "failed",
-                stage="done", message="File too large",
+                stage="done", message=f"File too large ({len(contents)} bytes)",
                 error_code="IMAGE_TOO_LARGE",
             )
-            raise HTTPException(
-                status_code=413,
-                detail=f"File too large: {f.filename} ({len(contents)} bytes)",
-            )
+            logger.warning(f"File too large idx={idx} {f.filename} {len(contents)} bytes — skipping, continuing batch")
+            continue
 
         try:
             from app.services.pdf_service import is_pdf, assert_within_page_cap
@@ -464,12 +439,13 @@ async def retry_chunk(
             detail="Batch images are no longer on disk — please re-upload",
         )
 
-    # Build the slice of entries for this chunk from the persisted item list
-    lo, hi = chunk["itemRange"]
+    # Build the slice of entries for this chunk — prefer explicit indices list (hole-safe)
+    indices = chunk.get("indices") or list(range(chunk["itemRange"][0], chunk["itemRange"][1] + 1))
     entries: List[dict] = []
-    for i in range(lo, hi + 1):
+    for i in indices:
+        if i < 0 or i >= len(batch["items"]):
+            continue
         item = batch["items"][i]
-        # Skip already-saved items so a retry doesn't overwrite them
         if item["status"] in ("done", "needs_review", "duplicate"):
             continue
         fname = item.get("filename")

@@ -81,9 +81,24 @@ export const useReceiptStore = create<ReceiptStore>()((set, get) => ({
 
     set({ loading: true, error: null });
     try {
-      const response = await receiptApi.list(0, 1000);
+      // Paginate through all receipts — previous cap of 1000 cut off filtered/search results
+      const PAGE = 1000;
+      let skip = 0;
+      let all: any[] = [];
+      let total = 0;
+      while (true) {
+        const response: any = await receiptApi.list(skip, PAGE);
+        const pageItems = response.items || [];
+        total = response.total ?? pageItems.length;
+        all = all.concat(pageItems);
+        if (pageItems.length < PAGE) break;
+        if (all.length >= total) break;
+        skip += PAGE;
+        // safety cap 20k to avoid runaway loop
+        if (skip > 20000) break;
+      }
       set({
-        items: response.items || [],
+        items: all,
         fetchedAt: Date.now(),
         cachedUserId: userId,
         loading: false,

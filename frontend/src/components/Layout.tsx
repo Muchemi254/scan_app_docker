@@ -40,6 +40,7 @@ const Layout = () => {
   // never pull another user's personal data).
   const [unread, setUnread] = useState(0);
   const currentUid = user?.uid;
+  const [healthDegraded, setHealthDegraded] = useState<string | null>(null);
   const refreshUnread = useCallback(async () => {
     if (!currentUid || impersonating) return;
     try {
@@ -50,11 +51,25 @@ const Layout = () => {
     }
   }, [currentUid, impersonating]);
 
+  const refreshHealth = useCallback(async () => {
+    if (impersonating) return;
+    try {
+      const { healthApi } = await import('../services/api');
+      const d = await healthApi.detailed();
+      if (d.status !== 'ok') {
+        const bad = Object.entries(d.checks || {}).filter(([, v]) => v !== 'ok').map(([k, v]) => `${k}: ${v}`).join(' · ');
+        setHealthDegraded(bad || 'System degraded');
+      } else setHealthDegraded(null);
+    } catch { /* health is best-effort */ }
+  }, [impersonating]);
+
   useEffect(() => {
     refreshUnread();
+    refreshHealth();
     const timer = setInterval(refreshUnread, 30000);
-    return () => clearInterval(timer);
-  }, [refreshUnread]);
+    const hTimer = setInterval(refreshHealth, 60000);
+    return () => { clearInterval(timer); clearInterval(hTimer); };
+  }, [refreshUnread, refreshHealth]);
 
   // Refresh the badge immediately after visiting the notifications page.
   useEffect(() => {
@@ -405,6 +420,12 @@ const Layout = () => {
         </div>
       </nav>
 
+      {healthDegraded && !impersonating && (
+        <div className="bg-red-50 border-b border-red-200 px-4 py-2 text-sm text-red-800 flex items-center justify-between gap-2">
+          <span>⚠️ System degraded — {healthDegraded}</span>
+          <button onClick={refreshHealth} className="text-xs underline">Retry</button>
+        </div>
+      )}
       {impersonating && (
         <div className="bg-amber-100 border-b border-amber-200 px-4 py-2 flex items-center justify-between gap-3 flex-wrap">
           <p className="text-sm text-amber-900">

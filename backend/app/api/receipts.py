@@ -375,6 +375,7 @@ async def list_receipts(
     kra_pin: Optional[str] = Query(None, alias="kraPin"),
     buyer_kra_pin: Optional[str] = Query(None, alias="buyerKraPin"),
     cu_invoice: Optional[str] = Query(None, alias="cuInvoice"),
+    include_items: bool = Query(True, alias="includeItems"),
     current_user_id: str = Depends(get_current_user_id),
 ):
     """
@@ -408,6 +409,7 @@ async def list_receipts(
             sort_by=sort_by, order=order,
             supplier=supplier, location=location, invoice_number=invoice_number,
             kra_pin=kra_pin, buyer_kra_pin=buyer_kra_pin, cu_invoice=cu_invoice,
+            include_items=include_items,
         )
 
         return ReceiptList(

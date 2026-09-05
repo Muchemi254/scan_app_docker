@@ -39,12 +39,19 @@ router = APIRouter(
 )
 
 
-def _check_access(user_id: str, current_user_id: str) -> None:
-    if user_id != current_user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied",
-        )
+async def _check_access(user_id: str, current_user_id: str) -> None:
+    if user_id == current_user_id:
+        return
+    from app.services import auth_service
+    from app.core.database import set_current_user_id
+    user = await auth_service.get_user_by_uid(current_user_id)
+    if user and user.get("is_admin"):
+        set_current_user_id(user_id)
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Access denied",
+    )
 
 
 # ── GET /overview ─────────────────────────────────────────────────────────────
@@ -60,7 +67,7 @@ async def dashboard_overview(
     date_to: Optional[str] = Query(None, description="End date MM/DD/YYYY"),
     current_user_id: str = Depends(get_current_user_id),
 ):
-    _check_access(userId, current_user_id)
+    await _check_access(userId, current_user_id)
     try:
         data = await DashboardService.get_overview(userId, date_from, date_to)
         return DashboardOverview(**data)
@@ -83,7 +90,7 @@ async def dashboard_trends(
     date_to: Optional[str] = Query(None, description="End date MM/DD/YYYY"),
     current_user_id: str = Depends(get_current_user_id),
 ):
-    _check_access(userId, current_user_id)
+    await _check_access(userId, current_user_id)
     try:
         data = await DashboardService.get_trends(userId, months, date_from, date_to)
         return DashboardTrends(
@@ -112,7 +119,7 @@ async def dashboard_breakdown(
     date_to: Optional[str] = Query(None, description="End date MM/DD/YYYY"),
     current_user_id: str = Depends(get_current_user_id),
 ):
-    _check_access(userId, current_user_id)
+    await _check_access(userId, current_user_id)
     try:
         data = await DashboardService.get_breakdown(userId, date_from, date_to)
         return DashboardBreakdown(
@@ -139,7 +146,7 @@ async def dashboard_insights(
     date_to: Optional[str] = Query(None, description="End date MM/DD/YYYY"),
     current_user_id: str = Depends(get_current_user_id),
 ):
-    _check_access(userId, current_user_id)
+    await _check_access(userId, current_user_id)
     try:
         data = await DashboardService.get_insights(userId, date_from, date_to)
         return DashboardInsights(

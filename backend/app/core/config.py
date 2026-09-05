@@ -104,10 +104,11 @@ class Settings(BaseSettings):
         "ORPHANED_FILE_MIN_AGE_SECONDS", 10 * 60
     )  # 10 min
     # `_scan_*` / `_batch_*` / `_import_*` / `_preview_*` temp dirs older than
-    # this are considered abandoned and removed.
+    # this are considered abandoned and removed. Default 7 days — prepared
+    # sessions are durable and must survive long holds.
     TEMP_DIR_MAX_AGE_SECONDS: float = _env_int(
-        "TEMP_DIR_MAX_AGE_SECONDS", 6 * 60 * 60
-    )  # 6 h
+        "TEMP_DIR_MAX_AGE_SECONDS", 7 * 24 * 60 * 60
+    )  # 7 days
     # Orphan receipt-image file removal is destructive and has historically
     # mis-classified live files as orphans. It is OFF by default: the sweep
     # still reports candidates but never unlinks them. Turn on only after the

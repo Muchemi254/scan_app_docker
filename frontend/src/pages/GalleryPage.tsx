@@ -464,10 +464,14 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
                 <div className="aspect-[4/3] bg-gray-100 relative overflow-hidden">
                   {group.thumbnailUrl ? (
                     <img
-                      src={`/api/images/cached?url=${encodeURIComponent(group.thumbnailUrl)}&thumb=1`}
+                      src={`/api/images/cached?url=${encodeURIComponent(group.thumbnailUrl)}&thumb=1&w=400`}
+                      srcSet={`/api/images/cached?url=${encodeURIComponent(group.thumbnailUrl)}&thumb=1&w=200 200w, /api/images/cached?url=${encodeURIComponent(group.thumbnailUrl)}&thumb=1&w=400 400w, /api/images/cached?url=${encodeURIComponent(group.thumbnailUrl)}&thumb=1&w=800 800w`}
+                      sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 20vw"
                       alt={group.batchTitle}
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                       loading="lazy"
+                      decoding="async"
+                      style={{ contentVisibility: 'auto' } as any}
                       onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
                     />
                   ) : (
@@ -591,7 +595,7 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
       ) : (
         <>
           {/* Image grid */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3" style={{ contentVisibility: 'auto' } as any}>
             {displayedReceipts.map(receipt => (
               <button
                 key={receipt.id}
@@ -600,10 +604,14 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
               >
                 <div className="aspect-[3/4] bg-gray-100 relative overflow-hidden">
                   <img
-                    src={`/api/images/cached?url=${encodeURIComponent(receipt.imageUrl)}&thumb=1`}
+                    src={`/api/images/cached?url=${encodeURIComponent(receipt.imageUrl)}&thumb=1&w=400`}
+                    srcSet={`/api/images/cached?url=${encodeURIComponent(receipt.imageUrl)}&thumb=1&w=200 200w, /api/images/cached?url=${encodeURIComponent(receipt.imageUrl)}&thumb=1&w=400 400w, /api/images/cached?url=${encodeURIComponent(receipt.imageUrl)}&thumb=1&w=800 800w`}
+                    sizes="(max-width: 640px) 50vw, (max-width: 768px) 33vw, 20vw"
                     alt={receipt.supplier || 'Receipt'}
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                     loading="lazy"
+                    decoding="async"
+                    style={{ contentVisibility: 'auto' } as any}
                     onError={(e) => {
                       (e.target as HTMLImageElement).style.display = 'none';
                     }}

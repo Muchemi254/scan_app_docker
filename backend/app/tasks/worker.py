@@ -149,8 +149,13 @@ async def _extract_one_chunk(
     raw_bytes_list = []
     for i, entry in enumerate(chunk):
         fpath = os.path.join(batch_dir, entry["filename"])
-        with open(fpath, "rb") as f:
-            raw = f.read()
+        try:
+            with open(fpath, "rb") as f:
+                raw = f.read()
+        except FileNotFoundError as e:
+            raise classify_exception(e) from e
+        except OSError as e:
+            raise classify_exception(e) from e
         mime = entry.get("mime") or "image/jpeg"
         if mime == "application/pdf" or entry.get("filename", "").lower().endswith(".pdf"):
             parts = pdf_to_provider_parts(raw, active_provider, label=f"Receipt index {i}")
@@ -164,9 +169,15 @@ async def _extract_one_chunk(
         raw_bytes_list.append(raw)
 
     try:
-        results = await extract_receipt_batch(
-            b64_files, api_key, model_id, active_provider, user_id=user_id
+        # Per-chunk timeout (Gemini hang should not block thread forever)
+        results = await asyncio.wait_for(
+            extract_receipt_batch(
+                b64_files, api_key, model_id, active_provider, user_id=user_id
+            ),
+            timeout=120,
         )
+    except asyncio.TimeoutError as e:
+        raise classify_exception(TimeoutError("AI provider timed out")) from e
     except Exception as e:
         raise classify_exception(e) from e
 
@@ -422,16 +433,21 @@ async def _process_chunk_with_fallback(
                         f"{err.code.value} — waiting {delay}s before retry",
                         False, False, False,
                     )
-                await asyncio.sleep(delay)
-                # Re-check cancel after the sleep — a sibling chunk may have
-                # hit quota while we were waiting.
-                if cancel_event is not None and cancel_event.is_set():
-                    last_err = ScanError(
-                        ErrorCode.AI_QUOTA_EXCEEDED,
-                        "Cancelled while waiting to retry — account-level failure",
-                        retryable=False,
-                    )
-                    break
+                # Interruptible sleep: quota failure cancels waiting siblings early
+                if cancel_event is not None:
+                    try:
+                        await asyncio.wait_for(cancel_event.wait(), timeout=delay)
+                        # Woke because cancel_event set
+                        last_err = ScanError(
+                            ErrorCode.AI_QUOTA_EXCEEDED,
+                            "Cancelled while waiting to retry — account-level failure",
+                            retryable=False,
+                        )
+                        break
+                    except asyncio.TimeoutError:
+                        pass
+                else:
+                    await asyncio.sleep(delay)
                 continue
 
     # ── Success path ──
@@ -572,7 +588,11 @@ async def _run_batch_extraction(
     if on_progress:
         await on_progress(10, f"AI: {total_items} images in {len(tasks)} chunks...")
 
-    await asyncio.gather(*tasks, return_exceptions=False)
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    # Log isolated chunk failures without aborting siblings
+    for r in results:
+        if isinstance(r, Exception):
+            logger.warning(f"Chunk task failed (isolated): {r}")
 
     if on_progress:
         await on_progress(100, "Batch complete")
@@ -805,15 +825,18 @@ async def _process_batch_sync(user_id: str, batch_id: str, batch_dir: str,
         await batch_service.set_batch_status(user_id, batch_id, "processing")
         logger.info(f"Batch {batch_id}: processing {len(entries)} images")
 
-        # Register chunk metadata in Redis so the UI can group items by chunk.
-        chunk_size = BATCH_CHUNK_SIZE
+        # Register chunk metadata so UI can group by chunk. Use explicit indices (hole-safe) +
+        # small PDF-aware chunks to keep RAM bounded (PDFs are not downscaled like images).
+        has_pdf = any((e.get("mime") == "application/pdf" or str(e.get("filename","")).lower().endswith(".pdf")) for e in entries)
+        chunk_size = 3 if has_pdf else BATCH_CHUNK_SIZE
         chunks = []
         for ci, start in enumerate(range(0, len(entries), chunk_size)):
             chunk_entries = entries[start : start + chunk_size]
             indices = [e["index"] for e in chunk_entries]
             chunks.append({
                 "index": ci,
-                "itemRange": [min(indices), max(indices)],
+                "itemRange": [min(indices), max(indices)] if indices else [0, 0],
+                "indices": indices,
                 "size": len(chunk_entries),
             })
         await batch_service.init_chunks(user_id, batch_id, chunks)

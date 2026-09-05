@@ -17,16 +17,28 @@ export function defaultPivotConfig(): PivotConfig {
 
 const NUMERIC_FIELDS = new Set(['Quantity', 'Price', 'Tax', 'Total', 'totalAmount', 'taxAmount']);
 const DATE_FIELDS = new Set(['receiptDate']);
+const TEXT_ID_FIELDS = new Set(['invoiceNumber', 'cuInvoice', 'kraPin', 'buyerKraPin', 'Invoice', 'InvoiceNumber', 'CU Invoice', 'Seller PIN', 'Buyer PIN']);
 
 function sanitizeNumeric(v: any): number {
   const n = typeof v === 'string' ? parseFloat(v.replace(/[^0-9.-]/g, '')) : Number(v);
   return isNaN(n) ? 0 : n;
 }
 
+function isTextId(key: string): boolean {
+  return TEXT_ID_FIELDS.has(key) || /invoice/i.test(key) || /kra/i.test(key) || /cu/i.test(key) || /pin/i.test(key);
+}
+
 function sanitize(val: any, key: string): any {
+  if (isTextId(key)) return val != null ? String(val) : '';
   if (DATE_FIELDS.has(key)) return val ? String(val) : '';
   if (NUMERIC_FIELDS.has(key)) return sanitizeNumeric(val);
   return val ?? '';
+}
+
+function forceTextLeadingZeros(val: string): string {
+  // For CSV: wrap leading-zero numbers so Excel keeps them
+  if (/^0\d+$/.test(val)) return `="${val}"`;
+  return val;
 }
 
 function parseDateMDY(dateStr: string): Date | null {
@@ -380,6 +392,31 @@ function pivotValueLabel(cfg: PivotConfig): string {
 
 function _sheet(wb: WorkBook, name: string, rows: any[]) {
   const ws = utils.json_to_sheet(rows);
+  // Force text format for identifier columns to preserve leading zeros
+  if (rows.length > 0) {
+    const headers = Object.keys(rows[0]);
+    const textCols = headers.map((h, i) => (isTextId(h) ? i : -1)).filter(i => i >= 0);
+    if (textCols.length) {
+      const range = utils.decode_range(ws['!ref'] || 'A1');
+      // Ensure cols have text format
+      if (!ws['!cols']) ws['!cols'] = [];
+      for (const ci of textCols) {
+        // @ts-ignore
+        ws['!cols'][ci] = { ...ws['!cols'][ci], numFmt: '@' };
+      }
+      for (let r = range.s.r + 1; r <= range.e.r; r++) {
+        for (const c of textCols) {
+          const addr = utils.encode_cell({ r, c });
+          const cell: any = ws[addr];
+          if (cell && cell.v != null && cell.v !== '') {
+            cell.t = 's';
+            cell.v = String(cell.v);
+            cell.z = '@';
+          }
+        }
+      }
+    }
+  }
   utils.book_append_sheet(wb, ws, name.slice(0, 31));
 }
 
@@ -471,7 +508,13 @@ export function exportToCSV(receipts: any[], type: ReportType, opts: ReportOptio
     rows = cleanRows(reportData(type, receipts, pc));
   }
 
-  const ws = utils.json_to_sheet(rows);
+  // Force leading zeros preserved in CSV
+  const csvRows = rows.map(r => {
+    const o: any = { ...r };
+    for (const k in o) if (isTextId(k) && typeof o[k] === 'string' && /^0\d+$/.test(o[k])) o[k] = `="${o[k]}"`;
+    return o;
+  });
+  const ws = utils.json_to_sheet(csvRows);
   const csv = utils.sheet_to_csv(ws);
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);

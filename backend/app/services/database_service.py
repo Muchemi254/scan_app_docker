@@ -453,6 +453,7 @@ class DatabaseService:
         kra_pin: Optional[str] = None,
         buyer_kra_pin: Optional[str] = None,
         cu_invoice: Optional[str] = None,
+        include_items: bool = True,
     ) -> tuple:
         """List receipts with filters and pagination. Returns (receipts, total).
 
@@ -565,12 +566,14 @@ class DatabaseService:
                 *params,
             )
             total = rows[0]["full_count"] if rows else 0
-            # Batch-load items for all returned receipts (single query)
-            items_map = await _batch_load_items(
-                conn, [str(r["id"]) for r in rows]
-            )
-
-            receipts = [_receipt_row_to_dict(r, items_map.get(r["id"], [])) for r in rows]
+            # Batch-load items only when needed — text-only table skips 70% payload
+            if include_items:
+                items_map = await _batch_load_items(
+                    conn, [str(r["id"]) for r in rows]
+                )
+                receipts = [_receipt_row_to_dict(r, items_map.get(r["id"], [])) for r in rows]
+            else:
+                receipts = [_receipt_row_to_dict(r, []) for r in rows]
             return receipts, total
 
     @staticmethod
@@ -1022,9 +1025,12 @@ class DatabaseService:
             )
 
             total = rows[0]["total"] if rows else 0
+            # Batch-load items for all results (single query, not N+1)
+            ids = [str(r["id"]) for r in rows]
+            items_map = await _batch_load_items(conn, ids) if ids else {}
             results = []
             for row in rows:
-                items = await _fetch_items(conn, str(row["id"]))
+                items = items_map.get(str(row["id"]), [])
                 receipt = _receipt_row_to_dict(row, items)
                 receipt["_search_rank"] = float(row["rank"])
                 receipt["_item_names"] = row.get("item_names", "")

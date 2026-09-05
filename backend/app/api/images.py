@@ -140,7 +140,7 @@ class ConvertHeicRequest(BaseModel):
 
 
 @router.get("/api/images/cached")
-async def get_cached_image(url: str, thumb: Optional[bool] = Query(None)):
+async def get_cached_image(url: str, thumb: Optional[bool] = Query(None), w: Optional[int] = Query(None, ge=50, le=1600), format: Optional[str] = Query(None, pattern="^(webp|jpeg|jpg)$")):
     """
     Proxy an image through the server, caching it in Redis.
 
@@ -156,30 +156,48 @@ async def get_cached_image(url: str, thumb: Optional[bool] = Query(None)):
     # Defense: receipt IDs are opaque UUIDs/strings — unguessable URLs.
     # For production, add signed URL tokens or short-lived proxy links.
     if url.startswith("/receipt-images/"):
+        import hashlib
+        from io import BytesIO
+        from PIL import Image
+        from fastapi import Request
         from app.services.database_service import read_receipt_file
         parts = url.rstrip("/").split("/")
         raw_id = parts[-1]
-        # thumb may arrive as its own query param (?thumb=1) or embedded in the
-        # url (imageUrl "/receipt-images/{id}?thumb=1")
         thumb = thumb if thumb is not None else ("?thumb=1" in url or url.endswith("?thumb=1"))
         receipt_id = raw_id.split("?")[0]
         content, media_type = await read_receipt_file(receipt_id, thumb=thumb)
         if content:
-            headers = {
-                "Cache-Control": "public, max-age=86400",
-                "X-Content-Type-Options": "nosniff",
-            }
             if media_type == "application/pdf":
-                # Raw PDF receipt: let the browser render/embed it inline.
-                headers["Content-Disposition"] = "inline"
-            else:
-                # Detect and convert HEIC/HEIF to JPEG on-the-fly
-                if content[:12] and content[4:8] == b'ftyp' and (b'heic' in content[:32] or b'heif' in content[:32] or b'mif1' in content[:32]):
-                    try:
-                        from app.services.image_service import process_image
-                        content, _ = process_image(content, 'image/heic')
-                    except Exception:
-                        pass  # serve as-is if conversion fails
+                h = hashlib.sha256(content).hexdigest()[:16]
+                return Response(content=content, media_type=media_type, headers={"Cache-Control": "public, max-age=86400", "X-Content-Type-Options": "nosniff", "Content-Disposition": "inline", "ETag": f'"{h}"'})
+            # HEIC handling
+            if content[:12] and content[4:8] == b'ftyp' and (b'heic' in content[:32] or b'heif' in content[:32] or b'mif1' in content[:32]):
+                try:
+                    from app.services.image_service import process_image
+                    content, _ = process_image(content, 'image/heic')
+                    media_type = "image/jpeg"
+                except Exception:
+                    pass
+            # Dynamic resize / format for srcSet (w=200/400/800, format=webp)
+            if w is not None or format == "webp":
+                try:
+                    img = Image.open(BytesIO(content))
+                    if w is not None and img.width > w:
+                        ratio = w / img.width
+                        nh = max(1, int(img.height * ratio))
+                        img = img.resize((w, nh), Image.LANCZOS)
+                    buf = BytesIO()
+                    if format == "webp":
+                        img.save(buf, format="WEBP", quality=75)
+                        media_type = "image/webp"
+                    else:
+                        img.save(buf, format="JPEG", quality=82, progressive=True, optimize=True)
+                        media_type = "image/jpeg"
+                    content = buf.getvalue()
+                except Exception:
+                    pass
+            etag = hashlib.sha256(content).hexdigest()[:16]
+            headers = {"Cache-Control": "public, max-age=86400, immutable", "X-Content-Type-Options": "nosniff", "ETag": f'"{etag}"', "Vary": "Accept"}
             return Response(content=content, media_type=media_type, headers=headers)
         raise HTTPException(status_code=404, detail="Image not found")
 

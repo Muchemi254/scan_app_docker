@@ -58,6 +58,13 @@ def classify_exception(exc: BaseException) -> ScanError:
     msg = str(exc)
     low = msg.lower()
 
+    # File not found on disk — worker scratch dir missing; do not retry as transient
+    if isinstance(exc, FileNotFoundError) or "no such file" in low or "file not found" in low:
+        return ScanError(ErrorCode.IMAGE_INVALID, "Image file not found on disk", retryable=False)
+    # JSON extra data / truncated payload — provider returned concatenated objects
+    if "extra data" in low or "unterminated string" in low or "truncated" in low:
+        return ScanError(ErrorCode.AI_INVALID_JSON, "AI returned malformed JSON", retryable=True)
+
     # Rate-limit / quota signals from Gemini, DeepSeek, generic HTTP
     if "rate limit" in low or "rate_limit" in low or "429" in low or "too many requests" in low:
         return ScanError(ErrorCode.AI_RATE_LIMIT, "AI provider rate-limited the request", retryable=True)

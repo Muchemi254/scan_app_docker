@@ -1,7 +1,9 @@
 import { RECEIPT_TABLE_COLUMNS, cellValue } from '../components/ReceiptsTableView';
 
 function csvEscape(v: string): string {
-  const s = String(v ?? '');
+  let s = String(v ?? '');
+  // Preserve leading zeros for invoice/PIN fields — Excel strips them otherwise
+  if (/^0\d+$/.test(s)) s = `="${s}"`;
   if (s.includes('"') || s.includes(',') || s.includes('\n')) return `"${s.replace(/"/g, '""')}"`;
   return s;
 }

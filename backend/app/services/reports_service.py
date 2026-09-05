@@ -698,6 +698,17 @@ async def run_report(
 # ── Format renderers (csv / xlsx / pdf / json) ───────────────────────────────
 
 
+def _is_text_label(label: str) -> bool:
+    l = label.lower()
+    return "invoice" in l or "pin" in l or "cu" in l
+
+
+def _preserve_csv_leading_zeros(val: Any) -> Any:
+    if isinstance(val, str) and len(val) > 1 and val[0] == "0" and val.isdigit():
+        return f'="{val}"'
+    return val
+
+
 def render_csv(payload: Dict[str, Any]) -> bytes:
     headers = [c["label"] for c in payload["columns"]]
     buf = io.StringIO()
@@ -705,7 +716,15 @@ def render_csv(payload: Dict[str, Any]) -> bytes:
     writer = csv.writer(buf)
     writer.writerow(headers)
     for row in payload["rows"]:
-        writer.writerow(["" if v is None else v for v in row.values()])
+        out = []
+        for col in payload["columns"]:
+            v = row.get(col["key"])
+            if v is None:
+                v = ""
+            if _is_text_label(col["label"]):
+                v = _preserve_csv_leading_zeros(str(v)) if v != "" else v
+            out.append(v)
+        writer.writerow(out)
     if payload["summary"].get("row_count") and not payload["summary"].get("truncated"):
         writer.writerow([])
         writer.writerow(["TOTAL ROWS", payload["summary"]["row_count"]])
@@ -728,7 +747,24 @@ def render_xlsx(payload: Dict[str, Any]) -> bytes:
         cell.font = header_font
         cell.fill = header_fill
     for row in payload["rows"]:
-        ws.append(["" if v is None else v for v in row.values()])
+        out_vals = []
+        for col in payload["columns"]:
+            v = row.get(col["key"])
+            if v is None:
+                v = ""
+            # Keep identifier columns as text
+            if _is_text_label(col["label"]) and v != "":
+                v = str(v)
+            out_vals.append(v)
+        ws.append(out_vals)
+    # Force text number format for identifier columns
+    for col_idx, col in enumerate(payload["columns"], start=1):
+        if _is_text_label(col["label"]):
+            for row_idx in range(2, ws.max_row + 1):
+                cell = ws.cell(row=row_idx, column=col_idx)
+                if cell.value is not None and str(cell.value) != "":
+                    cell.number_format = '@'
+                    cell.value = str(cell.value)
     if payload["summary"].get("row_count") and not payload["summary"].get("truncated"):
         ws.append([])
         ws.append(["TOTAL ROWS", payload["summary"]["row_count"]])

@@ -269,8 +269,17 @@ async def _sweep_stale_temp_dirs() -> int:
         entries = os.listdir(settings.IMAGE_STORAGE_DIR)
     except OSError:
         return 0
+    # Protect live prepared/processing sessions — they are durable for weeks
+    live_scan_ids = set()
+    try:
+        for r in await _fetch("SELECT id FROM scan_sessions WHERE status IN ('prepared','processing','uploading')"):
+            live_scan_ids.add(f"_scan_{r['id']}")
+    except Exception:
+        pass
     for entry in entries:
         if not entry.startswith(_TEMP_DIR_PREFIXES):
+            continue
+        if entry in live_scan_ids:
             continue
         path = os.path.join(settings.IMAGE_STORAGE_DIR, entry)
         if not os.path.isdir(path):

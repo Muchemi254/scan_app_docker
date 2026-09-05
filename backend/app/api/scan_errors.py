@@ -22,9 +22,17 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/users", tags=["scan-errors"])
 
 
-def _verify_access(user_id: str, current_user_id: str) -> None:
-    if user_id != current_user_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+async def _verify_access(user_id: str, current_user_id: str) -> None:
+    if user_id == current_user_id:
+        return
+    # Admins may view other users' scan errors (impersonation / scope)
+    from app.services import auth_service
+    from app.core.database import set_current_user_id
+    user = await auth_service.get_user_by_uid(current_user_id)
+    if user and user.get("is_admin"):
+        set_current_user_id(user_id)
+        return
+    raise HTTPException(status_code=403, detail="Access denied")
 
 
 @router.get("/{userId}/scan-errors")
@@ -34,7 +42,7 @@ async def list_scan_errors(
     limit: int = Query(default=100, ge=1, le=500),
 ):
     """List the user's recorded scan/batch errors, newest first."""
-    _verify_access(userId, current_user_id)
+    await _verify_access(userId, current_user_id)
     errors = await scan_error_service.list_errors(userId, limit=limit)
     return {"errors": errors, "total": len(errors)}
 
@@ -45,7 +53,7 @@ async def get_unread_count(
     current_user_id: str = Depends(get_current_user_id),
 ):
     """Unread error count for the header bell badge."""
-    _verify_access(userId, current_user_id)
+    await _verify_access(userId, current_user_id)
     unread = await scan_error_service.unread_count(userId)
     return {"unread": unread}
 
@@ -56,7 +64,7 @@ async def mark_one_read(
     errorId: str,
     current_user_id: str = Depends(get_current_user_id),
 ):
-    _verify_access(userId, current_user_id)
+    await _verify_access(userId, current_user_id)
     ok = await scan_error_service.mark_read(userId, errorId)
     if not ok:
         raise HTTPException(status_code=404, detail="Error record not found")
@@ -68,7 +76,7 @@ async def mark_all_read(
     userId: str,
     current_user_id: str = Depends(get_current_user_id),
 ):
-    _verify_access(userId, current_user_id)
+    await _verify_access(userId, current_user_id)
     marked = await scan_error_service.mark_all_read(userId)
     return {"marked": marked}
 
@@ -79,7 +87,7 @@ async def delete_one(
     errorId: str,
     current_user_id: str = Depends(get_current_user_id),
 ):
-    _verify_access(userId, current_user_id)
+    await _verify_access(userId, current_user_id)
     ok = await scan_error_service.delete_error(userId, errorId)
     if not ok:
         raise HTTPException(status_code=404, detail="Error record not found")
@@ -91,5 +99,5 @@ async def clear_all(
     current_user_id: str = Depends(get_current_user_id),
 ):
     """Dismiss every recorded error for this user."""
-    _verify_access(userId, current_user_id)
+    await _verify_access(userId, current_user_id)
     await scan_error_service.clear_all(userId)

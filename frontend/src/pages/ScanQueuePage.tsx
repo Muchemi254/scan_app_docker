@@ -9,21 +9,25 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import BatchPanel, { type Batch } from '../components/BatchPanel';
 import { batchApi } from '../services/api';
 import { useReceiptStore } from '../stores/receiptStore';
 import { toast } from '../stores/toastStore';
 
 const POLL_INTERVAL_MS = 2000;
+const FAILED_TRAIL_MS = 30000;
 
 const ScanQueuePage = ({ userId }: { userId: string | null }) => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const highlightId = searchParams.get('batchId');
   const { invalidate } = useReceiptStore();
 
   const [batches, setBatches] = useState<Batch[]>([]);
   const [loaded, setLoaded] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const trailUntilRef = useRef<number>(0);
 
   const refresh = useCallback(async () => {
     if (!userId) return;
@@ -43,12 +47,21 @@ const ScanQueuePage = ({ userId }: { userId: string | null }) => {
     refresh();
   }, [userId, refresh]);
 
-  // Poll while any session is live (uploading / processing). Prepared
-  // sessions are static until the user dispatches them, so no polling needed.
+  // Poll while any session is live (uploading / processing). Also keep a
+  // short trail after a batch fails so the reaper's 300s auto-fail is surfaced
+  // without requiring a refresh — otherwise polling stops the instant it goes failed.
   useEffect(() => {
     if (!userId) return;
     const anyLive = batches.some(b => b.status === 'uploading' || b.status === 'processing');
-    if (!anyLive) {
+    const hasFailed = batches.some(b => b.status === 'failed');
+    if (hasFailed && anyLive === false) {
+      // extend trail when we just observed a failure
+      const recentFail = batches.some(b => b.status === 'failed' && (b as any).updatedAt && Date.now() - ((b as any).updatedAt * 1000) < 60000);
+      if (recentFail) trailUntilRef.current = Date.now() + FAILED_TRAIL_MS;
+    }
+    const inTrail = Date.now() < trailUntilRef.current;
+    const shouldPoll = anyLive || inTrail;
+    if (!shouldPoll) {
       if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
       return;
     }
@@ -58,6 +71,9 @@ const ScanQueuePage = ({ userId }: { userId: string | null }) => {
       if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
     };
   }, [userId, batches, refresh]);
+
+  // Heartbeat for detailed health (non-blocking): degraded banner data lives in Layout
+  // but keep polling alive across navigation via localStorage last check.
 
   // Invalidate the receipt store when a batch transitions to done.
   const prevDone = useRef(0);
@@ -134,15 +150,16 @@ const ScanQueuePage = ({ userId }: { userId: string | null }) => {
           </div>
         )}
         {ordered.map(batch => (
-          <BatchPanel
-            key={batch.batchId}
-            batch={batch}
-            onDismiss={handleDismiss}
-            onGoReview={() => { invalidate(); navigate('/review'); }}
-            onChanged={refresh}
-            onRetryChunk={handleRetryChunk}
-            onRetryItem={handleRetryItem}
-          />
+          <div key={batch.batchId} className={batch.batchId === highlightId ? 'ring-2 ring-indigo-400 rounded-lg' : ''}>
+            <BatchPanel
+              batch={batch}
+              onDismiss={handleDismiss}
+              onGoReview={() => { invalidate(); navigate('/review'); }}
+              onChanged={refresh}
+              onRetryChunk={handleRetryChunk}
+              onRetryItem={handleRetryItem}
+            />
+          </div>
         ))}
       </div>
     </div>

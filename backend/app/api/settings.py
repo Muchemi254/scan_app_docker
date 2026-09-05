@@ -23,19 +23,26 @@ global_router = APIRouter(
     tags=["settings"],
 )
 
-def verify_user_access(user_id: str, current_user_id: str):
-    if user_id != current_user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied"
-        )
+async def verify_user_access(user_id: str, current_user_id: str):
+    if user_id == current_user_id:
+        return
+    from app.services import auth_service
+    from app.core.database import set_current_user_id
+    user = await auth_service.get_user_by_uid(current_user_id)
+    if user and user.get("is_admin"):
+        set_current_user_id(user_id)
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Access denied"
+    )
 
 @user_router.get("/{userId}/settings/ai", response_model=AISettings)
 async def get_ai_settings(
     userId: str,
     current_user_id: str = Depends(get_current_user_id)
 ):
-    verify_user_access(userId, current_user_id)
+    await verify_user_access(userId, current_user_id)
     
     # Try to get from Firestore
     settings_dict = await DataService.get_user_settings(userId, "ai_config")
@@ -74,7 +81,7 @@ async def update_ai_settings(
     settings_update: AISettingsUpdate,
     current_user_id: str = Depends(get_current_user_id)
 ):
-    verify_user_access(userId, current_user_id)
+    await verify_user_access(userId, current_user_id)
     
     # Get current settings
     current = await DataService.get_user_settings(userId, "ai_config") or {}
@@ -129,7 +136,7 @@ async def test_ai_settings(
     test_request: AITestRequest,
     current_user_id: str = Depends(get_current_user_id)
 ):
-    verify_user_access(userId, current_user_id)
+    await verify_user_access(userId, current_user_id)
     
     # If the key is the masked one, we need to get the real one from Firestore
     api_key = test_request.api_key
@@ -181,7 +188,7 @@ async def get_tax_preference(
     userId: str,
     current_user_id: str = Depends(get_current_user_id),
 ):
-    verify_user_access(userId, current_user_id)
+    await verify_user_access(userId, current_user_id)
     rate = await DataService.get_user_default_tax_rate(userId)
     global_rate = 16.0
     raw = await get_setting(KEY_DEFAULT_TAX_RATE)
@@ -199,7 +206,7 @@ async def set_tax_preference(
     body: TaxPreferenceUpdate,
     current_user_id: str = Depends(get_current_user_id),
 ):
-    verify_user_access(userId, current_user_id)
+    await verify_user_access(userId, current_user_id)
     await DataService.set_user_default_tax_rate(userId, body.default_tax_rate)
     return await get_tax_preference(userId, current_user_id)
 

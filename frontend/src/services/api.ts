@@ -229,12 +229,14 @@ export const receiptApi = {
 
   /**
    * List receipts with pagination and filters
+   * includeItems=false for text-only table (cuts 70% payload)
    */
-  async list(skip = 0, limit = 50, filters?: any): Promise<any> {
+  async list(skip = 0, limit = 50, filters?: any, opts?: { includeItems?: boolean }): Promise<any> {
     const params = new URLSearchParams({
       skip: skip.toString(),
       limit: limit.toString(),
     });
+    if (opts?.includeItems === false) params.append('includeItems', 'false');
 
     if (filters?.status) params.append('status', filters.status);
     if (filters?.category) params.append('category', filters.category);
@@ -925,6 +927,39 @@ export const dashboardApi = {
     if (date_to) params.append('date_to', date_to);
     const qs = params.toString();
     return apiRequest('GET', `/dashboard/insights${qs ? `?${qs}` : ''}`);
+  },
+};
+
+// ============================================================================
+// Health API — lightweight + detailed checks
+// ============================================================================
+
+export const healthApi = {
+  async check(): Promise<{ status: string; version: string }> {
+    const authorization = await getAuthHeader();
+    const url = `${API_BASE_URL.replace(/\/users\/.*/, '')}/health`;
+    // health is not user-scoped: /health
+    const base = API_BASE_URL.replace(/\/api\/v1.*/, '') || '';
+    // Fallback: try relative /health if VITE_API_URL is relative
+    const healthUrl = `${base}/health`;
+    const res = await fetch(healthUrl, { headers: { 'Authorization': authorization } });
+    if (!res.ok) throw new Error(`Health ${res.status}`);
+    return res.json();
+  },
+  async detailed(): Promise<{ status: string; version: string; checks: Record<string, string> }> {
+    const authorization = await getAuthHeader();
+    const base = API_BASE_URL.replace(/\/api\/v1.*/, '').replace(/\/users.*/, '') || '';
+    const url = `${base}/health/detailed`;
+    const res = await fetch(url, { headers: { 'Authorization': authorization } });
+    // 503 still carries JSON {status:degraded, checks} — treat as data, not error
+    if (res.ok || res.status === 503) {
+      try { return await res.json(); } catch {}
+    }
+    const alt = await fetch(`/health/detailed`, { headers: { 'Authorization': authorization } });
+    if (alt.ok || alt.status === 503) {
+      try { return await alt.json(); } catch {}
+    }
+    throw new Error(`Health detailed ${res.status}`);
   },
 };
 
