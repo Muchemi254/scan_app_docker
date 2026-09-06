@@ -136,7 +136,7 @@ def _row_to_item(r) -> dict:
 # ─── Batch/session CRUD ─────────────────────────────────────────────────────
 
 
-async def create_batch(user_id: str, batch_title: str, filenames: List[str]) -> str:
+async def create_batch(user_id: str, batch_title: str, filenames: List[str], industry_id: Optional[str] = None) -> str:
     """Create a durable scan session + one item row per file.
 
     Items start in `pending`; they become `prepared` after local optimization
@@ -148,10 +148,10 @@ async def create_batch(user_id: str, batch_title: str, filenames: List[str]) -> 
         async with conn.transaction():
             await conn.execute(
                 """
-                INSERT INTO scan_sessions (id, user_id, title, status, image_count, group_count, chunks)
-                VALUES ($1, $2, $3, 'uploading', 0, 0, '[]'::jsonb)
+                INSERT INTO scan_sessions (id, user_id, title, status, image_count, group_count, chunks, industry_id)
+                VALUES ($1, $2, $3, 'uploading', 0, 0, '[]'::jsonb, $4)
                 """,
-                session_id, user_id, batch_title,
+                session_id, user_id, batch_title, industry_id,
             )
             await conn.executemany(
                 """
@@ -238,6 +238,7 @@ async def get_batch(user_id: str, batch_id: str) -> Optional[dict]:
         "status": row["status"],
         "imageCount": row["image_count"],
         "groupCount": row["group_count"],
+        "industryId": str(row["industry_id"]) if row.get("industry_id") else None,
         "createdAt": _epoch(row["created_at"]),
         "lastActivity": _epoch(row["updated_at"]),
         "items": [_row_to_item(r) for r in items],

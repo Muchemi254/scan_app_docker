@@ -97,7 +97,7 @@ def _to_numeric(val: Any) -> Optional[Decimal]:
 # Bytes are fetched per-id only where actually needed.
 _RECEIPT_COLS = (
     "id, user_id, status, entry_type, supplier, total_amount, tax_amount, "
-    "receipt_date, category, invoice_number, kra_pin, buyer_kra_pin, "
+    "receipt_date, category, category_id, industry_id, invoice_number, kra_pin, buyer_kra_pin, "
     "cu_invoice, batch_title, image_filename, legacy_image_url, location, "
     "tax_rate, file_type, pdf_page_count, scanned_at, created_at, updated_at"
 )
@@ -181,6 +181,8 @@ def _receipt_row_to_dict(
         "thumbnailUrl": thumbnail_url,
         "fileType": row.get("file_type"),
         "pdfPageCount": row.get("pdf_page_count"),
+        "category_id": row.get("category_id"),
+        "industry_id": row.get("industry_id"),
         "items": items or [],
         "createdAt": row.get("created_at"),
         "updatedAt": row.get("updated_at"),
@@ -332,10 +334,10 @@ class DatabaseService:
                 row = await conn.fetchrow(
                     """
                     INSERT INTO receipts (id, user_id, status, entry_type, supplier, total_amount, tax_amount,
-                        receipt_date, category, invoice_number, kra_pin, buyer_kra_pin, cu_invoice,
+                        receipt_date, category, category_id, industry_id, invoice_number, kra_pin, buyer_kra_pin, cu_invoice,
                         batch_title, location, tax_rate, image_filename, image_sha256,
                         file_type, pdf_page_count, scanned_at, created_at, updated_at)
-                    VALUES (COALESCE($23, gen_random_uuid()), $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+                    VALUES (COALESCE($23, gen_random_uuid()), $1,$2,$3,$4,$5,$6,$7,$8,$24,$25,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
                     RETURNING id
                     """,
                     user_id,
@@ -361,6 +363,8 @@ class DatabaseService:
                     now,
                     now,
                     use_id,
+                    receipt_data.get("category_id") or receipt_data.get("categoryId"),
+                    receipt_data.get("industry_id") or receipt_data.get("industryId"),
                 )
                 receipt_id = row["id"]
 
@@ -631,6 +635,14 @@ class DatabaseService:
         if receipt_data.get("category") is not None and _provided(receipt_data["category"]):
             set_parts.append(f"category = ${p_idx}")
             params.append(receipt_data["category"])
+            p_idx += 1
+        if "category_id" in receipt_data or "categoryId" in receipt_data:
+            set_parts.append(f"category_id = ${p_idx}")
+            params.append(receipt_data.get("category_id") or receipt_data.get("categoryId"))
+            p_idx += 1
+        if "industry_id" in receipt_data or "industryId" in receipt_data:
+            set_parts.append(f"industry_id = ${p_idx}")
+            params.append(receipt_data.get("industry_id") or receipt_data.get("industryId"))
             p_idx += 1
         if receipt_data.get("invoiceNumber") is not None and _provided(receipt_data["invoiceNumber"]):
             set_parts.append(f"invoice_number = ${p_idx}")
@@ -1249,6 +1261,187 @@ class DatabaseService:
                 "DELETE FROM entry_types WHERE id = $1 AND is_system = FALSE", entry_type_id
             )
             return result == "DELETE 1"
+
+    # ── Industries / Categories (global, admin-managed) ─────────────────
+
+    @staticmethod
+    async def list_industries(active_only: bool = False) -> List[Dict[str, Any]]:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            if active_only:
+                rows = await conn.fetch("SELECT * FROM industries WHERE is_active = TRUE ORDER BY name ASC")
+            else:
+                rows = await conn.fetch("SELECT * FROM industries ORDER BY name ASC")
+            return [dict(r) for r in rows]
+
+    @staticmethod
+    async def get_industry(industry_id: str) -> Optional[Dict[str, Any]]:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT * FROM industries WHERE id = $1", industry_id)
+            return dict(row) if row else None
+
+    @staticmethod
+    async def create_industry(name: str, description: Optional[str] = None, created_by: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            try:
+                row = await conn.fetchrow("INSERT INTO industries (name, description, created_by) VALUES ($1, $2, $3) RETURNING *", name.strip(), description.strip() if description else None, created_by)
+            except Exception:
+                return None
+            return dict(row) if row else None
+
+    @staticmethod
+    async def update_industry(industry_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        set_parts = ["updated_at = now()"]
+        params: List[Any] = []
+        p_idx = 1
+        if "name" in data and data["name"] is not None:
+            set_parts.append(f"name = ${p_idx}"); params.append(str(data["name"]).strip()); p_idx += 1
+        if "description" in data and data["description"] is not None:
+            set_parts.append(f"description = ${p_idx}"); params.append(str(data["description"]).strip()); p_idx += 1
+        if "is_active" in data and data["is_active"] is not None:
+            set_parts.append(f"is_active = ${p_idx}"); params.append(bool(data["is_active"])); p_idx += 1
+        if not params:
+            return await DatabaseService.get_industry(industry_id)
+        set_clause = ", ".join(set_parts)
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            try:
+                row = await conn.fetchrow(f"UPDATE industries SET {set_clause} WHERE id = ${p_idx} RETURNING *", *params, industry_id)
+            except Exception:
+                return None
+            return dict(row) if row else None
+
+    @staticmethod
+    async def delete_industry(industry_id: str) -> bool:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT is_system FROM industries WHERE id = $1", industry_id)
+            if row and row["is_system"]:
+                return False
+            async with conn.transaction():
+                # allow "remove all as whole": clear receipts FKs, delete categories, then industry
+                await conn.execute("UPDATE receipts SET industry_id = NULL, category_id = NULL WHERE industry_id = $1", industry_id)
+                await conn.execute("DELETE FROM categories WHERE industry_id = $1", industry_id)
+                result = await conn.execute("DELETE FROM industries WHERE id = $1 AND is_system = FALSE", industry_id)
+                return result == "DELETE 1"
+
+    @staticmethod
+    async def list_categories(industry_id: Optional[str] = None, active_only: bool = False, search: Optional[str] = None) -> List[Dict[str, Any]]:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            where = []
+            params: List[Any] = []
+            idx = 1
+            if industry_id:
+                where.append(f"industry_id = ${idx}"); params.append(industry_id); idx += 1
+            if active_only:
+                where.append("is_active = TRUE")
+            if search:
+                where.append(f"lower(name) LIKE ${idx}"); params.append(f"%{search.lower()}%"); idx += 1
+            sql = "SELECT * FROM categories"
+            if where:
+                sql += " WHERE " + " AND ".join(where)
+            sql += " ORDER BY sort_order ASC, name ASC"
+            rows = await conn.fetch(sql, *params)
+            return [dict(r) for r in rows]
+
+    @staticmethod
+    async def get_category(category_id: str) -> Optional[Dict[str, Any]]:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT * FROM categories WHERE id = $1", category_id)
+            return dict(row) if row else None
+
+    @staticmethod
+    async def create_category(industry_id: str, name: str, label: Optional[str] = None, parent_id: Optional[str] = None, created_by: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            try:
+                # validate industry exists
+                ind = await conn.fetchrow("SELECT id FROM industries WHERE id = $1", industry_id)
+                if not ind:
+                    return None
+                if parent_id:
+                    p = await conn.fetchrow("SELECT industry_id FROM categories WHERE id = $1", parent_id)
+                    if not p or str(p["industry_id"]) != str(industry_id):
+                        return None
+                row = await conn.fetchrow("INSERT INTO categories (industry_id, name, label, parent_id, created_by) VALUES ($1, $2, $3, $4, $5) RETURNING *", industry_id, name.strip(), (label.strip() if label else name.strip()), parent_id, created_by)
+            except Exception:
+                return None
+            return dict(row) if row else None
+
+    @staticmethod
+    async def update_category(category_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        # handle industry_id change separately with validation
+        if "industry_id" in data and data["industry_id"] is not None:
+            pool = await get_pool()
+            async with pool.acquire() as conn:
+                ind = await conn.fetchrow("SELECT id FROM industries WHERE id = $1", data["industry_id"])
+                if not ind:
+                    return None
+        set_parts = ["updated_at = now()"]
+        params: List[Any] = []
+        p_idx = 1
+        if "name" in data and data["name"] is not None:
+            set_parts.append(f"name = ${p_idx}"); params.append(str(data["name"]).strip()); p_idx += 1
+        if "label" in data and data["label"] is not None:
+            set_parts.append(f"label = ${p_idx}"); params.append(str(data["label"]).strip()); p_idx += 1
+        if "parent_id" in data:
+            set_parts.append(f"parent_id = ${p_idx}"); params.append(data["parent_id"]); p_idx += 1
+        if "industry_id" in data and data["industry_id"] is not None:
+            set_parts.append(f"industry_id = ${p_idx}"); params.append(str(data["industry_id"])); p_idx += 1
+        if "is_active" in data and data["is_active"] is not None:
+            set_parts.append(f"is_active = ${p_idx}"); params.append(bool(data["is_active"])); p_idx += 1
+        if not params:
+            return await DatabaseService.get_category(category_id)
+        set_clause = ", ".join(set_parts)
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            try:
+                row = await conn.fetchrow(f"UPDATE categories SET {set_clause} WHERE id = ${p_idx} RETURNING *", *params, category_id)
+            except Exception:
+                return None
+            return dict(row) if row else None
+
+    @staticmethod
+    async def delete_category(category_id: str) -> bool:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT is_system FROM categories WHERE id = $1", category_id)
+            if row and row["is_system"]:
+                return False
+            cnt = await conn.fetchval("SELECT COUNT(*) FROM categories WHERE parent_id = $1", category_id)
+            if cnt and int(cnt) > 0:
+                return False
+            cnt2 = await conn.fetchval("SELECT COUNT(*) FROM receipts WHERE category_id = $1", category_id)
+            if cnt2 and int(cnt2) > 0:
+                return False
+            result = await conn.execute("DELETE FROM categories WHERE id = $1 AND is_system = FALSE", category_id)
+            return result == "DELETE 1"
+
+    @staticmethod
+    async def get_user_default_industry(user_id: str) -> Optional[str]:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT default_industry_id FROM user_preferences WHERE user_id = $1", user_id)
+            return str(row["default_industry_id"]) if row and row["default_industry_id"] else None
+
+    @staticmethod
+    async def set_user_default_industry(user_id: str, industry_id: Optional[str]) -> bool:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            if industry_id:
+                chk = await conn.fetchrow("SELECT id FROM industries WHERE id = $1 AND is_active = TRUE", industry_id)
+                if not chk:
+                    return False
+            await conn.execute("""
+                INSERT INTO user_preferences (user_id, default_industry_id)
+                VALUES ($1, $2)
+                ON CONFLICT (user_id) DO UPDATE SET default_industry_id = EXCLUDED.default_industry_id, updated_at = now()
+            """, user_id, industry_id)
+            return True
 
     # ── User preferences (per-user defaults) ───────────────────────────────
 

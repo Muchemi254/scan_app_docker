@@ -196,6 +196,92 @@ class DataService:
             return await db.delete_entry_type(entry_type_id)
         return False
 
+    # ── Industries / Categories (global) ────────────────────────────────
+
+    @classmethod
+    async def list_industries(cls, active_only: bool = False):
+        db, _ = cls._backend()
+        if hasattr(db, "list_industries"):
+            return await db.list_industries(active_only=active_only)
+        return []
+
+    @classmethod
+    async def get_industry(cls, industry_id: str):
+        db, _ = cls._backend()
+        if hasattr(db, "get_industry"):
+            return await db.get_industry(industry_id)
+        return None
+
+    @classmethod
+    async def create_industry(cls, name: str, description: Optional[str] = None, created_by: Optional[str] = None):
+        db, _ = cls._backend()
+        if hasattr(db, "create_industry"):
+            return await db.create_industry(name, description, created_by)
+        return None
+
+    @classmethod
+    async def update_industry(cls, industry_id: str, data: Dict[str, Any]):
+        db, _ = cls._backend()
+        if hasattr(db, "update_industry"):
+            return await db.update_industry(industry_id, data)
+        return None
+
+    @classmethod
+    async def delete_industry(cls, industry_id: str) -> bool:
+        db, _ = cls._backend()
+        if hasattr(db, "delete_industry"):
+            return await db.delete_industry(industry_id)
+        return False
+
+    @classmethod
+    async def list_categories(cls, industry_id: Optional[str] = None, active_only: bool = False, search: Optional[str] = None):
+        db, _ = cls._backend()
+        if hasattr(db, "list_categories"):
+            return await db.list_categories(industry_id=industry_id, active_only=active_only, search=search)
+        return []
+
+    @classmethod
+    async def get_category(cls, category_id: str):
+        db, _ = cls._backend()
+        if hasattr(db, "get_category"):
+            return await db.get_category(category_id)
+        return None
+
+    @classmethod
+    async def create_category(cls, industry_id: str, name: str, label: Optional[str] = None, parent_id: Optional[str] = None, created_by: Optional[str] = None):
+        db, _ = cls._backend()
+        if hasattr(db, "create_category"):
+            return await db.create_category(industry_id, name, label, parent_id, created_by)
+        return None
+
+    @classmethod
+    async def update_category(cls, category_id: str, data: Dict[str, Any]):
+        db, _ = cls._backend()
+        if hasattr(db, "update_category"):
+            return await db.update_category(category_id, data)
+        return None
+
+    @classmethod
+    async def delete_category(cls, category_id: str) -> bool:
+        db, _ = cls._backend()
+        if hasattr(db, "delete_category"):
+            return await db.delete_category(category_id)
+        return False
+
+    @classmethod
+    async def get_user_default_industry(cls, user_id: str) -> Optional[str]:
+        db, _ = cls._backend()
+        if hasattr(db, "get_user_default_industry"):
+            return await db.get_user_default_industry(user_id)
+        return None
+
+    @classmethod
+    async def set_user_default_industry(cls, user_id: str, industry_id: Optional[str]) -> bool:
+        db, _ = cls._backend()
+        if hasattr(db, "set_user_default_industry"):
+            return await db.set_user_default_industry(user_id, industry_id)
+        return False
+
     @classmethod
     async def find_receipts_by_image_hashes(
         cls, user_id: str, hashes: List[str]

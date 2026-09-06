@@ -87,6 +87,7 @@ async def _load_batch(user_id: str, batch_id: str) -> Optional[dict]:
 class CreateBatchBody(BaseModel):
     batchTitle: str
     filenames: List[str]
+    industry_id: Optional[str] = None
 
 
 @router.post("/{userId}/batches", status_code=http_status.HTTP_201_CREATED)
@@ -108,7 +109,7 @@ async def create_batch(
     if not body.filenames:
         raise HTTPException(status_code=400, detail="filenames must not be empty")
 
-    batch_id = await batch_service.create_batch(userId, body.batchTitle.strip(), body.filenames)
+    batch_id = await batch_service.create_batch(userId, body.batchTitle.strip(), body.filenames, industry_id=body.industry_id)
     return {"batchId": batch_id, "status": "uploading"}
 
 

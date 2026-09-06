@@ -4,6 +4,7 @@ import { parseCurrencyToNumber } from '../utils/helpers';
 import { addTax, splitTax } from '../utils/taxCalc';
 import type { ReceiptData } from '../types/gemini';
 import { ENTRY_TYPE_OPTIONS, entryTypeLabel } from '../types/gemini';
+import { industriesApi, categoriesApi } from '../services/api';
 
 const ReceiptForm = ({
   initialData,
@@ -24,13 +25,17 @@ const ReceiptForm = ({
   entryTypes?: { id: string; name: string; label: string }[];
   defaultTaxRate?: number;
 }) => {
-  const [formData, setFormData] = useState<ReceiptData>(() => ({
+  const [formData, setFormData] = useState<ReceiptData & { industry_id?: string; category_id?: string }>(() => ({
     id: initialData?.id || '',
     supplier: initialData?.supplier || '',
     totalAmount: initialData?.totalAmount || '',
     taxAmount: initialData?.taxAmount || '',
     receiptDate: initialData?.receiptDate || '',
     category: initialData?.category || '',
+    // @ts-ignore
+    category_id: (initialData as any)?.category_id || (initialData as any)?.categoryId || '',
+    // @ts-ignore
+    industry_id: (initialData as any)?.industry_id || (initialData as any)?.industryId || '',
     invoiceNumber: initialData?.invoiceNumber || '',
     kraPin: initialData?.kraPin || '',
     buyerKraPin: initialData?.buyerKraPin || '',
@@ -47,7 +52,20 @@ const ReceiptForm = ({
           isZeroRated: item.isZeroRated || false,
         }))
       : [],
-  }));
+  } as any));
+  const [industries, setIndustries] = useState<{ id: string; name: string }[]>([]);
+  const [categories, setCategories] = useState<{ id: string; name: string; label: string; parent_id?: string | null }[]>([]);
+  useEffect(() => {
+    industriesApi.list().then(r => setIndustries(r.items)).catch(() => {});
+    categoriesApi.getDefault().then(d => {
+      if (d.industry_id && !(formData as any).industry_id) setFormData(prev => ({ ...prev, industry_id: d.industry_id } as any));
+    }).catch(() => {});
+  }, []);
+  useEffect(() => {
+    const iid = (formData as any).industry_id as string;
+    if (!iid) { setCategories([]); return; }
+    categoriesApi.list(iid).then(r => setCategories(r.items)).catch(() => setCategories([]));
+  }, [(formData as any).industry_id]);
 
   // Receipt-level default tax rate for bulk operations. Higher precedence:
   // the receipt's own override > the user's default passed from Settings.
@@ -122,6 +140,10 @@ const ReceiptForm = ({
         taxAmount: initialData.taxAmount || '',
         receiptDate: initialData.receiptDate || '',
         category: initialData.category || '',
+        // @ts-ignore
+        category_id: (initialData as any).category_id || (initialData as any).categoryId || '',
+        // @ts-ignore
+        industry_id: (initialData as any).industry_id || (initialData as any).industryId || (formData as any).industry_id || '',
         invoiceNumber: initialData.invoiceNumber || '',
         kraPin: initialData.kraPin || '',
         buyerKraPin: initialData.buyerKraPin || '',
@@ -138,7 +160,7 @@ const ReceiptForm = ({
               isZeroRated: item.isZeroRated || false,
             }))
           : [],
-      });
+      } as any);
     }
   }, [initialData]);
 
@@ -522,7 +544,7 @@ const ReceiptForm = ({
     <form onSubmit={handleSubmit} className="space-y-4">
       {/* Header fields */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {["supplier", "totalAmount", "taxAmount", "receiptDate", "category", "invoiceNumber", "kraPin", "buyerKraPin", "cuInvoice"].map((name) => (
+        {["supplier", "totalAmount", "taxAmount", "receiptDate", "invoiceNumber", "kraPin", "buyerKraPin", "cuInvoice"].map((name) => (
           <div key={name}>
             <label className="block text-xs font-medium text-gray-600 mb-0.5 capitalize">{name.replace(/([A-Z])/g, ' $1')}</label>
             <input
@@ -535,6 +557,38 @@ const ReceiptForm = ({
             />
           </div>
         ))}
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-0.5">Industry <span className="text-red-500">*</span></label>
+          <select value={(formData as any).industry_id || ''} onChange={e => {
+            const iid = e.target.value;
+            setFormData({ ...formData, industry_id: iid, category: '', category_id: '' } as any);
+          }} className="w-full px-2 py-1 border rounded text-sm bg-white" required>
+            <option value="">Select an industry</option>
+            {industries.map(ind => <option key={ind.id} value={ind.id}>{ind.name}</option>)}
+            {(formData as any).industry_id && !industries.some(i => i.id === (formData as any).industry_id) && (
+              <option value={(formData as any).industry_id}>{(formData as any).industry_id} (previous)</option>
+            )}
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-0.5">Category <span className="text-red-500">*</span></label>
+          <select value={(formData as any).category_id || ''} onChange={e => {
+            const cid = e.target.value;
+            const cat = categories.find(c => c.id === cid);
+            setFormData({ ...formData, category: cat ? cat.name : '', category_id: cid, industry_id: cat ? cat.industry_id : (formData as any).industry_id } as any);
+          }} className="w-full px-2 py-1 border rounded text-sm bg-white" required disabled={! (formData as any).industry_id}>
+            <option value="">{(formData as any).industry_id ? 'Select a category' : 'Select industry first'}</option>
+            {categories.filter(c => !c.parent_id).map(cat => (
+              <optgroup key={cat.id} label={cat.label}>
+                <option value={cat.id}>{cat.label}</option>
+                {categories.filter(sc => sc.parent_id === cat.id).map(sc => <option key={sc.id} value={sc.id}>— {sc.label}</option>)}
+              </optgroup>
+            ))}
+            {(formData as any).category && !(formData as any).category_id && (
+              <option value="">{(formData as any).category} (previous)</option>
+            )}
+          </select>
+        </div>
         <div>
           <label className="block text-xs font-medium text-gray-600 mb-0.5">
             Entry Type

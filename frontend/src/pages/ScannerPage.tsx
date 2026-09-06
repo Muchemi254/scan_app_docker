@@ -7,9 +7,9 @@
  * now or weeks later. Held work survives restarts and never needs re-upload.
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { batchApi } from '../services/api';
+import { batchApi, industriesApi, categoriesApi } from '../services/api';
 import { toast } from '../stores/toastStore';
 
 const MAX_UPLOAD_SIZE_MB = 500;
@@ -34,6 +34,22 @@ const ScannerPage = ({ userId }: { userId: string | null }) => {
     totalFiles: number;
   } | null;
   const [uploadPhase, setUploadPhase] = useState<UploadPhase>(null);
+
+  // Industries
+  const [industries, setIndustries] = useState<{ id: string; name: string }[]>([]);
+  const [selectedIndustry, setSelectedIndustry] = useState<string>('');
+  useEffect(() => {
+    industriesApi.list().then(r => {
+      setIndustries(r.items);
+      if (r.items.length && !selectedIndustry) {
+        // try default from user_preferences
+        categoriesApi.getDefault().then(d => {
+          if (d.industry_id) setSelectedIndustry(d.industry_id);
+          else setSelectedIndustry(r.items[0].id);
+        }).catch(() => setSelectedIndustry(r.items[0].id));
+      }
+    }).catch(() => {});
+  }, []);
 
   // New-scan form state
   const [batchTitle, setBatchTitle] = useState('');
@@ -67,6 +83,7 @@ const ScannerPage = ({ userId }: { userId: string | null }) => {
 
   const handleProcess = async () => {
     if (!userId) return;
+    if (!selectedIndustry) { setFormError('Select an industry.'); return; }
     if (!batchTitle.trim()) { setFormError('Enter a batch title.'); return; }
     if (selectedFiles.length === 0) { setFormError('Select at least one image.'); return; }
     setFormError('');
@@ -90,7 +107,7 @@ const ScannerPage = ({ userId }: { userId: string | null }) => {
 
         setUploadPhase({ chunkIndex: ci, totalChunks: chunks.length, percent: 0, totalFiles: chunk.length });
 
-        const { batchId } = await batchApi.create(chunkTitle, chunk.map(f => f.name));
+        const { batchId } = await batchApi.create(chunkTitle, chunk.map(f => f.name), selectedIndustry);
         try {
           await batchApi.process(batchId, chunk, (percent) => {
             setUploadPhase(p => p ? { ...p, percent } : p);
@@ -150,6 +167,14 @@ const ScannerPage = ({ userId }: { userId: string | null }) => {
             </div>
           ) : (
             <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">🏭 Industry <span className="text-red-500">*</span></label>
+                <select value={selectedIndustry} onChange={e => { setSelectedIndustry(e.target.value); setFormError(''); }} className="w-full px-4 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-indigo-300 bg-white text-sm">
+                  <option value="">Select an industry</option>
+                  {industries.map(ind => <option key={ind.id} value={ind.id}>{ind.name}</option>)}
+                </select>
+                {industries.length===0 && <p className="text-xs text-amber-600 mt-1">No industries — ask admin to create one in Admin → Industries</p>}
+              </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">🏷️ Batch Title</label>
                 <input

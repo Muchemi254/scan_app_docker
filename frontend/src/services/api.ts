@@ -486,8 +486,8 @@ export const taskApi = {
 export const batchApi = {
   /** Create a batch record. Returns batchId immediately so it can be stored
    *  in localStorage before files are uploaded. */
-  async create(batchTitle: string, filenames: string[]): Promise<{ batchId: string }> {
-    return apiRequest('POST', '/batches', { batchTitle, filenames });
+  async create(batchTitle: string, filenames: string[], industry_id?: string): Promise<{ batchId: string }> {
+    return apiRequest('POST', '/batches', { batchTitle, filenames, industry_id });
   },
 
   /** Upload all files and start backend processing. Returns immediately. */
@@ -792,6 +792,58 @@ export const entryTypesApi = {
   },
   async remove(id: string): Promise<void> {
     return apiGlobalRequest('DELETE', `/entry-types/${id}`);
+  },
+};
+
+// ============================================================================
+// Industries / Categories API - global admin-managed taxonomy
+// ============================================================================
+
+export const industriesApi = {
+  async list(activeOnly = true): Promise<{ total: number; items: { id: string; name: string; description?: string; is_active: boolean; is_system: boolean }[] }> {
+    const qs = activeOnly ? '' : '/all';
+    return apiGlobalRequest('GET', `/industries${qs}`);
+  },
+  async create(name: string, description?: string): Promise<{ id: string; name: string }> {
+    return apiGlobalRequest('POST', '/industries', { name, description });
+  },
+  async update(id: string, body: { name?: string; description?: string; is_active?: boolean }): Promise<{ id: string; name: string }> {
+    return apiGlobalRequest('PUT', `/industries/${id}`, body);
+  },
+  async remove(id: string): Promise<void> {
+    return apiGlobalRequest('DELETE', `/industries/${id}`);
+  },
+};
+
+export const categoriesApi = {
+  async list(industryId?: string, opts: { activeOnly?: boolean; search?: string } = {}): Promise<{ total: number; items: { id: string; industry_id: string; name: string; label: string; parent_id?: string | null; is_active: boolean; is_system: boolean; sort_order: number }[] }> {
+    const p = new URLSearchParams();
+    if (industryId) p.set('industry_id', industryId);
+    if (opts.activeOnly !== undefined) p.set('active_only', String(opts.activeOnly));
+    if (opts.search) p.set('search', opts.search);
+    const qs = p.toString() ? `?${p.toString()}` : '';
+    return apiGlobalRequest('GET', `/categories${qs}`);
+  },
+  async listAll(industryId?: string): Promise<{ total: number; items: any[] }> {
+    const p = new URLSearchParams();
+    if (industryId) p.set('industry_id', industryId);
+    const qs = p.toString() ? `?${p.toString()}` : '';
+    return apiGlobalRequest('GET', `/categories/all${qs}`);
+  },
+  async create(industry_id: string, name: string, label?: string, parent_id?: string | null): Promise<{ id: string; name: string; label: string }> {
+    return apiGlobalRequest('POST', '/categories', { industry_id, name, label, parent_id });
+  },
+  async update(id: string, body: { name?: string; label?: string; parent_id?: string | null; industry_id?: string; is_active?: boolean }): Promise<any> {
+    return apiGlobalRequest('PUT', `/categories/${id}`, body);
+  },
+  async remove(id: string): Promise<void> {
+    return apiGlobalRequest('DELETE', `/categories/${id}`);
+  },
+  async getDefault(): Promise<{ industry_id: string | null }> {
+    return apiGlobalRequest('GET', '/categories/user-default');
+  },
+  async setDefault(industry_id: string | null): Promise<{ industry_id: string | null }> {
+    return apiGlobalRequest('PUT', '/categories/user-default', { industry_id });
   },
 };
 

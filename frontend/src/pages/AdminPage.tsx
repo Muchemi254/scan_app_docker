@@ -14,7 +14,7 @@ import {
   type AuthUser,
 } from '../services/auth';
 import { opsApi } from '../services/opsApi';
-import { settingsApi, locationsApi, entryTypesApi } from '../services/api';
+import { settingsApi, locationsApi, entryTypesApi, industriesApi, categoriesApi } from '../services/api';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import { toast } from '../stores/toastStore';
 import {
@@ -88,6 +88,20 @@ const AdminPage = ({ userId }: Props) => {
   const [entryTypeName, setEntryTypeName] = useState('');
   const [entryTypeLabel, setEntryTypeLabel] = useState('');
   const [savingEntryTypes, setSavingEntryTypes] = useState(false);
+  // Industries & Categories
+  const [industries, setIndustries] = useState<{ id: string; name: string; description?: string; is_active: boolean; is_system: boolean }[]>([]);
+  const [industryInput, setIndustryInput] = useState('');
+  const [industryDesc, setIndustryDesc] = useState('');
+  const [savingIndustries, setSavingIndustries] = useState(false);
+  const [selectedIndustryId, setSelectedIndustryId] = useState<string | null>(null);
+  const [categories, setCategories] = useState<{ id: string; industry_id: string; name: string; label: string; parent_id?: string | null; is_active: boolean; is_system: boolean }[]>([]);
+  const [categoryName, setCategoryName] = useState('');
+  const [categoryLabel, setCategoryLabel] = useState('');
+  const [categoryParent, setCategoryParent] = useState<string>('');
+  const [savingCategories, setSavingCategories] = useState(false);
+  const [categorySearch, setCategorySearch] = useState('');
+  const [csvUploading, setCsvUploading] = useState(false);
+  const csvInputRef = useRef<HTMLInputElement>(null);
 
   const loadUsers = useCallback(async () => {
     setLoadingUsers(true);
@@ -198,6 +212,20 @@ const AdminPage = ({ userId }: Props) => {
       setError(err?.message || 'Failed to load entry types');
     }
   }, []);
+  const loadIndustries = useCallback(async () => {
+    setError('');
+    try {
+      const data = await industriesApi.list(false);
+      setIndustries(data.items);
+      if (data.items.length && !selectedIndustryId) setSelectedIndustryId(data.items[0].id);
+    } catch (err: any) { setError(err?.message || 'Failed to load industries'); }
+  }, [selectedIndustryId]);
+  const loadCategories = useCallback(async (industryId: string | null) => {
+    if (!industryId) { setCategories([]); return; }
+    setError('');
+    try { setCategories((await categoriesApi.listAll(industryId)).items); }
+    catch (err: any) { setError(err?.message || 'Failed to load categories'); }
+  }, []);
 
   useEffect(() => {
     loadUsers();
@@ -206,7 +234,9 @@ const AdminPage = ({ userId }: Props) => {
     loadModels();
     loadLocations();
     loadEntryTypes();
-  }, [loadUsers, loadHosts, loadAIProviders, loadModels, loadLocations, loadEntryTypes]);
+    loadIndustries();
+  }, [loadUsers, loadHosts, loadAIProviders, loadModels, loadLocations, loadEntryTypes, loadIndustries]);
+  useEffect(() => { if (selectedIndustryId) loadCategories(selectedIndustryId); }, [selectedIndustryId, loadCategories]);
 
   const addLocation = async () => {
     const name = locationInput.trim();
@@ -295,6 +325,85 @@ const AdminPage = ({ userId }: Props) => {
     try { await entryTypesApi.remove(et.id); setNotice(`Deleted "${et.label}"`); toast.success('Entry type deleted', `"${et.label}" was removed.`); await loadEntryTypes(); }
     catch (err: any) { setError(err?.message || 'Failed to delete entry type'); toast.error('Delete failed', err?.message || 'Failed to delete entry type'); }
     finally { setSavingEntryTypes(false); }
+  };
+  const addIndustry = async () => {
+    const name = industryInput.trim(); if (!name) return;
+    setSavingIndustries(true); setError(''); setNotice('');
+    try { await industriesApi.create(name, industryDesc.trim() || undefined); setIndustryInput(''); setIndustryDesc(''); setNotice(`Added industry "${name}"`); await loadIndustries(); }
+    catch (err: any) { setError(err?.message || 'Failed to add industry'); }
+    finally { setSavingIndustries(false); }
+  };
+  const toggleIndustry = async (ind: { id: string; name: string; is_active: boolean }) => {
+    setSavingIndustries(true); setError(''); setNotice('');
+    try { await industriesApi.update(ind.id, { is_active: !ind.is_active }); setNotice(ind.is_active ? `Deactivated "${ind.name}"` : `Activated "${ind.name}"`); await loadIndustries(); }
+    catch (err: any) { setError(err?.message || 'Failed to update industry'); }
+    finally { setSavingIndustries(false); }
+  };
+  const deleteIndustry = async (ind: { id: string; name: string; is_system: boolean }) => {
+    if (ind.is_system) { setError('System industries cannot be deleted'); return; }
+    if (!(await confirm({ title: 'Delete industry?', message: <>Delete <strong>{ind.name}</strong>? Must have no categories/receipts.</> }))) return;
+    setSavingIndustries(true); setError(''); setNotice('');
+    try { await industriesApi.remove(ind.id); setNotice(`Deleted "${ind.name}"`); toast.success('Industry deleted', `"${ind.name}" was removed.`); await loadIndustries(); if (selectedIndustryId===ind.id) setSelectedIndustryId(null); }
+    catch (err: any) { setError(err?.message || 'Failed to delete industry'); toast.error('Delete failed', err?.message || 'Failed to delete industry'); }
+    finally { setSavingIndustries(false); }
+  };
+  const addCategory = async () => {
+    if (!selectedIndustryId) { setError('Select an industry first'); return; }
+    const name = categoryName.trim(); if (!name) return;
+    setSavingCategories(true); setError(''); setNotice('');
+    try { await categoriesApi.create(selectedIndustryId, name, categoryLabel.trim() || name, categoryParent || null); setCategoryName(''); setCategoryLabel(''); setCategoryParent(''); setNotice(`Added category "${name}"`); await loadCategories(selectedIndustryId); }
+    catch (err: any) { setError(err?.message || 'Failed to add category'); }
+    finally { setSavingCategories(false); }
+  };
+  const toggleCategory = async (cat: { id: string; name: string; is_active: boolean }) => {
+    setSavingCategories(true); setError(''); setNotice('');
+    try { await categoriesApi.update(cat.id, { is_active: !cat.is_active }); setNotice(cat.is_active ? `Deactivated "${cat.name}"` : `Activated "${cat.name}"`); await loadCategories(selectedIndustryId!); }
+    catch (err: any) { setError(err?.message || 'Failed to update category'); }
+    finally { setSavingCategories(false); }
+  };
+  const deleteCategory = async (cat: { id: string; name: string; is_system: boolean }) => {
+    if (cat.is_system) { setError('System categories cannot be deleted (deactivate instead)'); return; }
+    if (!(await confirm({ title: 'Delete category?', message: <>Delete <strong>{cat.name}</strong>? Must have no subcategories/receipts.</> }))) return;
+    setSavingCategories(true); setError(''); setNotice('');
+    try { await categoriesApi.remove(cat.id); setNotice(`Deleted "${cat.name}"`); toast.success('Category deleted', `"${cat.name}" was removed.`); await loadCategories(selectedIndustryId!); }
+    catch (err: any) { setError(err?.message || 'Failed to delete category'); toast.error('Delete failed', err?.message || 'Failed to delete category'); }
+    finally { setSavingCategories(false); }
+  };
+  const handleCategoryCsv = async (file: File) => {
+    if (!selectedIndustryId) { setError('Select an industry first'); return; }
+    setCsvUploading(true); setError(''); setNotice('');
+    try {
+      const text = await file.text();
+      const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      // detect header: if first line contains "name" or "label" case-insensitive, skip it
+      let start = 0;
+      if (lines[0] && /name/i.test(lines[0]) && /label/i.test(lines[0])) start = 1;
+      else if (lines[0] && lines[0].toLowerCase().includes('category')) {
+        // heuristic: if first line looks like header and second line is different, skip
+        const firstCols = lines[0].split(',').length;
+        if (firstCols >= 1 && lines.length > 1 && lines[0].toLowerCase().includes('name')) start = 1;
+      }
+      let ok = 0, fail = 0;
+      for (let i = start; i < lines.length; i++) {
+        const line = lines[i];
+        if (!line) continue;
+        // simple CSV split: handle quoted commas
+        const cols = line.match(/(".*?"|[^",\s]+)(?=\s*,|\s*$)/g)?.map(c => c.replace(/^"|"$/g, '').trim()) || line.split(',').map(c => c.trim());
+        const name = (cols[0] || '').trim();
+        const label = (cols[1] || name).trim();
+        const parentName = (cols[2] || '').trim();
+        if (!name) { fail++; continue; }
+        let parentId: string | null = null;
+        if (parentName) {
+          const parent = categories.find(c => c.name.toLowerCase() === parentName.toLowerCase() || c.label.toLowerCase() === parentName.toLowerCase());
+          parentId = parent?.id || null;
+        }
+        try { await categoriesApi.create(selectedIndustryId, name, label, parentId); ok++; } catch { fail++; }
+      }
+      setNotice(`CSV import: ${ok} created, ${fail} skipped (duplicates)`);
+      await loadCategories(selectedIndustryId);
+    } catch (err: any) { setError(err?.message || 'CSV import failed'); }
+    finally { setCsvUploading(false); if (csvInputRef.current) csvInputRef.current.value = ''; }
   };
 
   const handleCreate = async (e: React.FormEvent) => {
@@ -418,7 +527,7 @@ const AdminPage = ({ userId }: Props) => {
     return !!model?.supports_thinking;
   };
 
-  const [activeTab, setActiveTab] = useState<'users' | 'security' | 'locations' | 'ai' | 'backups'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'security' | 'locations' | 'industries' | 'ai' | 'backups'>('users');
 
   // ── Backup limits (admin) ──
   const [backupLimitGB, setBackupLimitGB] = useState('5');
@@ -476,6 +585,7 @@ const AdminPage = ({ userId }: Props) => {
     { key: 'users', label: 'Users', icon: UserIcon },
     { key: 'security', label: 'Security', icon: Globe },
     { key: 'locations', label: 'Locations', icon: MapPin },
+    { key: 'industries', label: 'Industries', icon: Database },
     { key: 'ai', label: 'AI Providers', icon: Key },
     { key: 'backups', label: 'Backups', icon: Database },
   ] as const;
@@ -872,6 +982,81 @@ const AdminPage = ({ userId }: Props) => {
             </ul>
           )}
         </div>
+          </>
+        )}
+
+        {activeTab === 'industries' && (
+          <>
+            <div className="bg-white rounded-xl shadow p-6 space-y-4">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
+                  <Database className="h-5 w-5 text-indigo-600" /> Industries
+                </h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  Global industries. Create Hospitality, Construction etc. Each receipt and scan session must belong to one industry. Deactivating hides it from pickers.
+                </p>
+              </div>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input type="text" value={industryInput} onChange={e => setIndustryInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addIndustry(); } }} className="flex-1 border border-gray-300 rounded-md p-2 text-sm" placeholder="e.g. Hospitality" />
+                <input type="text" value={industryDesc} onChange={e => setIndustryDesc(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addIndustry(); } }} className="flex-1 border border-gray-300 rounded-md p-2 text-sm" placeholder="Description (optional)" />
+                <button onClick={addIndustry} disabled={savingIndustries || !industryInput.trim()} className="px-4 py-2 rounded-lg bg-white border border-gray-300 text-gray-700 text-sm hover:bg-gray-100 disabled:opacity-50"><Plus className="h-4 w-4 inline -mt-0.5" /> Add</button>
+              </div>
+              {industries.length === 0 ? <p className="text-sm text-gray-400">No industries yet — add one above.</p> : (
+                <ul className="divide-y divide-gray-100 border border-gray-100 rounded-lg">
+                  {industries.map(ind => (
+                    <li key={ind.id} className={`flex items-center justify-between gap-3 px-4 py-2.5 ${selectedIndustryId===ind.id ? 'bg-indigo-50' : ''}`}>
+                      <button onClick={() => setSelectedIndustryId(ind.id)} className={`text-sm text-left flex-1 ${ind.is_active ? 'text-gray-800' : 'text-gray-400 line-through'} ${selectedIndustryId===ind.id ? 'font-semibold' : ''}`}>{ind.name} {ind.is_system && <span className="text-[10px] bg-gray-100 px-1.5 py-0.5 rounded">system</span>} <span className="text-xs text-gray-400">{ind.description || ''}</span></button>
+                      <div className="flex items-center gap-2">
+                        <button onClick={() => toggleIndustry(ind)} disabled={savingIndustries} className={`text-xs px-2 py-1 rounded border ${ind.is_active ? 'border-gray-300 text-gray-600 hover:bg-gray-50' : 'border-green-300 text-green-700 hover:bg-green-50'}`}>{ind.is_active ? 'Deactivate' : 'Activate'}</button>
+                        <button onClick={() => deleteIndustry(ind)} disabled={savingIndustries || ind.is_system} className="text-xs px-2 py-1 rounded border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50">{ind.is_system ? 'System' : 'Delete'}</button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="bg-white rounded-xl shadow p-6 space-y-4">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
+                  <Database className="h-5 w-5 text-indigo-600" /> Categories {selectedIndustryId ? `for ${industries.find(i=>i.id===selectedIndustryId)?.name || ''}` : ''}
+                  {selectedIndustryId && <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full">{categories.length}</span>}
+                </h2>
+                <div className="flex gap-2 flex-wrap">
+                  <input type="text" value={categorySearch} onChange={e => setCategorySearch(e.target.value)} placeholder="Search categories" className="px-2 py-1 border rounded text-sm" />
+                  <input ref={csvInputRef} type="file" accept=".csv" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) handleCategoryCsv(f); }} />
+                  <button onClick={() => csvInputRef.current?.click()} disabled={!selectedIndustryId || csvUploading} className="px-3 py-1.5 rounded-lg bg-white border border-gray-300 text-gray-700 text-xs hover:bg-gray-50 disabled:opacity-50 flex items-center gap-1">
+                    {csvUploading ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Upload className="h-3 w-3" />} Import CSV
+                  </button>
+                </div>
+              </div>
+              <p className="text-xs text-gray-400">CSV: <code className="bg-gray-100 px-1 rounded">name,label,parent</code> per line, header optional. Example: <code className="bg-gray-100 px-1 rounded">Beef,Beef,</code> or <code className="bg-gray-100 px-1 rounded">Pork,Pork,Meats</code></p>
+              {!selectedIndustryId ? <p className="text-sm text-gray-400">Select an industry above to manage its categories.</p> : (
+                <>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <input type="text" value={categoryName} onChange={e => setCategoryName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addCategory(); } }} className="flex-1 border border-gray-300 rounded-md p-2 text-sm" placeholder="Category name e.g. Beef" />
+                    <input type="text" value={categoryLabel} onChange={e => setCategoryLabel(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addCategory(); } }} className="flex-1 border border-gray-300 rounded-md p-2 text-sm" placeholder="Label e.g. Beef" />
+                    <select value={categoryParent} onChange={e => setCategoryParent(e.target.value)} className="flex-1 border border-gray-300 rounded-md p-2 text-sm bg-white">
+                      <option value="">No parent (top-level)</option>
+                      {categories.filter(c=>!c.parent_id).map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+                    </select>
+                    <button onClick={addCategory} disabled={savingCategories || !categoryName.trim()} className="px-4 py-2 rounded-lg bg-white border border-gray-300 text-gray-700 text-sm hover:bg-gray-100 disabled:opacity-50"><Plus className="h-4 w-4 inline -mt-0.5" /> Add</button>
+                  </div>
+                  {categories.filter(c => !categorySearch || c.name.toLowerCase().includes(categorySearch.toLowerCase()) || c.label.toLowerCase().includes(categorySearch.toLowerCase())).length === 0 ? <p className="text-sm text-gray-400">No categories yet — add one above.</p> : (
+                    <ul className="divide-y divide-gray-100 border border-gray-100 rounded-lg">
+                      {categories.filter(c => !categorySearch || c.name.toLowerCase().includes(categorySearch.toLowerCase()) || c.label.toLowerCase().includes(categorySearch.toLowerCase())).map(cat => (
+                        <li key={cat.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                          <span className={`text-sm ${cat.is_active ? 'text-gray-800' : 'text-gray-400 line-through'} ${cat.parent_id ? 'ml-4 border-l-2 border-gray-200 pl-2' : ''}`}>{cat.label} <span className="text-xs text-gray-400">({cat.name})</span> {cat.is_system && <span className="text-[10px] bg-gray-100 px-1.5 py-0.5 rounded">system</span>} {cat.parent_id && <span className="text-[10px] text-gray-400">sub of {categories.find(p=>p.id===cat.parent_id)?.label}</span>}</span>
+                          <div className="flex items-center gap-2">
+                            <button onClick={() => toggleCategory(cat)} disabled={savingCategories} className={`text-xs px-2 py-1 rounded border ${cat.is_active ? 'border-gray-300 text-gray-600 hover:bg-gray-50' : 'border-green-300 text-green-700 hover:bg-green-50'}`}>{cat.is_active ? 'Deactivate' : 'Activate'}</button>
+                            <button onClick={() => deleteCategory(cat)} disabled={savingCategories || cat.is_system} className="text-xs px-2 py-1 rounded border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50">Delete</button>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </>
+              )}
+            </div>
           </>
         )}
 

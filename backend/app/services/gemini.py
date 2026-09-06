@@ -406,18 +406,39 @@ _CATEGORY_SET = set(CATEGORIES)
 _CATEGORY_ALIASES_LOWER = {k.strip().lower(): v for k, v in CATEGORY_ALIASES.items()}
 
 
-def normalize_category(raw: Optional[str]) -> str:
+async def _get_category_names_for_industry(industry_id: Optional[str] = None) -> list[str]:
+    """Return active category names for an industry, or global CATEGORIES fallback."""
+    if industry_id:
+        try:
+            from app.services.data_adapter import DataService
+            cats = await DataService.list_categories(industry_id=industry_id, active_only=True)
+            if cats:
+                names = [c["name"] for c in cats if c.get("name")]
+                if names:
+                    return names
+        except Exception:
+            pass
+    return CATEGORIES
+
+def normalize_category(raw: Optional[str], allowed: Optional[set] = None) -> str:
     """Map an extracted category string to the canonical list.
 
-    1. collapse whitespace, exact match against CATEGORIES → return it
-    2. lowercased match against CATEGORY_ALIASES → return canonical
+    1. collapse whitespace, exact match against allowed set or CATEGORIES → return it
+    2. lowercased match against CATEGORY_ALIASES → return canonical if in allowed
     3. otherwise → 'Other' (never invent or store a new category)
     """
     if not raw:
         return "Other"
     value = " ".join(str(raw).split())
-    if value in _CATEGORY_SET:
+    check_set = allowed if allowed is not None else _CATEGORY_SET
+    if value in check_set:
         return value
+    alias = _CATEGORY_ALIASES_LOWER.get(value.lower())
+    if alias and alias in check_set:
+        return alias
+    # if alias not in allowed but value itself is close, fallback to Other within allowed
+    if allowed is not None and "Other" in allowed:
+        return "Other"
     return _CATEGORY_ALIASES_LOWER.get(value.lower(), "Other")
 
 # ── Global extraction prompt (shared by single & batch) ──────────────
@@ -675,6 +696,7 @@ async def extract_receipt_data(
     image_base64: str,
     mime_type: str,
     user_id: Optional[str] = None,
+    industry_id: Optional[str] = None,
 ) -> ReceiptCreate:
     """
     Extract structured receipt data from image using Gemini Vision.
@@ -698,7 +720,12 @@ async def extract_receipt_data(
         is_pdf = mime_type == PDF_MIME
         pdf_bytes = base64.b64decode(image_base64) if is_pdf else None
 
-        prompt = RECEIPT_EXTRACTION_PROMPT.format(
+        # industry-scoped categories (auto-seed General fallback)
+        cat_names = await _get_category_names_for_industry(industry_id)
+        cat_set = set(cat_names)
+        # build prompt with industry-specific list
+        prompt_base = RECEIPT_EXTRACTION_PROMPT.replace(', '.join(CATEGORIES), ', '.join(cat_names))
+        prompt = prompt_base.format(
             batch_instruction=(
                 "Extract receipt details from this PDF document — consider ALL "
                 "pages (they are one document) — and return ONLY valid JSON."
@@ -745,12 +772,27 @@ async def extract_receipt_data(
         # Flag all scans for review
         status = ReceiptStatus.NEEDS_REVIEW
 
+        normalized = normalize_category(data.get("category") or "Other", allowed=cat_set)
+        # lookup ids for industry-scoped category
+        cat_id = None
+        if industry_id and normalized:
+            try:
+                from app.services.data_adapter import DataService as _DS
+                cats = await _DS.list_categories(industry_id=industry_id, active_only=False)
+                for c in cats:
+                    if c.get("name") == normalized:
+                        cat_id = c.get("id")
+                        break
+            except Exception:
+                pass
         receipt = ReceiptCreate(
             supplier=(data.get("supplier") or "Unknown").strip() or "Unknown",
             totalAmount=sanitize_numeric(data.get("totalAmount")),
             taxAmount=sanitize_numeric(data.get("taxAmount")),
             receiptDate=data.get("receiptDate", ""),
-            category=normalize_category(data.get("category") or "Other"),
+            category=normalized,
+            category_id=cat_id,
+            industry_id=industry_id,
             invoiceNumber=data.get("invoiceNumber"),
             kraPin=data.get("kraPin"),
             buyerKraPin=data.get("buyerKraPin"),
@@ -776,6 +818,7 @@ async def extract_receipt_batch(
     model_id: str,
     provider: str,
     user_id: Optional[str] = None,
+    industry_id: Optional[str] = None,
 ) -> list[Optional[ReceiptCreate]]:
     """
     Extract structured data from MULTIPLE receipts in one AI call.
@@ -794,13 +837,16 @@ async def extract_receipt_batch(
     try:
         thinking_mode = await resolve_thinking_mode(user_id, provider)
 
+        cat_names = await _get_category_names_for_industry(industry_id)
+        cat_set = set(cat_names)
+        prompt_base = RECEIPT_EXTRACTION_PROMPT.replace(', '.join(CATEGORIES), ', '.join(cat_names))
         # Why a wrapper object and not a top-level array: DashScope/OpenAI-
         # compatible `response_format={"type": "json_object"}` constrains the
         # output to a SINGLE JSON object. Qwen3-VL silently collapses a
         # requested top-level array down to one element ("10 images → 1
         # receipt"). Nesting the array inside an object is the sanctioned
         # pattern and yields all receipts reliably.
-        prompt = RECEIPT_EXTRACTION_PROMPT.format(
+        prompt = prompt_base.format(
             batch_instruction=(
                 f"Extract receipt details from these {len(files)} documents. "
                 "Each document is preceded by its index (Receipt index 0, Receipt "
@@ -951,6 +997,15 @@ async def extract_receipt_batch(
         if indexed:
             data_list = [data for _, data in sorted(indexed, key=lambda t: t[0])]
 
+        # pre-build category id map for this industry
+        cat_id_map: dict = {}
+        if industry_id:
+            try:
+                from app.services.data_adapter import DataService as _DS2
+                _cats = await _DS2.list_categories(industry_id=industry_id, active_only=False)
+                cat_id_map = {c.get("name"): c.get("id") for c in _cats}
+            except Exception:
+                pass
         results = []
         for i, data in enumerate(data_list):
             if not isinstance(data, dict):
@@ -963,13 +1018,17 @@ async def extract_receipt_batch(
 
                 # Flag all scans for review
                 status = ReceiptStatus.NEEDS_REVIEW
+                normalized = normalize_category(data.get("category") or "Other", allowed=cat_set)
+                cid = cat_id_map.get(normalized)
 
                 results.append(ReceiptCreate(
                     supplier=(data.get("supplier") or "Unknown").strip() or "Unknown",
                     totalAmount=sanitize_numeric(data.get("totalAmount")),
                     taxAmount=sanitize_numeric(data.get("taxAmount")),
                     receiptDate=data.get("receiptDate", ""),
-                    category=data.get("category", "Other"),
+                    category=normalized,
+                    category_id=cid,
+                    industry_id=industry_id,
                     invoiceNumber=data.get("invoiceNumber"),
                     kraPin=data.get("kraPin"),
                     buyerKraPin=data.get("buyerKraPin"),

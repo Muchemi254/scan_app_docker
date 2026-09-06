@@ -54,7 +54,9 @@ class ReceiptBase(BaseModel):
     totalAmount: str = Field(..., description="Total amount including tax")
     taxAmount: Optional[str] = Field(None, description="Tax amount")
     receiptDate: str = Field(..., description="Receipt date (MM/DD/YYYY format)")
-    category: Optional[str] = Field(None, description="Expense category")
+    category: Optional[str] = Field(None, description="Expense category (snapshot for history)")
+    category_id: Optional[str] = Field(None, description="Category FK (industry-scoped)")
+    industry_id: Optional[str] = Field(None, description="Industry FK for this receipt")
     invoiceNumber: Optional[str] = Field(None, description="Invoice/receipt number")
     kraPin: Optional[str] = Field(None, description="Seller KRA PIN (supplier PIN)")
     buyerKraPin: Optional[str] = Field(None, description="Buyer KRA PIN (your PIN)")
@@ -79,6 +81,8 @@ class ReceiptUpdate(BaseModel):
     taxAmount: Optional[str] = None
     receiptDate: Optional[str] = None
     category: Optional[str] = None
+    category_id: Optional[str] = None
+    industry_id: Optional[str] = None
     invoiceNumber: Optional[str] = None
     kraPin: Optional[str] = None
     buyerKraPin: Optional[str] = None
@@ -97,6 +101,8 @@ class Receipt(ReceiptBase):
     userId: str = Field(..., description="User who owns this receipt")
     status: ReceiptStatus = Field(default=ReceiptStatus.PROCESSED)
     entryType: str = Field(default="expense")
+    category_id: Optional[str] = None
+    industry_id: Optional[str] = None
     imageUrl: Optional[str] = Field(None, description="Image URL in storage")
     thumbnailUrl: Optional[str] = Field(None, description="Thumbnail image URL for fast preview")
     fileType: Optional[str] = Field(None, description="Stored file MIME: image/jpeg or application/pdf")
