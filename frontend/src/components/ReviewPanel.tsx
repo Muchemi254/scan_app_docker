@@ -218,6 +218,15 @@ const ReviewPanel = ({
 
   const doUpdate = async (data: any) => {
     if (!receipt.id) return;
+    // client-side guard for processed without location
+    const targetStatus = data?.status || receipt.status;
+    const targetLocation = data?.location !== undefined ? data.location : receipt.location;
+    if (targetStatus === 'processed' && !(targetLocation || '').trim()) {
+      const msg = 'A location is required before a receipt can be confirmed as fully processed';
+      setActionError(msg);
+      toast.error('Location required', msg);
+      return;
+    }
     try {
       setLoading(true);
       const updated = await receiptApi.update(receipt.id, data, newImage || undefined, userId);
@@ -225,9 +234,13 @@ const ReviewPanel = ({
       setEditing(false);
       setNewImage(null);
       onSaved?.(updated);
+      toast.success('Receipt updated', 'Changes saved successfully');
     } catch (error) {
       console.error('Update failed', error);
-      setActionError(error instanceof Error ? error.message : 'Update failed');
+      const msg = error instanceof Error ? error.message : 'Update failed';
+      setActionError(msg);
+      const isLocation = msg.toLowerCase().includes('location is required');
+      toast.error(isLocation ? 'Location required' : 'Update failed', msg);
     } finally {
       setLoading(false);
     }
@@ -314,6 +327,14 @@ const ReviewPanel = ({
   // Save the in-modal edit, then return to the modal's view mode (still unapproved)
   const saveApproveDraft = async (data: any) => {
     if (!receipt.id) return;
+    const targetStatus = data?.status || receipt.status;
+    const targetLocation = data?.location !== undefined ? data.location : receipt.location;
+    if (targetStatus === 'processed' && !(targetLocation || '').trim()) {
+      const msg = 'A location is required before a receipt can be confirmed as fully processed';
+      setActionError(msg);
+      toast.error('Location required', msg);
+      return;
+    }
     setActionError(null);
     try {
       setLoading(true);
@@ -324,9 +345,13 @@ const ReviewPanel = ({
       setApproveDraftImage(null);
       setApproveMode('view');
       onSaved?.(updated);
+      toast.success('Receipt updated', 'Draft saved');
     } catch (error) {
       console.error('Draft update failed', error);
-      setActionError(error instanceof Error ? error.message : 'Update failed');
+      const msg = error instanceof Error ? error.message : 'Update failed';
+      setActionError(msg);
+      const isLocation = msg.toLowerCase().includes('location is required');
+      toast.error(isLocation ? 'Location required' : 'Update failed', msg);
     } finally {
       setLoading(false);
     }

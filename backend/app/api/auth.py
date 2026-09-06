@@ -66,6 +66,13 @@ class AdminCreateUserRequest(BaseModel):
     display_name: Optional[str] = None
 
 
+class AdminUpdateUserRequest(BaseModel):
+    email: Optional[str] = None
+    display_name: Optional[str] = None
+    is_admin: Optional[bool] = None
+    password: Optional[str] = None
+
+
 class AdminUserOut(BaseModel):
     uid: str
     email: str
@@ -185,6 +192,48 @@ async def admin_create_user(body: AdminCreateUserRequest, _admin_uid: str = Depe
         is_admin=bool(user["is_admin"]),
         display_name=user.get("display_name"),
         created_at=user["created_at"].isoformat() if user.get("created_at") else None,
+    )
+
+
+@router.put("/admin/users/{uid}", response_model=AdminUserOut)
+async def admin_update_user(
+    uid: str,
+    body: AdminUpdateUserRequest,
+    admin_uid: str = Depends(require_admin),
+):
+    """Update a user profile (admin only)."""
+    target = await auth_service.get_user_by_uid(uid)
+    if not target:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    # Prevent demoting last admin
+    if body.is_admin is False and target["is_admin"] and await auth_service.count_admin_users() <= 1:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot demote the last admin")
+    # Prevent admin from demoting themselves if they are last admin handled above, but also allow self-edit with guard
+    data: dict = {}
+    if body.email is not None:
+        email = body.email.strip().lower()
+        if not email:
+            raise HTTPException(status_code=422, detail="email is required")
+        data["email"] = email
+    if body.display_name is not None:
+        data["display_name"] = body.display_name.strip() or None
+    if body.is_admin is not None:
+        data["is_admin"] = body.is_admin
+    if body.password:
+        if len(body.password) < 8:
+            raise HTTPException(status_code=422, detail="password must be at least 8 characters")
+        data["password"] = body.password
+    if not data:
+        raise HTTPException(status_code=422, detail="No fields to update")
+    updated = await auth_service.update_user(uid, data)
+    if updated is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A user with that email already exists")
+    return AdminUserOut(
+        uid=updated["uid"],
+        email=updated["email"],
+        is_admin=bool(updated["is_admin"]),
+        display_name=updated.get("display_name"),
+        created_at=updated["created_at"].isoformat() if updated.get("created_at") else None,
     )
 
 

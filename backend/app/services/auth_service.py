@@ -151,6 +151,47 @@ async def create_user(
     return await get_user_by_uid(uid)
 
 
+async def update_user(uid: str, data: dict) -> Optional[dict]:
+    """Update a user profile (admin). Returns updated user or None if not found/conflict."""
+    from app.core.database import get_pool
+    fields = []
+    params: list = []
+    idx = 1
+    if "email" in data and data["email"] is not None:
+        email_norm = str(data["email"]).strip().lower()
+        if not email_norm:
+            return None
+        fields.append(f"email = ${idx}")
+        params.append(email_norm)
+        idx += 1
+    if "display_name" in data:
+        fields.append(f"display_name = ${idx}")
+        params.append(data["display_name"])
+        idx += 1
+    if "is_admin" in data and data["is_admin"] is not None:
+        fields.append(f"is_admin = ${idx}")
+        params.append(bool(data["is_admin"]))
+        idx += 1
+    if "password" in data and data["password"]:
+        fields.append(f"password_hash = ${idx}")
+        params.append(hash_password(str(data["password"])))
+        idx += 1
+    if not fields:
+        return await get_user_by_uid(uid)
+    set_clause = ", ".join(fields)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        try:
+            row = await conn.fetchrow(
+                f"UPDATE users SET {set_clause} WHERE uid = ${idx} RETURNING uid, email, is_admin, display_name, created_at",
+                *params, uid,
+            )
+        except asyncpg.UniqueViolationError:
+            return None
+        if not row:
+            return None
+        return dict(row)
+
 async def authenticate_user(email: str, password: str) -> Optional[dict]:
     """Return the user dict if credentials are valid, else None."""
     user = await get_user_by_email(email)

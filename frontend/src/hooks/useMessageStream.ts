@@ -19,6 +19,27 @@ interface StreamEvent {
 const listeners = new Map<string, Set<(ev: StreamEvent) => void>>();
 const sources = new Map<string, EventSource>();
 
+function createSource(channel: string): EventSource {
+  const token = getToken();
+  const source = new EventSource(`${API_BASE_URL}/messages/stream?token=${encodeURIComponent(token || '')}`);
+  source.onmessage = (e) => {
+    try {
+      const ev = JSON.parse(e.data) as StreamEvent;
+      const subs = listeners.get(channel);
+      if (subs) subs.forEach((fn) => fn(ev));
+    } catch { /* ignore malformed frames */ }
+  };
+  source.onerror = () => {
+    // Close the broken source so next subscribe recreates it with fresh token
+    const src = sources.get(channel);
+    if (src && src.readyState === EventSource.CLOSED) {
+      src.close();
+      sources.delete(channel);
+    }
+  };
+  return source;
+}
+
 function subscribe(channel: string, cb: (ev: StreamEvent) => void): () => void {
   let set = listeners.get(channel);
   if (!set) {
@@ -28,20 +49,16 @@ function subscribe(channel: string, cb: (ev: StreamEvent) => void): () => void {
   set.add(cb);
 
   if (!sources.has(channel)) {
-    const token = getToken();
-    const source = new EventSource(`${API_BASE_URL}/messages/stream?token=${encodeURIComponent(token || '')}`);
+    const source = createSource(channel);
     sources.set(channel, source);
-
-    source.onmessage = (e) => {
-      try {
-        const ev = JSON.parse(e.data) as StreamEvent;
-        const subs = listeners.get(channel);
-        if (subs) subs.forEach((fn) => fn(ev));
-      } catch { /* ignore malformed frames */ }
-    };
-    source.onerror = () => {
-      // EventSource auto-reconnects; treat as a heartbeat miss.
-    };
+  } else {
+    const src = sources.get(channel)!;
+    if (src.readyState === EventSource.CLOSED) {
+      src.close();
+      sources.delete(channel);
+      const source = createSource(channel);
+      sources.set(channel, source);
+    }
   }
 
   return () => {

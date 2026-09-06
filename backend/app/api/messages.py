@@ -70,6 +70,8 @@ async def stream_messages(
         try:
             yield _sse({"type": "connected", "user_id": user_id})
             while True:
+                if await request.is_disconnected():
+                    break
                 try:
                     message = await pubsub.get_message(
                         ignore_subscribe_messages=True, timeout=_SSE_HEARTBEAT_SECONDS
@@ -91,6 +93,7 @@ async def stream_messages(
         finally:
             try:
                 await pubsub.unsubscribe(channel)
+                await pubsub.close()
             except Exception:
                 pass
 

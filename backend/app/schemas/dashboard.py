@@ -17,7 +17,9 @@ class DashboardOverview(BaseModel):
     total_items: int
     avg_per_receipt: float
     processed_count: int
+    pending_count: int = 0
     review_count: int
+    verified_count: int = 0
     batch_count: int
     supplier_count: int
     category_count: int
@@ -76,6 +78,22 @@ class DashboardBreakdown(BaseModel):
     top_category: Optional[CategorySlice] = None
     top_supplier: Optional[SupplierSlice] = None
 
+
+# ── Yearly ────────────────────────────────────────────────────────────────────
+
+class YearPoint(BaseModel):
+    """A single year in the yearly breakdown."""
+    year: str           # "2026"
+    label: str          # "2026"
+    total: float
+    count: int
+    avg_per_receipt: float
+
+
+class DashboardYearly(BaseModel):
+    """Yearly breakdown independent of the year filter (last 5 years)."""
+    yearly: List[YearPoint]
+    period_total: float
 
 # ── Insights ──────────────────────────────────────────────────────────────────
 

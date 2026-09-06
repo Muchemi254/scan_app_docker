@@ -25,7 +25,9 @@ from app.schemas.dashboard import (
     DashboardBreakdown,
     DashboardInsights,
     DashboardInsight,
+    DashboardYearly,
     TrendPoint,
+    YearPoint,
     CategorySlice,
     SupplierSlice,
 )
@@ -57,6 +59,22 @@ async def _check_access(user_id: str, current_user_id: str) -> None:
 # ── GET /overview ─────────────────────────────────────────────────────────────
 
 @router.get(
+    "/{userId}/dashboard/years",
+    summary="Available years for dashboard",
+)
+async def dashboard_years(
+    userId: str,
+    current_user_id: str = Depends(get_current_user_id),
+):
+    await _check_access(userId, current_user_id)
+    try:
+        years = await DashboardService.get_years(userId)
+        return {"years": years}
+    except Exception as e:
+        logger.error(f"Dashboard years failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load years")
+
+@router.get(
     "/{userId}/dashboard/overview",
     response_model=DashboardOverview,
     summary="Dashboard KPI overview",
@@ -65,11 +83,13 @@ async def dashboard_overview(
     userId: str,
     date_from: Optional[str] = Query(None, description="Start date MM/DD/YYYY"),
     date_to: Optional[str] = Query(None, description="End date MM/DD/YYYY"),
+    industry_id: Optional[str] = Query(None, description="Industry filter"),
+    include_unreviewed: bool = Query(False, description="Include needs_review in verified totals"),
     current_user_id: str = Depends(get_current_user_id),
 ):
     await _check_access(userId, current_user_id)
     try:
-        data = await DashboardService.get_overview(userId, date_from, date_to)
+        data = await DashboardService.get_overview(userId, date_from, date_to, industry_id, include_unreviewed)
         return DashboardOverview(**data)
     except Exception as e:
         logger.error(f"Dashboard overview failed: {e}")
@@ -88,11 +108,13 @@ async def dashboard_trends(
     months: int = Query(12, ge=1, le=36, description="Number of months to return"),
     date_from: Optional[str] = Query(None, description="Start date MM/DD/YYYY"),
     date_to: Optional[str] = Query(None, description="End date MM/DD/YYYY"),
+    industry_id: Optional[str] = Query(None),
+    include_unreviewed: bool = Query(False),
     current_user_id: str = Depends(get_current_user_id),
 ):
     await _check_access(userId, current_user_id)
     try:
-        data = await DashboardService.get_trends(userId, months, date_from, date_to)
+        data = await DashboardService.get_trends(userId, months, date_from, date_to, industry_id, include_unreviewed)
         return DashboardTrends(
             monthly=[TrendPoint(**p) for p in data["monthly"]],
             period_total=data["period_total"],
@@ -117,11 +139,13 @@ async def dashboard_breakdown(
     userId: str,
     date_from: Optional[str] = Query(None, description="Start date MM/DD/YYYY"),
     date_to: Optional[str] = Query(None, description="End date MM/DD/YYYY"),
+    industry_id: Optional[str] = Query(None),
+    include_unreviewed: bool = Query(False),
     current_user_id: str = Depends(get_current_user_id),
 ):
     await _check_access(userId, current_user_id)
     try:
-        data = await DashboardService.get_breakdown(userId, date_from, date_to)
+        data = await DashboardService.get_breakdown(userId, date_from, date_to, industry_id, include_unreviewed)
         return DashboardBreakdown(
             categories=[CategorySlice(**c) for c in data["categories"]],
             suppliers=[SupplierSlice(**s) for s in data["suppliers"]],
@@ -131,6 +155,32 @@ async def dashboard_breakdown(
     except Exception as e:
         logger.error(f"Dashboard breakdown failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to load dashboard breakdown")
+
+
+# ── GET /yearly ───────────────────────────────────────────────────────────────
+
+@router.get(
+    "/{userId}/dashboard/yearly",
+    response_model=DashboardYearly,
+    summary="Yearly breakdown (last 5 years, ignores year filter)",
+)
+async def dashboard_yearly(
+    userId: str,
+    industry_id: Optional[str] = Query(None),
+    include_unreviewed: bool = Query(False),
+    last_n: int = Query(5, ge=1, le=10),
+    current_user_id: str = Depends(get_current_user_id),
+):
+    await _check_access(userId, current_user_id)
+    try:
+        data = await DashboardService.get_yearly(userId, industry_id, include_unreviewed, last_n)
+        return DashboardYearly(
+            yearly=[YearPoint(**p) for p in data["yearly"]],
+            period_total=data["period_total"],
+        )
+    except Exception as e:
+        logger.error(f"Dashboard yearly failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to load dashboard yearly")
 
 
 # ── GET /insights ─────────────────────────────────────────────────────────────
@@ -144,11 +194,13 @@ async def dashboard_insights(
     userId: str,
     date_from: Optional[str] = Query(None, description="Start date MM/DD/YYYY"),
     date_to: Optional[str] = Query(None, description="End date MM/DD/YYYY"),
+    industry_id: Optional[str] = Query(None),
+    include_unreviewed: bool = Query(False),
     current_user_id: str = Depends(get_current_user_id),
 ):
     await _check_access(userId, current_user_id)
     try:
-        data = await DashboardService.get_insights(userId, date_from, date_to)
+        data = await DashboardService.get_insights(userId, date_from, date_to, industry_id, include_unreviewed)
         return DashboardInsights(
             insights=[DashboardInsight(**i) for i in data["insights"]],
         )

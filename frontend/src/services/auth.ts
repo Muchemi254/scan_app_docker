@@ -154,6 +154,23 @@ export async function adminDeleteUser(uid: string, opId?: string): Promise<strin
   return resp.headers.get('X-Op-Id') || opId || '';
 }
 
+export async function adminUpdateUser(
+  uid: string,
+  data: { email?: string; display_name?: string | null; is_admin?: boolean; password?: string }
+): Promise<AuthUser> {
+  const resp = await fetch(`${API_BASE_URL}/auth/admin/users/${encodeURIComponent(uid)}`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: getAuthHeader(),
+    },
+    body: JSON.stringify(data),
+  });
+  const json = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(json.detail || 'Failed to update user');
+  return json;
+}
+
 // ── Admin: trusted hosts (dynamic Host-header whitelist) ───────────────────
 
 export async function adminGetTrustedHosts(): Promise<string[]> {

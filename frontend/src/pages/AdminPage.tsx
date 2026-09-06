@@ -10,6 +10,7 @@ import {
   adminSetAIProviders,
   adminSetTrustedHosts,
   adminTestAIProvider,
+  adminUpdateUser,
   type AdminAIProvider,
   type AuthUser,
 } from '../services/auth';
@@ -20,6 +21,7 @@ import { toast } from '../stores/toastStore';
 import {
   ShieldAlert, Plus, Trash2, RefreshCw, User as UserIcon, Globe, X, Key,
   Eye, EyeOff, CheckCircle, Shield, AlertCircle, MapPin, Database, Upload,
+  Pencil, Save,
 } from 'lucide-react';
 
 interface Props {
@@ -66,6 +68,14 @@ const AdminPage = ({ userId }: Props) => {
   const [displayName, setDisplayName] = useState('');
   const [isAdmin, setIsAdmin] = useState(false);
   const [creating, setCreating] = useState(false);
+
+  // Edit user modal
+  const [editingUser, setEditingUser] = useState<AuthUser | null>(null);
+  const [editEmail, setEditEmail] = useState('');
+  const [editDisplayName, setEditDisplayName] = useState('');
+  const [editIsAdmin, setEditIsAdmin] = useState(false);
+  const [editPassword, setEditPassword] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
 
   // Trusted hosts
   const [hosts, setHosts] = useState<string[]>([]);
@@ -369,38 +379,63 @@ const AdminPage = ({ userId }: Props) => {
     catch (err: any) { setError(err?.message || 'Failed to delete category'); toast.error('Delete failed', err?.message || 'Failed to delete category'); }
     finally { setSavingCategories(false); }
   };
+  const parseCsvLine = (line: string): string[] => {
+    const res: string[] = [];
+    let cur = '';
+    let inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQ && line[i + 1] === '"') { cur += '"'; i++; }
+        else inQ = !inQ;
+      } else if (ch === ',' && !inQ) {
+        res.push(cur.trim());
+        cur = '';
+      } else {
+        cur += ch;
+      }
+    }
+    res.push(cur.trim());
+    return res.map(c => c.replace(/^"|"$/g, '').trim());
+  };
   const handleCategoryCsv = async (file: File) => {
     if (!selectedIndustryId) { setError('Select an industry first'); return; }
     setCsvUploading(true); setError(''); setNotice('');
     try {
-      const text = await file.text();
+      const raw = await file.text();
+      // strip BOM
+      const text = raw.replace(/^\uFEFF/, '');
       const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-      // detect header: if first line contains "name" or "label" case-insensitive, skip it
       let start = 0;
-      if (lines[0] && /name/i.test(lines[0]) && /label/i.test(lines[0])) start = 1;
-      else if (lines[0] && lines[0].toLowerCase().includes('category')) {
-        // heuristic: if first line looks like header and second line is different, skip
-        const firstCols = lines[0].split(',').length;
-        if (firstCols >= 1 && lines.length > 1 && lines[0].toLowerCase().includes('name')) start = 1;
+      if (lines[0]) {
+        const first = lines[0].toLowerCase();
+        // header row like "name,label,parent" or "category,label" etc
+        if (first.includes('name') || first.includes('category') || first.includes('label')) {
+          const cols = parseCsvLine(lines[0]).map(c => c.toLowerCase());
+          if (cols.includes('name') || cols.includes('category') || cols.includes('label')) start = 1;
+        }
       }
-      let ok = 0, fail = 0;
+      let ok = 0, skip = 0;
+      const existing = new Set(categories.map(c => c.name.toLowerCase()));
       for (let i = start; i < lines.length; i++) {
-        const line = lines[i];
-        if (!line) continue;
-        // simple CSV split: handle quoted commas
-        const cols = line.match(/(".*?"|[^",\s]+)(?=\s*,|\s*$)/g)?.map(c => c.replace(/^"|"$/g, '').trim()) || line.split(',').map(c => c.trim());
+        const cols = parseCsvLine(lines[i]);
         const name = (cols[0] || '').trim();
         const label = (cols[1] || name).trim();
         const parentName = (cols[2] || '').trim();
-        if (!name) { fail++; continue; }
+        if (!name) { skip++; continue; }
+        if (existing.has(name.toLowerCase())) { skip++; continue; }
         let parentId: string | null = null;
         if (parentName) {
           const parent = categories.find(c => c.name.toLowerCase() === parentName.toLowerCase() || c.label.toLowerCase() === parentName.toLowerCase());
           parentId = parent?.id || null;
         }
-        try { await categoriesApi.create(selectedIndustryId, name, label, parentId); ok++; } catch { fail++; }
+        try {
+          await categoriesApi.create(selectedIndustryId, name, label, parentId);
+          existing.add(name.toLowerCase());
+          ok++;
+        } catch { skip++; }
       }
-      setNotice(`CSV import: ${ok} created, ${fail} skipped (duplicates)`);
+      setNotice(`CSV import: ${ok} created, ${skip} skipped (duplicates/invalid)`);
       await loadCategories(selectedIndustryId);
     } catch (err: any) { setError(err?.message || 'CSV import failed'); }
     finally { setCsvUploading(false); if (csvInputRef.current) csvInputRef.current.value = ''; }
@@ -456,6 +491,60 @@ const AdminPage = ({ userId }: Props) => {
       setDeleting(prev => { const n = { ...prev }; delete n[user.uid]; return n; });
       setError(err?.message || 'Failed to delete user');
       toast.error('Delete failed', err?.message || 'Failed to delete user');
+    }
+  };
+
+  const openEdit = (user: AuthUser) => {
+    setEditingUser(user);
+    setEditEmail(user.email);
+    setEditDisplayName(user.display_name || '');
+    setEditIsAdmin(user.is_admin);
+    setEditPassword('');
+    setError('');
+    setNotice('');
+  };
+
+  const closeEdit = () => {
+    setEditingUser(null);
+    setEditPassword('');
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingUser) return;
+    const payload: { email?: string; display_name?: string | null; is_admin?: boolean; password?: string } = {};
+    const trimmedEmail = editEmail.trim().toLowerCase();
+    if (trimmedEmail && trimmedEmail !== editingUser.email) payload.email = trimmedEmail;
+    const trimmedName = editDisplayName.trim();
+    // allow clearing display name
+    if (trimmedName !== (editingUser.display_name || '')) payload.display_name = trimmedName || null;
+    if (editIsAdmin !== editingUser.is_admin) payload.is_admin = editIsAdmin;
+    if (editPassword) {
+      if (editPassword.length < 8) { setError('Password must be at least 8 characters'); return; }
+      payload.password = editPassword;
+    }
+    if (Object.keys(payload).length === 0) { closeEdit(); return; }
+    setSavingEdit(true);
+    setError('');
+    setNotice('');
+    try {
+      const updated = await adminUpdateUser(editingUser.uid, payload);
+      setUsers(prev => prev.map(u => u.uid === updated.uid ? updated : u));
+      setNotice(`Updated ${updated.email}`);
+      toast.success('User updated', `${updated.email} profile saved.`);
+      // If admin edited their own account, keep auth store in sync
+      if (updated.uid === currentUser?.uid) {
+        const raw = localStorage.getItem('scan-app-user');
+        if (raw) {
+          try { const parsed = JSON.parse(raw); localStorage.setItem('scan-app-user', JSON.stringify({ ...parsed, ...updated })); } catch {}
+        }
+        useAuthStore.setState({ user: { ...(currentUser as AuthUser), ...updated } });
+      }
+      closeEdit();
+    } catch (err: any) {
+      setError(err?.message || 'Failed to update user');
+      toast.error('Update failed', err?.message || 'Failed to update user');
+    } finally {
+      setSavingEdit(false);
     }
   };
 
@@ -707,6 +796,7 @@ const AdminPage = ({ userId }: Props) => {
               <thead>
                 <tr className="text-left text-gray-500 border-b">
                   <th className="px-6 py-3 font-medium">Email</th>
+                  <th className="px-6 py-3 font-medium">Display Name</th>
                   <th className="px-6 py-3 font-medium">Role</th>
                   <th className="px-6 py-3 font-medium">Created</th>
                   <th className="px-6 py-3 font-medium text-right">Actions</th>
@@ -721,6 +811,7 @@ const AdminPage = ({ userId }: Props) => {
                         <span className="ml-2 text-xs bg-blue-100 text-blue-700 rounded-full px-2 py-0.5">you</span>
                       )}
                     </td>
+                    <td className="px-6 py-3 text-gray-700">{u.display_name || <span className="text-gray-400">—</span>}</td>
                     <td className="px-6 py-3">
                       {u.is_admin ? (
                         <span className="text-xs bg-purple-100 text-purple-700 rounded-full px-2 py-0.5">admin</span>
@@ -732,13 +823,21 @@ const AdminPage = ({ userId }: Props) => {
                       {u.created_at ? new Date(u.created_at).toLocaleDateString() : '—'}
                     </td>
                     <td className="px-6 py-3 text-right">
-                      <button
-                        onClick={() => handleDelete(u)}
-                        disabled={u.uid === userId}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-red-600 hover:bg-red-50 text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                      >
-                        <Trash2 className="h-4 w-4" /> Delete
-                      </button>
+                      <div className="inline-flex items-center gap-1">
+                        <button
+                          onClick={() => openEdit(u)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-blue-600 hover:bg-blue-50 text-sm transition-colors"
+                        >
+                          <Pencil className="h-4 w-4" /> Edit
+                        </button>
+                        <button
+                          onClick={() => handleDelete(u)}
+                          disabled={u.uid === userId}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-red-600 hover:bg-red-50 text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          <Trash2 className="h-4 w-4" /> Delete
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -750,6 +849,7 @@ const AdminPage = ({ userId }: Props) => {
                         <span className="font-medium text-gray-800">{d.email}</span>
                       </span>
                     </td>
+                    <td className="px-6 py-3 text-gray-400">—</td>
                     <td className="px-6 py-3">
                       <span className="text-xs bg-amber-100 text-amber-700 rounded-full px-2 py-0.5">deleting</span>
                     </td>
@@ -763,13 +863,56 @@ const AdminPage = ({ userId }: Props) => {
                 ))}
                 {users.length === 0 && !loadingUsers && (
                   <tr>
-                    <td colSpan={4} className="px-6 py-8 text-center text-gray-400">No users found</td>
+                    <td colSpan={5} className="px-6 py-8 text-center text-gray-400">No users found</td>
                   </tr>
                 )}
               </tbody>
             </table>
           </div>
         </div>
+        {editingUser && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={closeEdit}>
+            <div onClick={e => e.stopPropagation()} className="bg-white rounded-xl shadow-xl w-full max-w-lg p-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
+                  <Pencil className="h-5 w-5 text-blue-600" /> Edit User
+                </h3>
+                <button onClick={closeEdit} className="text-gray-400 hover:text-gray-600"><X className="h-5 w-5" /></button>
+              </div>
+              <p className="text-xs text-gray-500">UID <code className="bg-gray-100 px-1 rounded">{editingUser.uid.slice(0, 12)}…</code> — leave password blank to keep existing.</p>
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-sm text-gray-600 mb-1">Email</label>
+                  <input type="email" value={editEmail} onChange={e => setEditEmail(e.target.value)} className="w-full border border-gray-300 rounded-md p-2 text-sm" placeholder="user@example.com" />
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-600 mb-1">Display Name</label>
+                  <input type="text" value={editDisplayName} onChange={e => setEditDisplayName(e.target.value)} className="w-full border border-gray-300 rounded-md p-2 text-sm" placeholder="Optional" />
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-600 mb-1">New Password (optional)</label>
+                  <input type="password" value={editPassword} onChange={e => setEditPassword(e.target.value)} minLength={8} className="w-full border border-gray-300 rounded-md p-2 text-sm" placeholder="Leave blank to keep current" />
+                  {editPassword && editPassword.length < 8 && <p className="text-xs text-red-600 mt-1">Minimum 8 characters</p>}
+                </div>
+                <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                  <input type="checkbox" checked={editIsAdmin} onChange={e => setEditIsAdmin(e.target.checked)} className="h-4 w-4 rounded border-gray-300 text-blue-600" />
+                  Administrator
+                  {editingUser.uid === userId && <span className="text-xs text-amber-600 ml-1">(you)</span>}
+                </label>
+                {editIsAdmin !== editingUser.is_admin && !editIsAdmin && (
+                  <p className="text-xs text-amber-600">Demoting an admin — backend blocks removing the last admin.</p>
+                )}
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button onClick={closeEdit} disabled={savingEdit} className="px-4 py-2 rounded-lg border border-gray-300 text-gray-700 text-sm hover:bg-gray-50 disabled:opacity-50">Cancel</button>
+                <button onClick={handleSaveEdit} disabled={savingEdit} className="inline-flex items-center gap-2 px-5 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 disabled:opacity-50">
+                  {savingEdit ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                  {savingEdit ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
           </>
         )}
 

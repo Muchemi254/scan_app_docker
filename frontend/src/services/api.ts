@@ -914,14 +914,19 @@ export const exportApi = {
 // ============================================================================
 
 export const dashboardApi = {
-  /** KPI-level overview: totals, counts, averages, tax breakdown */
-  async overview(date_from?: string, date_to?: string): Promise<{
+  async years(): Promise<{ years: number[] }> {
+    return apiRequest('GET', '/dashboard/years');
+  },
+  /** KPI-level overview: totals, counts, averages */
+  async overview(date_from?: string, date_to?: string, industry_id?: string, include_unreviewed?: boolean): Promise<{
     total_spent: number;
     total_receipts: number;
     total_items: number;
     avg_per_receipt: number;
     processed_count: number;
+    pending_count: number;
     review_count: number;
+    verified_count: number;
     batch_count: number;
     supplier_count: number;
     category_count: number;
@@ -936,12 +941,14 @@ export const dashboardApi = {
     const params = new URLSearchParams();
     if (date_from) params.append('date_from', date_from);
     if (date_to) params.append('date_to', date_to);
+    if (industry_id) params.append('industry_id', industry_id);
+    if (include_unreviewed) params.append('include_unreviewed', 'true');
     const qs = params.toString();
     return apiRequest('GET', `/dashboard/overview${qs ? `?${qs}` : ''}`);
   },
 
   /** Monthly spending time-series */
-  async trends(months?: number, date_from?: string, date_to?: string): Promise<{
+  async trends(months?: number, date_from?: string, date_to?: string, industry_id?: string, include_unreviewed?: boolean): Promise<{
     monthly: { month: string; month_label: string; total: number; count: number; avg_per_receipt: number }[];
     period_total: number;
     period_avg_monthly: number;
@@ -953,11 +960,13 @@ export const dashboardApi = {
     if (months) params.append('months', String(months));
     if (date_from) params.append('date_from', date_from);
     if (date_to) params.append('date_to', date_to);
+    if (industry_id) params.append('industry_id', industry_id);
+    if (include_unreviewed) params.append('include_unreviewed', 'true');
     return apiRequest('GET', `/dashboard/trends?${params.toString()}`);
   },
 
   /** Category + supplier breakdown */
-  async breakdown(date_from?: string, date_to?: string): Promise<{
+  async breakdown(date_from?: string, date_to?: string, industry_id?: string, include_unreviewed?: boolean): Promise<{
     categories: { category: string; total: number; count: number; percentage: number; avg_per_receipt: number }[];
     suppliers: { supplier: string; total: number; count: number; percentage: number; avg_per_receipt: number }[];
     top_category: { category: string; total: number; count: number; percentage: number; avg_per_receipt: number } | null;
@@ -966,19 +975,35 @@ export const dashboardApi = {
     const params = new URLSearchParams();
     if (date_from) params.append('date_from', date_from);
     if (date_to) params.append('date_to', date_to);
+    if (industry_id) params.append('industry_id', industry_id);
+    if (include_unreviewed) params.append('include_unreviewed', 'true');
     const qs = params.toString();
     return apiRequest('GET', `/dashboard/breakdown${qs ? `?${qs}` : ''}`);
   },
 
   /** Computed insights */
-  async insights(date_from?: string, date_to?: string): Promise<{
+  async insights(date_from?: string, date_to?: string, industry_id?: string, include_unreviewed?: boolean): Promise<{
     insights: { type: string; title: string; description: string; importance: string }[];
   }> {
     const params = new URLSearchParams();
     if (date_from) params.append('date_from', date_from);
     if (date_to) params.append('date_to', date_to);
+    if (industry_id) params.append('industry_id', industry_id);
+    if (include_unreviewed) params.append('include_unreviewed', 'true');
     const qs = params.toString();
     return apiRequest('GET', `/dashboard/insights${qs ? `?${qs}` : ''}`);
+  },
+
+  /** Yearly breakdown — last 5 years, ignores year filter but respects industry/status */
+  async yearly(industry_id?: string, include_unreviewed?: boolean): Promise<{
+    yearly: { year: string; label: string; total: number; count: number; avg_per_receipt: number }[];
+    period_total: number;
+  }> {
+    const params = new URLSearchParams();
+    if (industry_id) params.append('industry_id', industry_id);
+    if (include_unreviewed) params.append('include_unreviewed', 'true');
+    const qs = params.toString();
+    return apiRequest('GET', `/dashboard/yearly${qs ? `?${qs}` : ''}`);
   },
 };
 

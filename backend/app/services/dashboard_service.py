@@ -73,27 +73,56 @@ class DashboardService:
         user_id: str,
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
+        industry_id: Optional[str] = None,
+        include_unreviewed: bool = False,
     ) -> List[Dict[str, Any]]:
-        """Fetch all receipts for a user, optionally filtered by date range.
-        Only expense entries (entry_type='expense') count toward dashboard
-        totals — quotations/proformas/deposits/notes are excluded."""
+        """Fetch receipts for a user, optionally filtered by date/industry/status.
+        Only expense entries count toward totals. By default only verified
+        (processed + pending_approval) are included; needs_review is added
+        when include_unreviewed=True."""
         receipts, _ = await DataService.list_receipts(
             user_id, skip=0, limit=5000, entry_type="expense",
         )
 
+        # industry filter
+        if industry_id:
+            receipts = [r for r in receipts if (r.get("industry_id") or r.get("industryId")) == industry_id]
+
+        # status filter: verified = processed + pending_approval
+        if not include_unreviewed:
+            receipts = [r for r in receipts if r.get("status") in ("processed", "pending_approval")]
+
         if not date_from and not date_to:
             return receipts
 
+        # normalize filter bounds to YYYY-MM-DD for comparison
+        norm_from = _parse_date_mmddyyyy(date_from) if date_from else None
+        norm_to = _parse_date_mmddyyyy(date_to) if date_to else None
         filtered: List[Dict[str, Any]] = []
         for r in receipts:
             norm = _parse_date_mmddyyyy(r.get("receiptDate") or "")
-            if date_from and norm < date_from:
+            if not norm:
                 continue
-            if date_to and norm > date_to:
+            if norm_from and norm < norm_from:
+                continue
+            if norm_to and norm > norm_to:
                 continue
             filtered.append(r)
 
         return filtered
+
+    @staticmethod
+    async def get_years(user_id: str) -> List[int]:
+        receipts, _ = await DataService.list_receipts(user_id, skip=0, limit=5000, entry_type="expense")
+        years: set[int] = set()
+        for r in receipts:
+            norm = _parse_date_mmddyyyy(r.get("receiptDate") or "")
+            if norm and len(norm) >= 4:
+                try:
+                    years.add(int(norm[:4]))
+                except ValueError:
+                    pass
+        return sorted(years, reverse=True)
 
     # ── overview ──────────────────────────────────────────────────────────
 
@@ -102,8 +131,10 @@ class DashboardService:
         user_id: str,
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
+        industry_id: Optional[str] = None,
+        include_unreviewed: bool = False,
     ) -> Dict[str, Any]:
-        receipts = await DashboardService._fetch_receipts(user_id, date_from, date_to)
+        receipts = await DashboardService._fetch_receipts(user_id, date_from, date_to, industry_id, include_unreviewed)
 
         total_spent = 0.0
         subtotal = 0.0
@@ -116,13 +147,16 @@ class DashboardService:
         categories = set()
         batches = set()
 
+        pending = 0
         for r in receipts:
             total_spent += _parse_amount(r.get("totalAmount"))
             largest = max(largest, _parse_amount(r.get("totalAmount")))
 
             if r.get("status") == "processed":
                 processed += 1
-            elif r.get("status") in ("needs_review", "pending_approval"):
+            elif r.get("status") == "pending_approval":
+                pending += 1
+            elif r.get("status") == "needs_review":
                 review += 1
 
             sup = (r.get("supplier") or "").strip()
@@ -154,7 +188,9 @@ class DashboardService:
             "total_items": total_items,
             "avg_per_receipt": round(total_spent / n, 2) if n else 0.0,
             "processed_count": processed,
+            "pending_count": pending,
             "review_count": review,
+            "verified_count": processed + pending,
             "batch_count": len(batches),
             "supplier_count": len(suppliers),
             "category_count": len(categories),
@@ -175,8 +211,10 @@ class DashboardService:
         months: int = 12,
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
+        industry_id: Optional[str] = None,
+        include_unreviewed: bool = False,
     ) -> Dict[str, Any]:
-        receipts = await DashboardService._fetch_receipts(user_id, date_from, date_to)
+        receipts = await DashboardService._fetch_receipts(user_id, date_from, date_to, industry_id, include_unreviewed)
 
         monthly: Dict[str, Dict[str, Any]] = defaultdict(
             lambda: {"total": 0.0, "count": 0}
@@ -241,8 +279,10 @@ class DashboardService:
         user_id: str,
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
+        industry_id: Optional[str] = None,
+        include_unreviewed: bool = False,
     ) -> Dict[str, Any]:
-        receipts = await DashboardService._fetch_receipts(user_id, date_from, date_to)
+        receipts = await DashboardService._fetch_receipts(user_id, date_from, date_to, industry_id, include_unreviewed)
 
         cat_totals: Dict[str, float] = defaultdict(float)
         cat_counts: Dict[str, int] = defaultdict(int)
@@ -297,6 +337,67 @@ class DashboardService:
             "top_supplier": suppliers[0] if suppliers else None,
         }
 
+    # ── yearly breakdown (independent of year filter, last 5 years) ────
+
+    @staticmethod
+    async def get_yearly(
+        user_id: str,
+        industry_id: Optional[str] = None,
+        include_unreviewed: bool = False,
+        last_n: int = 5,
+    ) -> Dict[str, Any]:
+        """Yearly totals for the last N calendar years, respecting industry/status
+        but ignoring any date_from/date_to year filter. This keeps the Yearly
+        Breakdown card stable when the user changes the Year dropdown."""
+        receipts = await DashboardService._fetch_receipts(
+            user_id, None, None, industry_id, include_unreviewed
+        )
+        # aggregate by year
+        by_year: Dict[str, Dict[str, Any]] = defaultdict(lambda: {"total": 0.0, "count": 0})
+        for r in receipts:
+            norm = _parse_date_mmddyyyy(r.get("receiptDate") or "")
+            if not norm or len(norm) < 4:
+                continue
+            y = norm[:4]
+            # skip obviously invalid years
+            try:
+                yi = int(y)
+                if yi < 1970 or yi > 2100:
+                    continue
+            except ValueError:
+                continue
+            by_year[y]["total"] += _parse_amount(r.get("totalAmount"))
+            by_year[y]["count"] += 1
+
+        # Determine which years to show: last N calendar years ending at current year
+        current_year = datetime.now().year
+        years = [str(current_year - i) for i in range(last_n - 1, -1, -1)]
+        # Also include any out-of-window years that have data, but cap to last_n
+        # if the dataset is older (e.g. only 2020-2022) — ensure we show data.
+        if not any(by_year.get(y) for y in years):
+            # fallback: most recent N years that actually have data
+            sorted_years = sorted(by_year.keys())
+            if sorted_years:
+                years = sorted_years[-last_n:]
+                years.sort()
+
+        points: List[Dict[str, Any]] = []
+        period_total = 0.0
+        for y in years:
+            d = by_year.get(y, {"total": 0.0, "count": 0})
+            tot = round(d["total"], 2)
+            cnt = d["count"]
+            period_total += tot
+            points.append({
+                "year": y,
+                "label": y,
+                "total": tot,
+                "count": cnt,
+                "avg_per_receipt": round(tot / cnt, 2) if cnt else 0.0,
+            })
+
+        return {"yearly": points, "period_total": round(period_total, 2)}
+
     # ── insights ───────────────────────────────────────────────────────────
 
     @staticmethod
@@ -304,11 +405,13 @@ class DashboardService:
         user_id: str,
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
+        industry_id: Optional[str] = None,
+        include_unreviewed: bool = False,
     ) -> Dict[str, Any]:
         """
         Generate dashboard insights — rule-based heuristics.
         """
-        receipts = await DashboardService._fetch_receipts(user_id, date_from, date_to)
+        receipts = await DashboardService._fetch_receipts(user_id, date_from, date_to, industry_id, include_unreviewed)
 
         insights: List[Dict[str, str]] = []
         n = len(receipts)
