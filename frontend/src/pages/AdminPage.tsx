@@ -19,7 +19,7 @@ import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import { toast } from '../stores/toastStore';
 import {
   ShieldAlert, Plus, Trash2, RefreshCw, User as UserIcon, Globe, X, Key,
-  Eye, EyeOff, CheckCircle, Shield, AlertCircle, MapPin, Database,
+  Eye, EyeOff, CheckCircle, Shield, AlertCircle, MapPin, Database, Upload,
 } from 'lucide-react';
 
 interface Props {
