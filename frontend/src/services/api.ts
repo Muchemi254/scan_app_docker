@@ -184,20 +184,37 @@ export const receiptApi = {
    * Extract receipt data from image using Gemini AI
    * Returns extracted data without saving
    */
-  async extract(file: File): Promise<any> {
-    return apiUpload('POST', '/receipts/extract', file);
+  async extract(file: File, industry_id?: string): Promise<any> {
+    const authorization = await getAuthHeader();
+    const userId = getScopeUid();
+    const url = `${API_BASE_URL}/users/${userId}/receipts/extract`;
+    const formData = new FormData();
+    formData.append('file', file);
+    if (industry_id) formData.append('industry_id', industry_id);
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Authorization': authorization },
+      body: formData,
+    });
+    if (!response.ok) {
+      let detail = `API error: ${response.status}`;
+      try { const error = await response.json(); detail = error.detail || detail; } catch { /* non-JSON */ }
+      throw new Error(detail);
+    }
+    return response.json();
   },
 
   /**
    * Asynchronous batch extraction
    */
-  async batchExtract(files: File[]): Promise<{ task_id: string }> {
+  async batchExtract(files: File[], industry_id?: string): Promise<{ task_id: string }> {
     const authorization = await getAuthHeader();
     const userId = getScopeUid();
     const url = `${API_BASE_URL}/users/${userId}/receipts/batch-extract`;
 
     const formData = new FormData();
     files.forEach((file) => formData.append('files', file));
+    if (industry_id) formData.append('industry_id', industry_id);
 
     const response = await fetch(url, {
       method: 'POST',

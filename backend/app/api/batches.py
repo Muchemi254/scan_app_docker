@@ -341,7 +341,8 @@ async def dispatch_scan(
         }
         for i in flipped
     ]
-    process_batch_task.delay(userId, batchId, batch_dir, entries, batch["batchTitle"])
+    industry_id = batch.get("industryId")
+    process_batch_task.delay(userId, batchId, batch_dir, entries, batch["batchTitle"], industry_id)
     return {"batchId": batchId, "dispatched": len(entries), "status": "processing"}
 
 
@@ -475,7 +476,7 @@ async def retry_chunk(
         )
     await batch_service.set_batch_status(userId, batchId, "processing")
 
-    retry_chunk_task.delay(userId, batchId, batch_dir, entries, chunkIndex, batch["batchTitle"])
+    retry_chunk_task.delay(userId, batchId, batch_dir, entries, chunkIndex, batch["batchTitle"], batch.get("industryId"))
     return {"batchId": batchId, "chunkIndex": chunkIndex, "queued": len(entries)}
 
 
@@ -537,7 +538,7 @@ async def retry_item(
     if batch["status"] in ("done", "failed"):
         await batch_service.set_batch_status(userId, batchId, "processing")
 
-    retry_item_task.delay(userId, batchId, batch_dir, entry, batch["batchTitle"])
+    retry_item_task.delay(userId, batchId, batch_dir, entry, batch["batchTitle"], batch.get("industryId"))
     return {"batchId": batchId, "itemIndex": itemIndex, "queued": True}
 
 

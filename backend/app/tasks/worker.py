@@ -62,17 +62,17 @@ ChunkUpdateFn = Callable[
 # ── Single-receipt task (unchanged) ──────────────────────────────────────────
 
 @celery_app.task(name="tasks.extract_receipt")
-def extract_receipt_task(user_id: str, task_id: str, image_base64: str, mime_type: str):
-    return asyncio.run(_extract_receipt_sync(user_id, task_id, image_base64, mime_type))
+def extract_receipt_task(user_id: str, task_id: str, image_base64: str, mime_type: str, industry_id: str = None):
+    return asyncio.run(_extract_receipt_sync(user_id, task_id, image_base64, mime_type, industry_id))
 
 
-async def _extract_receipt_sync(user_id: str, task_id: str, image_base64: str, mime_type: str):
+async def _extract_receipt_sync(user_id: str, task_id: str, image_base64: str, mime_type: str, industry_id: str = None):
     _purge_stale_cached_loops()
     try:
         await TaskService.update_progress(user_id, task_id, TaskProgressUpdate(
             status=TaskStatus.PROCESSING, percentage=50, message="Processing receipt..."
         ))
-        result = await extract_receipt_data(image_base64, mime_type, user_id)
+        result = await extract_receipt_data(image_base64, mime_type, user_id, industry_id=industry_id)
         await TaskService.add_task_result(user_id, task_id, "receipt", result.model_dump())
         await TaskService.update_progress(user_id, task_id, TaskProgressUpdate(
             status=TaskStatus.COMPLETED, percentage=100, message="Extraction complete"
@@ -133,6 +133,7 @@ async def _extract_one_chunk(
     model_id: str,
     active_provider: str,
     user_id: str,
+    industry_id: str = None,
 ):
     """Read files, build provider-native parts (grouped per receipt), call AI.
 
@@ -172,7 +173,8 @@ async def _extract_one_chunk(
         # Per-chunk timeout (Gemini hang should not block thread forever)
         results = await asyncio.wait_for(
             extract_receipt_batch(
-                b64_files, api_key, model_id, active_provider, user_id=user_id
+                b64_files, api_key, model_id, active_provider, user_id=user_id,
+                industry_id=industry_id,
             ),
             timeout=120,
         )
@@ -350,6 +352,7 @@ async def _process_chunk_with_fallback(
     on_chunk_update: Optional[ChunkUpdateFn],
     *,
     cancel_event: Optional[asyncio.Event] = None,
+    industry_id: str = None,
 ):
     """
     Extract one chunk via Gemini, then persist each item.
@@ -399,7 +402,8 @@ async def _process_chunk_with_fallback(
     for attempt in range(MAX_CHUNK_BACKOFF_ATTEMPTS):
         try:
             img_bytes_list, results = await _extract_one_chunk(
-                chunk, batch_dir, api_key, model_id, active_provider, user_id
+                chunk, batch_dir, api_key, model_id, active_provider, user_id,
+                industry_id,
             )
             last_err = None
             break
@@ -480,7 +484,8 @@ async def _process_chunk_with_fallback(
         for entry in chunk:
             try:
                 img_bytes_list, results = await _extract_one_chunk(
-                    [entry], batch_dir, api_key, model_id, active_provider, user_id
+                    [entry], batch_dir, api_key, model_id, active_provider, user_id,
+                    industry_id,
                 )
                 receipt = results[0] if results else None
                 await _persist_one_item(
@@ -540,6 +545,7 @@ async def _run_batch_extraction(
     on_chunk_update: Optional[ChunkUpdateFn] = None,
     chunks_metadata: Optional[list] = None,
     chunk_size: int = BATCH_CHUNK_SIZE,
+    industry_id: str = None,
 ) -> None:
     """
     Parallel Gemini extraction → save + audit. Tags every item with its
@@ -581,6 +587,7 @@ async def _run_batch_extraction(
                 user_id, batch_title,
                 on_item_update, on_item_result, on_chunk_update,
                 cancel_event=cancel_event,
+                industry_id=industry_id,
             )
 
     tasks = [run_one(ci, chunk) for ci, chunk in chunks_with_index]
@@ -602,12 +609,14 @@ async def _run_batch_extraction(
 
 @celery_app.task(name="tasks.extract_receipt_batch")
 def extract_receipt_batch_task(user_id: str, task_id: str, batch_dir: str,
-                                image_entries: list, provider: str = "gemini"):
-    return asyncio.run(_extract_receipt_batch_sync(user_id, task_id, batch_dir, image_entries, provider))
+                                image_entries: list, provider: str = "gemini",
+                                industry_id: str = None):
+    return asyncio.run(_extract_receipt_batch_sync(user_id, task_id, batch_dir, image_entries, provider, industry_id))
 
 
 async def _extract_receipt_batch_sync(user_id: str, task_id: str, batch_dir: str,
-                                       image_entries: list, provider: str = "gemini"):
+                                       image_entries: list, provider: str = "gemini",
+                                       industry_id: str = None):
     _purge_stale_cached_loops()
     try:
         saved_items: list = []
@@ -636,6 +645,7 @@ async def _extract_receipt_batch_sync(user_id: str, task_id: str, batch_dir: str
             on_progress=report,
             on_item_result=store,
             on_chunk_update=chunk_update,
+            industry_id=industry_id,
         )
 
         total = len(image_entries)
@@ -694,8 +704,8 @@ async def _extract_receipt_batch_sync(user_id: str, task_id: str, batch_dir: str
 # ── ScannerPage batch Celery task (thin wrapper) ─────────────────────────────
 
 @celery_app.task(name="tasks.process_batch")
-def process_batch_task(user_id: str, batch_id: str, batch_dir: str, entries: list, batch_title: str = ""):
-    return asyncio.run(_process_batch_sync(user_id, batch_id, batch_dir, entries, batch_title))
+def process_batch_task(user_id: str, batch_id: str, batch_dir: str, entries: list, batch_title: str = "", industry_id: str = None):
+    return asyncio.run(_process_batch_sync(user_id, batch_id, batch_dir, entries, batch_title, industry_id))
 
 
 def _make_batch_callbacks(user_id: str, batch_id: str):
@@ -814,16 +824,24 @@ async def _log_error_single(user_id: str, batch_id: str, batch_title: str,
 
 
 async def _process_batch_sync(user_id: str, batch_id: str, batch_dir: str,
-                               entries: list, batch_title: str = ""):
+                               entries: list, batch_title: str = "", industry_id: str = None):
     _purge_stale_cached_loops()
     from app.core.database import init_pool, close_pool
     from app.services.batch_service import close_redis
     from app.services import batch_service
 
     await init_pool()
+    # Back-compat: tasks enqueued before industry threading carry None —
+    # recover from the durable session row.
+    if not industry_id:
+        try:
+            _b = await batch_service.get_batch(user_id, batch_id)
+            industry_id = (_b or {}).get("industryId")
+        except Exception:
+            industry_id = None
     try:
         await batch_service.set_batch_status(user_id, batch_id, "processing")
-        logger.info(f"Batch {batch_id}: processing {len(entries)} images")
+        logger.info(f"Batch {batch_id}: processing {len(entries)} images (industry={industry_id})")
 
         # Register chunk metadata so UI can group by chunk. Use explicit indices (hole-safe) +
         # small PDF-aware chunks to keep RAM bounded (PDFs are not downscaled like images).
@@ -849,6 +867,7 @@ async def _process_batch_sync(user_id: str, batch_id: str, batch_dir: str,
             on_item_update=item_update,
             on_chunk_update=chunk_update,
             chunk_size=chunk_size,
+            industry_id=industry_id,
         )
 
         # Final status derived from ITEM states, not the dispatched subset —
@@ -888,14 +907,14 @@ async def _process_batch_sync(user_id: str, batch_id: str, batch_dir: str,
 
 @celery_app.task(name="tasks.retry_item")
 def retry_item_task(user_id: str, batch_id: str, batch_dir: str,
-                    entry: dict, batch_title: str = ""):
+                    entry: dict, batch_title: str = "", industry_id: str = None):
     """Re-extract a single image. Used when one item failed inside a chunk
     that otherwise succeeded (e.g. Gemini returned null for it)."""
-    return asyncio.run(_retry_item_sync(user_id, batch_id, batch_dir, entry, batch_title))
+    return asyncio.run(_retry_item_sync(user_id, batch_id, batch_dir, entry, batch_title, industry_id))
 
 
 async def _retry_item_sync(user_id: str, batch_id: str, batch_dir: str,
-                            entry: dict, batch_title: str = ""):
+                            entry: dict, batch_title: str = "", industry_id: str = None):
     _purge_stale_cached_loops()
     from app.core.database import init_pool, close_pool
     from app.services.batch_service import close_redis
@@ -912,11 +931,18 @@ async def _retry_item_sync(user_id: str, batch_id: str, batch_dir: str,
         # item's existing chunkIndex if it had one, else -1 as a sentinel.
         chunk_index = entry.get("chunkIndex", -1) or -1
 
+        if not industry_id:
+            try:
+                _b = await batch_service.get_batch(user_id, batch_id)
+                industry_id = (_b or {}).get("industryId")
+            except Exception:
+                industry_id = None
         await _process_chunk_with_fallback(
             chunk_index, [entry], batch_dir,
             api_key, model_id, active_provider,
             user_id, batch_title,
             item_update, None, None,   # no chunk-level callbacks for item retry
+            industry_id=industry_id,
         )
 
         # Session status is derived from all item states, so remaining
@@ -948,12 +974,12 @@ async def _retry_item_sync(user_id: str, batch_id: str, batch_dir: str,
 
 @celery_app.task(name="tasks.retry_chunk")
 def retry_chunk_task(user_id: str, batch_id: str, batch_dir: str,
-                     entries: list, chunk_index: int, batch_title: str = ""):
-    return asyncio.run(_retry_chunk_sync(user_id, batch_id, batch_dir, entries, chunk_index, batch_title))
+                     entries: list, chunk_index: int, batch_title: str = "", industry_id: str = None):
+    return asyncio.run(_retry_chunk_sync(user_id, batch_id, batch_dir, entries, chunk_index, batch_title, industry_id))
 
 
 async def _retry_chunk_sync(user_id: str, batch_id: str, batch_dir: str,
-                             entries: list, chunk_index: int, batch_title: str = ""):
+                             entries: list, chunk_index: int, batch_title: str = "", industry_id: str = None):
     _purge_stale_cached_loops()
     from app.core.database import init_pool, close_pool
     from app.services.batch_service import close_redis
@@ -961,6 +987,12 @@ async def _retry_chunk_sync(user_id: str, batch_id: str, batch_dir: str,
     from app.services import batch_service
 
     await init_pool()
+    if not industry_id:
+        try:
+            _b = await batch_service.get_batch(user_id, batch_id)
+            industry_id = (_b or {}).get("industryId")
+        except Exception:
+            industry_id = None
     try:
         api_key, model_id, active_provider = await get_gemini_config(user_id)
         item_update, chunk_update = _make_batch_callbacks(user_id, batch_id)
@@ -970,6 +1002,7 @@ async def _retry_chunk_sync(user_id: str, batch_id: str, batch_dir: str,
             api_key, model_id, active_provider,
             user_id, batch_title,
             item_update, None, chunk_update,
+            industry_id=industry_id,
         )
 
         # Session status is derived from all item states, so remaining

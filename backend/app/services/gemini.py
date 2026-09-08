@@ -407,7 +407,14 @@ _CATEGORY_ALIASES_LOWER = {k.strip().lower(): v for k, v in CATEGORY_ALIASES.ite
 
 
 async def _get_category_names_for_industry(industry_id: Optional[str] = None) -> list[str]:
-    """Return active category names for an industry, or global CATEGORIES fallback."""
+    """Return active category names for an industry, or global CATEGORIES fallback.
+
+    The fallback covers two cases: no industry on the request (legacy batches
+    created before industries existed, single /extract without industry) and
+    lookup failure. An industry that exists but has zero ACTIVE categories
+    also falls back — with a warning so an empty Hospitality industry doesn't
+    silently extract with the Construction list.
+    """
     if industry_id:
         try:
             from app.services.data_adapter import DataService
@@ -416,8 +423,13 @@ async def _get_category_names_for_industry(industry_id: Optional[str] = None) ->
                 names = [c["name"] for c in cats if c.get("name")]
                 if names:
                     return names
+            logger.warning(
+                "Industry %s has no active categories — falling back to global list "
+                "(add categories in Admin → Industries)",
+                industry_id,
+            )
         except Exception:
-            pass
+            logger.warning("Category lookup failed for industry %s — global fallback", industry_id, exc_info=True)
     return CATEGORIES
 
 def normalize_category(raw: Optional[str], allowed: Optional[set] = None) -> str:

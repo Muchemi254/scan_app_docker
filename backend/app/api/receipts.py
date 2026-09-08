@@ -111,6 +111,7 @@ def _check_pdf_pages(contents: bytes) -> int:
 async def batch_extract_receipts(
     userId: str,
     files: list[UploadFile] = File(...),
+    industry_id: Optional[str] = Form(None),
     current_user_id: str = Depends(get_current_user_id),
 ):
     """
@@ -148,7 +149,7 @@ async def batch_extract_receipts(
         image_entries.append({"filename": fname, "mime": processed_type})
 
     # 3. Dispatch Celery task with disk paths (tiny payload, no base64 in Redis)
-    extract_receipt_batch_task.delay(userId, task_id, batch_dir, image_entries, provider=provider)
+    extract_receipt_batch_task.delay(userId, task_id, batch_dir, image_entries, provider=provider, industry_id=industry_id)
 
     # 4. Return task ID
     return {"task_id": task_id}
@@ -163,6 +164,7 @@ async def batch_extract_receipts(
 async def extract_receipt_from_image(
     userId: str,
     file: UploadFile = File(...),
+    industry_id: Optional[str] = Form(None),
     current_user_id: str = Depends(get_current_user_id),
 ):
     """
@@ -212,7 +214,7 @@ async def extract_receipt_from_image(
         base64_data = base64.standard_b64encode(processed).decode()
 
         # Extract using provider (images → JPEG; PDFs converted per provider)
-        receipt = await extract_receipt_data(base64_data, processed_type, userId)
+        receipt = await extract_receipt_data(base64_data, processed_type, userId, industry_id=industry_id)
 
         return receipt
 
