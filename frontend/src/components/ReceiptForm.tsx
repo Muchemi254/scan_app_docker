@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { useState, useMemo, useEffect, useRef, Fragment } from 'react';
 import Decimal from 'decimal.js';
 import { parseCurrencyToNumber } from '../utils/helpers';
 import { addTax, splitTax } from '../utils/taxCalc';
@@ -578,11 +578,16 @@ const ReceiptForm = ({
             setFormData({ ...formData, category: cat ? cat.name : '', category_id: cid, industry_id: cat ? cat.industry_id : (formData as any).industry_id } as any);
           }} className="w-full px-2 py-1 border rounded text-sm bg-white" required disabled={! (formData as any).industry_id}>
             <option value="">{(formData as any).industry_id ? 'Select a category' : 'Select industry first'}</option>
+            {/*
+              Compact options: show the short `name` (what gets saved), not the
+              long `label`/description. Full label stays available as a hover
+              tooltip. Flat list (no optgroup) so parents aren't rendered twice.
+            */}
             {categories.filter(c => !c.parent_id).map(cat => (
-              <optgroup key={cat.id} label={cat.label}>
-                <option value={cat.id}>{cat.label}</option>
-                {categories.filter(sc => sc.parent_id === cat.id).map(sc => <option key={sc.id} value={sc.id}>— {sc.label}</option>)}
-              </optgroup>
+              <Fragment key={cat.id}>
+                <option value={cat.id} title={cat.label}>{cat.name || cat.label}</option>
+                {categories.filter(sc => sc.parent_id === cat.id).map(sc => <option key={sc.id} value={sc.id} title={sc.label}>— {sc.name || sc.label}</option>)}
+              </Fragment>
             ))}
             {(formData as any).category && !(formData as any).category_id && (
               <option value="">{(formData as any).category} (previous)</option>
