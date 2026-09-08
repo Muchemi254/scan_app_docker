@@ -1100,8 +1100,8 @@ const AdminPage = ({ userId }: Props) => {
             <ul className="divide-y divide-gray-100 border border-gray-100 rounded-lg">
               {entryTypes.map(et => (
                 <li key={et.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
-                  <span className={`text-sm ${et.is_active ? 'text-gray-800' : 'text-gray-400 line-through'}`}>
-                    {et.label} <span className="text-xs text-gray-400">({et.name})</span> {et.is_system && <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">system</span>}
+                  <span title={et.label} className={`text-sm min-w-0 truncate ${et.is_active ? 'text-gray-800' : 'text-gray-400 line-through'}`}>
+                    {et.label} <span className="text-xs text-gray-400 font-normal">({et.name})</span> {et.is_system && <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">system</span>}
                   </span>
                   <div className="flex items-center gap-2">
                     <button
@@ -1180,7 +1180,7 @@ const AdminPage = ({ userId }: Props) => {
                     <input type="text" value={categoryLabel} onChange={e => setCategoryLabel(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addCategory(); } }} className="flex-1 border border-gray-300 rounded-md p-2 text-sm" placeholder="Label e.g. Beef" />
                     <select value={categoryParent} onChange={e => setCategoryParent(e.target.value)} className="flex-1 border border-gray-300 rounded-md p-2 text-sm bg-white">
                       <option value="">No parent (top-level)</option>
-                      {categories.filter(c=>!c.parent_id).map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+                      {categories.filter(c=>!c.parent_id).map(c => <option key={c.id} value={c.id} title={c.label}>{c.name || c.label}</option>)}
                     </select>
                     <button onClick={addCategory} disabled={savingCategories || !categoryName.trim()} className="px-4 py-2 rounded-lg bg-white border border-gray-300 text-gray-700 text-sm hover:bg-gray-100 disabled:opacity-50"><Plus className="h-4 w-4 inline -mt-0.5" /> Add</button>
                   </div>
@@ -1188,7 +1188,7 @@ const AdminPage = ({ userId }: Props) => {
                     <ul className="divide-y divide-gray-100 border border-gray-100 rounded-lg">
                       {categories.filter(c => !categorySearch || c.name.toLowerCase().includes(categorySearch.toLowerCase()) || c.label.toLowerCase().includes(categorySearch.toLowerCase())).map(cat => (
                         <li key={cat.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
-                          <span className={`text-sm ${cat.is_active ? 'text-gray-800' : 'text-gray-400 line-through'} ${cat.parent_id ? 'ml-4 border-l-2 border-gray-200 pl-2' : ''}`}>{cat.label} <span className="text-xs text-gray-400">({cat.name})</span> {cat.is_system && <span className="text-[10px] bg-gray-100 px-1.5 py-0.5 rounded">system</span>} {cat.parent_id && <span className="text-[10px] text-gray-400">sub of {categories.find(p=>p.id===cat.parent_id)?.label}</span>}</span>
+                          <span title={cat.label} className={`text-sm min-w-0 truncate ${cat.is_active ? 'text-gray-800' : 'text-gray-400 line-through'} ${cat.parent_id ? 'ml-4 border-l-2 border-gray-200 pl-2' : ''}`}>{cat.name || cat.label} {cat.label && cat.label !== cat.name && <span className="text-xs text-gray-400 font-normal">— {cat.label}</span>} {cat.is_system && <span className="text-[10px] bg-gray-100 px-1.5 py-0.5 rounded">system</span>} {cat.parent_id && <span className="text-[10px] text-gray-400">sub of {categories.find(p=>p.id===cat.parent_id)?.name || categories.find(p=>p.id===cat.parent_id)?.label}</span>}</span>
                           <div className="flex items-center gap-2">
                             <button onClick={() => toggleCategory(cat)} disabled={savingCategories} className={`text-xs px-2 py-1 rounded border ${cat.is_active ? 'border-gray-300 text-gray-600 hover:bg-gray-50' : 'border-green-300 text-green-700 hover:bg-green-50'}`}>{cat.is_active ? 'Deactivate' : 'Activate'}</button>
                             <button onClick={() => deleteCategory(cat)} disabled={savingCategories || cat.is_system} className="text-xs px-2 py-1 rounded border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50">Delete</button>
