@@ -4,7 +4,7 @@ Pydantic models for receipt data.
 These define the request/response schemas for all receipt operations.
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List, Any
 from datetime import datetime
 from enum import Enum
@@ -73,6 +73,24 @@ class ReceiptCreate(ReceiptBase):
     imageUrl: Optional[str] = Field(None, description="Image URL (set by backend)")
     status: Optional[ReceiptStatus] = Field(default=ReceiptStatus.NEEDS_REVIEW)
 
+    @field_validator("supplier", mode="before")
+    @classmethod
+    def _upper_supplier(cls, v: Any) -> Any:
+        if v is None:
+            return v
+        from app.services.text_normalize import normalize_supplier_name
+
+        return normalize_supplier_name(v)
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def _upper_category(cls, v: Any) -> Any:
+        if v is None:
+            return v
+        from app.services.text_normalize import normalize_category_text
+
+        return normalize_category_text(v)
+
 
 class ReceiptUpdate(BaseModel):
     """Partial receipt update schema"""
@@ -93,6 +111,24 @@ class ReceiptUpdate(BaseModel):
     location: Optional[str] = None
     taxRate: Optional[str] = None
     entryType: Optional[str] = None
+
+    @field_validator("supplier", mode="before")
+    @classmethod
+    def _upper_supplier(cls, v: Any) -> Any:
+        if v is None:
+            return v
+        from app.services.text_normalize import normalize_supplier_name
+
+        return normalize_supplier_name(v)
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def _upper_category(cls, v: Any) -> Any:
+        if v is None:
+            return v
+        from app.services.text_normalize import normalize_category_text
+
+        return normalize_category_text(v)
 
 
 class Receipt(ReceiptBase):

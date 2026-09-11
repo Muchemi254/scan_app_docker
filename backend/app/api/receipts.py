@@ -880,7 +880,8 @@ async def generate_summary(
         if body.date_to:
             filtered = [r for r in filtered if _parse_date(r.get("receiptDate") or "") <= body.date_to]
         if body.category:
-            filtered = [r for r in filtered if r.get("category") == body.category]
+            want = (body.category or "").strip().upper()
+            filtered = [r for r in filtered if (r.get("category") or "").strip().upper() == want]
 
         # Compute aggregates
         total_receipts = len(filtered)
@@ -894,8 +895,8 @@ async def generate_summary(
 
         for r in filtered:
             amount = float(r.get("totalAmount", 0) or 0)
-            cat = r.get("category") or "Other"
-            sup = r.get("supplier") or "Unknown"
+            cat = r.get("category") or "OTHER"
+            sup = r.get("supplier") or "UNKNOWN"
             date_str = r.get("receiptDate") or ""
             month = date_str[-4:] + "-" + date_str[:2] if len(date_str) >= 7 else "Unknown"
 

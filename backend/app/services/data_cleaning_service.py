@@ -57,8 +57,8 @@ def suggest_supplier_merges(receipts: List[dict]) -> List[dict]:
     """Find supplier names that are similar but not identical, group into clusters."""
     supplier_map: Dict[str, List[str]] = defaultdict(list)
     for r in receipts:
-        name = (r.get("supplier") or "Unknown").strip()
-        if name and name != "Unknown":
+        name = (r.get("supplier") or "UNKNOWN").strip()
+        if name and name != "UNKNOWN":
             supplier_map[name].append(r["id"])
 
     unique_names = list(supplier_map.keys())
@@ -145,7 +145,7 @@ def suggest_field_propagation(receipts: List[dict]) -> List[dict]:
 
     supplier_groups: Dict[str, List[dict]] = defaultdict(list)
     for r in receipts:
-        norm = normalize_supplier(r.get("supplier") or "Unknown")
+        norm = normalize_supplier(r.get("supplier") or "UNKNOWN")
         supplier_groups[norm].append(r)
 
     for norm_sup, group in supplier_groups.items():
@@ -168,7 +168,7 @@ def suggest_field_propagation(receipts: List[dict]) -> List[dict]:
                 suggestions.append({
                     "field": field,
                     "value": known_value,
-                    "supplier": group[0].get("supplier", "Unknown"),
+                    "supplier": group[0].get("supplier", "UNKNOWN"),
                     "source_receipts": source_ids,
                     "target_receipts": target_ids,
                 })
@@ -291,7 +291,7 @@ def suggest_total_mismatches(
         variance_pct = round(variance / denom * 100, 3)
         out.append({
             "id": r["id"],
-            "supplier": r.get("supplier") or "Unknown",
+            "supplier": r.get("supplier") or "UNKNOWN",
             "receiptDate": r.get("receiptDate", ""),
             "invoiceNumber": r.get("invoiceNumber", ""),
             "receipt_total": receipt_total,

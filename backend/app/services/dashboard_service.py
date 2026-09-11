@@ -292,7 +292,7 @@ class DashboardService:
         for r in receipts:
             amount = _parse_amount(r.get("totalAmount"))
             cat = (r.get("category") or "Uncategorized").strip() or "Uncategorized"
-            sup = (r.get("supplier") or "Unknown").strip() or "Unknown"
+            sup = (r.get("supplier") or "UNKNOWN").strip() or "UNKNOWN"
 
             cat_totals[cat] += amount
             cat_counts[cat] += 1
@@ -428,7 +428,7 @@ class DashboardService:
         for r in receipts:
             amount = _parse_amount(r.get("totalAmount"))
             cat_totals[r.get("category") or "Uncategorized"] += amount
-            sup_totals[r.get("supplier") or "Unknown"] += amount
+            sup_totals[r.get("supplier") or "UNKNOWN"] += amount
             statuses[r.get("status") or "needs_review"] += 1
 
         total = sum(cat_totals.values()) or 1

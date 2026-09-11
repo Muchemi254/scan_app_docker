@@ -141,7 +141,7 @@ async def test_worker_chunk_converts_pdf_to_per_page_parts(monkeypatch, tmp_path
     raw_list, results = await _extract_one_chunk(chunk, batch_dir, "sk", "m", "qwen", "uid")
 
     assert len(raw_list) == 1 and raw_list[0] == pdf_bytes
-    assert results[0].supplier == "PDF Batch Co"
+    assert results[0].supplier == "PDF BATCH CO"
     parts = captured["files"][0]
     images = [p for p in parts if p.get("type") == "image_url"]
     assert len(images) == 2  # one per page

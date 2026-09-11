@@ -356,50 +356,64 @@ MODEL_PRICING = {
 # Category list (reusable for caching).
 # Canonical taxonomy — see docs/category-taxonomy.md. Broad by design: every
 # receipt must fit a bucket; never grow this list (use CATEGORY_ALIASES or
-# 'Other' instead). Keep the frontend copy in
+# 'OTHER' instead). Keep the frontend copy in
 # frontend/src/services/gemini.tsx (CATEGORY_LIST) identical.
+# All values are UPPERCASE: supplier names and categories are always stored
+# uppercase so "Acme" and "ACME" can never split into two suppliers.
 CATEGORIES = [
-    "Building Materials", "Hardware & Tools", "Paint & Finishes",
-    "Plumbing & Sanitary", "Electrical Supplies", "Security & Surveillance",
-    "Fuel & Lubricants", "Vehicle Maintenance", "Transport Services",
-    "Utilities & Bills",
-    "Seeds & Inputs", "Fertilizers & Chemicals", "Farm Tools & Equipment",
-    "Greenhouse Supplies", "Crop Harvesting & Processing",
-    "Agro Consultancy & Training",
-    "Animal Feed & Supplements", "Livestock & Poultry", "Veterinary Services",
-    "Food & Groceries", "Furniture & Fixtures", "Utensils & Cutlery",
-    "Cleaning Supplies", "Baby & Kids Supplies",
-    "Clothing & Footwear", "Personal Care & Beauty", "Health & Medicine",
-    "Stationery & Office Supplies", "Professional & Business Services",
-    "Employee Salaries & Wages", "Licenses & Permits", "Rent, Lease & Property",
-    "Electronics & Appliances", "Phones & Accessories", "Computers & IT Equipment",
-    "Raw Materials", "Packaging Supplies", "Gifts & Donations",
-    "Entertainment & Leisure",
-    "Repairs & Maintenance", "Emergency Purchases", "Other"
+    "BUILDING MATERIALS", "HARDWARE & TOOLS", "PAINT & FINISHES",
+    "PLUMBING & SANITARY", "ELECTRICAL SUPPLIES", "SECURITY & SURVEILLANCE",
+    "FUEL & LUBRICANTS", "VEHICLE MAINTENANCE", "TRANSPORT SERVICES",
+    "UTILITIES & BILLS",
+    "SEEDS & INPUTS", "FERTILIZERS & CHEMICALS", "FARM TOOLS & EQUIPMENT",
+    "GREENHOUSE SUPPLIES", "CROP HARVESTING & PROCESSING",
+    "AGRO CONSULTANCY & TRAINING",
+    "ANIMAL FEED & SUPPLEMENTS", "LIVESTOCK & POULTRY", "VETERINARY SERVICES",
+    "FOOD & GROCERIES", "FURNITURE & FIXTURES", "UTENSILS & CUTLERY",
+    "CLEANING SUPPLIES", "BABY & KIDS SUPPLIES",
+    "CLOTHING & FOOTWEAR", "PERSONAL CARE & BEAUTY", "HEALTH & MEDICINE",
+    "STATIONERY & OFFICE SUPPLIES", "PROFESSIONAL & BUSINESS SERVICES",
+    "EMPLOYEE SALARIES & WAGES", "LICENSES & PERMITS", "RENT, LEASE & PROPERTY",
+    "ELECTRONICS & APPLIANCES", "PHONES & ACCESSORIES", "COMPUTERS & IT EQUIPMENT",
+    "RAW MATERIALS", "PACKAGING SUPPLIES", "GIFTS & DONATIONS",
+    "ENTERTAINMENT & LEISURE",
+    "REPAIRS & MAINTENANCE", "EMERGENCY PURCHASES", "OTHER"
 ]
 
 # Old names + common variants → canonical category. Keeps historical data and
-# model near-misses from ever creating new categories.
+# model near-misses from ever creating new categories. Keys are matched
+# case-insensitively; values must stay UPPERCASE canonicals.
 CATEGORY_ALIASES = {
-    "Groceries & Provisions": "Food & Groceries",
-    "Perishables": "Food & Groceries",
-    "Beverages": "Food & Groceries",
-    "Restaurant & Catering": "Food & Groceries",
-    "Irrigation Supplies": "Plumbing & Sanitary",
-    "Veterinary Inputs & Services": "Veterinary Services",
-    "Repairs & Maintenance Services": "Repairs & Maintenance",
-    "Facility maintenance services": "Repairs & Maintenance",
-    "Energy & Utilities": "Utilities & Bills",
-    "Internet & Airtime": "Utilities & Bills",
-    "Marketing & Branding": "Professional & Business Services",
-    "Professional Services": "Professional & Business Services",
-    "Subscriptions & Memberships": "Professional & Business Services",
-    "Education & Learning": "Professional & Business Services",
-    "Rent & Lease": "Rent, Lease & Property",
-    "Land & Property Purchases": "Rent, Lease & Property",
-    " Animal Feed & Supplements": "Animal Feed & Supplements",
-    "building materials": "Building Materials",
-    "cleaning": "Cleaning Supplies",
+    "Groceries & Provisions": "FOOD & GROCERIES",
+    "Perishables": "FOOD & GROCERIES",
+    "Beverages": "FOOD & GROCERIES",
+    "Restaurant & Catering": "FOOD & GROCERIES",
+    "Food & Groceries": "FOOD & GROCERIES",
+    "Irrigation Supplies": "PLUMBING & SANITARY",
+    "Plumbing & Sanitary": "PLUMBING & SANITARY",
+    "Veterinary Inputs & Services": "VETERINARY SERVICES",
+    "Veterinary Services": "VETERINARY SERVICES",
+    "Repairs & Maintenance Services": "REPAIRS & MAINTENANCE",
+    "Facility maintenance services": "REPAIRS & MAINTENANCE",
+    "Repairs & Maintenance": "REPAIRS & MAINTENANCE",
+    "Energy & Utilities": "UTILITIES & BILLS",
+    "Internet & Airtime": "UTILITIES & BILLS",
+    "Utilities & Bills": "UTILITIES & BILLS",
+    "Marketing & Branding": "PROFESSIONAL & BUSINESS SERVICES",
+    "Professional Services": "PROFESSIONAL & BUSINESS SERVICES",
+    "Subscriptions & Memberships": "PROFESSIONAL & BUSINESS SERVICES",
+    "Education & Learning": "PROFESSIONAL & BUSINESS SERVICES",
+    "Professional & Business Services": "PROFESSIONAL & BUSINESS SERVICES",
+    "Rent & Lease": "RENT, LEASE & PROPERTY",
+    "Land & Property Purchases": "RENT, LEASE & PROPERTY",
+    "Rent, Lease & Property": "RENT, LEASE & PROPERTY",
+    " Animal Feed & Supplements": "ANIMAL FEED & SUPPLEMENTS",
+    "Animal Feed & Supplements": "ANIMAL FEED & SUPPLEMENTS",
+    "building materials": "BUILDING MATERIALS",
+    "Building Materials": "BUILDING MATERIALS",
+    "cleaning": "CLEANING SUPPLIES",
+    "Cleaning Supplies": "CLEANING SUPPLIES",
+    "Other": "OTHER",
 }
 
 _CATEGORY_SET = set(CATEGORIES)
@@ -414,13 +428,21 @@ async def _get_category_names_for_industry(industry_id: Optional[str] = None) ->
     lookup failure. An industry that exists but has zero ACTIVE categories
     also falls back — with a warning so an empty Hospitality industry doesn't
     silently extract with the Construction list.
+
+    Names are uppercased: industry categories created before the uppercase
+    migration may still be Title Case in the DB, and the extractor must only
+    ever emit UPPERCASE.
     """
     if industry_id:
         try:
             from app.services.data_adapter import DataService
             cats = await DataService.list_categories(industry_id=industry_id, active_only=True)
             if cats:
-                names = [c["name"] for c in cats if c.get("name")]
+                names = []
+                for c in cats:
+                    n = (c.get("name") or "").strip()
+                    if n:
+                        names.append(" ".join(n.split()).upper())
                 if names:
                     return names
             logger.warning(
@@ -432,26 +454,49 @@ async def _get_category_names_for_industry(industry_id: Optional[str] = None) ->
             logger.warning("Category lookup failed for industry %s — global fallback", industry_id, exc_info=True)
     return CATEGORIES
 
-def normalize_category(raw: Optional[str], allowed: Optional[set] = None) -> str:
-    """Map an extracted category string to the canonical list.
 
-    1. collapse whitespace, exact match against allowed set or CATEGORIES → return it
-    2. lowercased match against CATEGORY_ALIASES → return canonical if in allowed
-    3. otherwise → 'Other' (never invent or store a new category)
+def normalize_supplier_name(raw: Optional[str]) -> str:
+    """Collapse whitespace and uppercase a supplier name.
+
+    Single choke point for AI output: "Acme Ltd", "acme ltd" and
+    "  ACME   LTD " all become "ACME LTD". Empty/None → "UNKNOWN".
     """
-    if not raw:
-        return "Other"
-    value = " ".join(str(raw).split())
-    check_set = allowed if allowed is not None else _CATEGORY_SET
-    if value in check_set:
+    from app.services.text_normalize import normalize_supplier_name as _norm
+
+    return _norm(raw)
+
+
+def normalize_category(raw: Optional[str], allowed: Optional[set] = None) -> str:
+    """Map an extracted category string to the canonical UPPERCASE list.
+
+    1. collapse whitespace + uppercase; exact match against allowed set or
+       CATEGORIES → return it
+    2. lowercased match against CATEGORY_ALIASES → return canonical if in allowed
+    3. otherwise → 'OTHER' (never invent or store a new category)
+
+    ``allowed`` may contain legacy Title Case names (pre-migration industry
+    categories) — it is uppercased before comparison so old rows still map.
+    """
+    if not raw or not str(raw).strip():
+        return "OTHER"
+    collapsed = " ".join(str(raw).split())
+    value = collapsed.upper()
+    # N/A-likes are missing, not a category.
+    if value in ("N/A", "NA", "NONE", "NULL", "-"):
+        return "OTHER"
+    check_upper = {
+        str(a).strip().upper()
+        for a in (allowed if allowed is not None else _CATEGORY_SET)
+        if str(a).strip()
+    }
+    if value in check_upper:
         return value
-    alias = _CATEGORY_ALIASES_LOWER.get(value.lower())
-    if alias and alias in check_set:
+    alias = _CATEGORY_ALIASES_LOWER.get(collapsed.lower())
+    if alias and alias in check_upper:
         return alias
-    # if alias not in allowed but value itself is close, fallback to Other within allowed
-    if allowed is not None and "Other" in allowed:
-        return "Other"
-    return _CATEGORY_ALIASES_LOWER.get(value.lower(), "Other")
+    if allowed is not None and "OTHER" in check_upper:
+        return "OTHER"
+    return alias or "OTHER"
 
 # ── Global extraction prompt (shared by single & batch) ──────────────
 # {batch_instruction} is replaced at call-site:
@@ -467,15 +512,16 @@ INSTRUCTIONS:
 -try and identify commas and decimal points in the numeric values
 - Use 'N/A' for missing fields
 - Dates in MM/DD/YYYY format
+- Return the supplier name in UPPERCASE (e.g. 'ACME LTD', never 'Acme Ltd').
 - For the category field, analyze the supplier and items, then choose EXACTLY ONE:
   """ + ', '.join(CATEGORIES) + """
-  Return ONLY the exact category name from the list.
+  Return ONLY the exact category name from the list (all are UPPERCASE — copy exactly).
 - Categories are broad by design: pick the closest fit, do not overthink.
-  Examples: a water or electricity bill → 'Utilities & Bills'; plumbing or
-  irrigation supplies → 'Plumbing & Sanitary'; groceries, beverages or
-  restaurant meals → 'Food & Groceries'.
+  Examples: a water or electricity bill → 'UTILITIES & BILLS'; plumbing or
+  irrigation supplies → 'PLUMBING & SANITARY'; groceries, beverages or
+  restaurant meals → 'FOOD & GROCERIES'.
 - Never invent, shorten or rephrase a category name — copy it exactly.
-- If nothing fits, return 'Other'.
+- If nothing fits, return 'OTHER'.
 - KRA PINs: Always start with 'P' or 'A' followed by digits and end with a letter
   (e.g. 'P05115959U'). The SELLER PIN (kraPin) belongs to the supplier.
   The BUYER PIN (buyerKraPin) belongs to the customer/your company.
@@ -784,21 +830,23 @@ async def extract_receipt_data(
         # Flag all scans for review
         status = ReceiptStatus.NEEDS_REVIEW
 
-        normalized = normalize_category(data.get("category") or "Other", allowed=cat_set)
-        # lookup ids for industry-scoped category
+        normalized = normalize_category(data.get("category") or "OTHER", allowed=cat_set)
+        # lookup ids for industry-scoped category (case-insensitive: DB may
+        # still hold Title Case names until the uppercase migration runs)
         cat_id = None
         if industry_id and normalized:
             try:
                 from app.services.data_adapter import DataService as _DS
                 cats = await _DS.list_categories(industry_id=industry_id, active_only=False)
+                norm_up = normalized.strip().upper()
                 for c in cats:
-                    if c.get("name") == normalized:
+                    if (c.get("name") or "").strip().upper() == norm_up:
                         cat_id = c.get("id")
                         break
             except Exception:
                 pass
         receipt = ReceiptCreate(
-            supplier=(data.get("supplier") or "Unknown").strip() or "Unknown",
+            supplier=normalize_supplier_name(data.get("supplier")),
             totalAmount=sanitize_numeric(data.get("totalAmount")),
             taxAmount=sanitize_numeric(data.get("taxAmount")),
             receiptDate=data.get("receiptDate", ""),
@@ -1009,13 +1057,14 @@ async def extract_receipt_batch(
         if indexed:
             data_list = [data for _, data in sorted(indexed, key=lambda t: t[0])]
 
-        # pre-build category id map for this industry
+        # pre-build category id map for this industry (uppercased keys so
+        # Title Case rows created before the uppercase migration still match)
         cat_id_map: dict = {}
         if industry_id:
             try:
                 from app.services.data_adapter import DataService as _DS2
                 _cats = await _DS2.list_categories(industry_id=industry_id, active_only=False)
-                cat_id_map = {c.get("name"): c.get("id") for c in _cats}
+                cat_id_map = {(c.get("name") or "").strip().upper(): c.get("id") for c in _cats}
             except Exception:
                 pass
         results = []
@@ -1030,11 +1079,11 @@ async def extract_receipt_batch(
 
                 # Flag all scans for review
                 status = ReceiptStatus.NEEDS_REVIEW
-                normalized = normalize_category(data.get("category") or "Other", allowed=cat_set)
-                cid = cat_id_map.get(normalized)
+                normalized = normalize_category(data.get("category") or "OTHER", allowed=cat_set)
+                cid = cat_id_map.get((normalized or "").strip().upper())
 
                 results.append(ReceiptCreate(
-                    supplier=(data.get("supplier") or "Unknown").strip() or "Unknown",
+                    supplier=normalize_supplier_name(data.get("supplier")),
                     totalAmount=sanitize_numeric(data.get("totalAmount")),
                     taxAmount=sanitize_numeric(data.get("taxAmount")),
                     receiptDate=data.get("receiptDate", ""),

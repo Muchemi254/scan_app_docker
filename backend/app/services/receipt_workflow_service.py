@@ -400,8 +400,10 @@ async def list_pending_for_admin(
         args.append(query)
         args.append(like_pattern(query))
     if category:
-        args.append(category)
-        where.append(f"r.category = ${len(args)}")
+        from app.services.text_normalize import normalize_category_text
+
+        args.append(normalize_category_text(category))
+        where.append(f"UPPER(r.category) = ${len(args)}")
     if batch_title:
         args.append(batch_title)
         where.append(f"r.batch_title = ${len(args)}")

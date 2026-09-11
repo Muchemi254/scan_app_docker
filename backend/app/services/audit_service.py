@@ -14,7 +14,7 @@ def _is_meaningful(val) -> bool:
     """Return True if the value is worth recording in an audit trail."""
     if val is None:
         return False
-    if isinstance(val, str) and val.strip() in ("", "N/A", "Unknown"):
+    if isinstance(val, str) and val.strip() in ("", "N/A", "Unknown", "UNKNOWN"):
         return False
     return True
 

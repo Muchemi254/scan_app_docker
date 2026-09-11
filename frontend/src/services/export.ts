@@ -96,7 +96,7 @@ function flattenToItems(receipts: any[]): FlatItem[] {
       receiptDate: r.receiptDate || '',
       supplier: r.supplier || '',
       totalAmount: sanitizeNumeric(r.totalAmount),
-      category: r.category || 'Other',
+      category: r.category || 'OTHER',
       invoiceNumber: r.invoiceNumber || '',
       status: r.status || '',
     };
@@ -168,7 +168,7 @@ function receiptTotalRows(receipts: any[]): any[] {
     'Receipt ID': r.id || '',
     Date: parseDateMDY(r.receiptDate || '') || r.receiptDate || '',
     Supplier: r.supplier || '',
-    Category: r.category || 'Other',
+    Category: r.category || 'OTHER',
     Invoice: r.invoiceNumber || '',
     'Receipt Total': sanitizeNumeric(r.totalAmount),
   }));
@@ -177,7 +177,7 @@ function receiptTotalRows(receipts: any[]): any[] {
 function categorySummary(receipts: any[]): any[] {
   const map = new Map<string, { total: number; count: number }>();
   for (const r of receipts) {
-    const cat = r.category || 'Other';
+    const cat = r.category || 'OTHER';
     const amt = sanitizeNumeric(r.totalAmount);
     const existing = map.get(cat) || { total: 0, count: 0 };
     existing.total += amt;
@@ -198,7 +198,7 @@ function categorySummary(receipts: any[]): any[] {
 function supplierSummary(receipts: any[]): any[] {
   const map = new Map<string, { total: number; count: number }>();
   for (const r of receipts) {
-    const sup = r.supplier || 'Unknown';
+    const sup = r.supplier || 'UNKNOWN';
     const amt = sanitizeNumeric(r.totalAmount);
     const existing = map.get(sup) || { total: 0, count: 0 };
     existing.total += amt;
@@ -306,8 +306,8 @@ function fieldValue(r: any, field: string): string {
     }
     return 'Unknown';
   }
-  if (field === 'supplier') return r.supplier || 'Unknown';
-  if (field === 'category') return r.category || 'Other';
+  if (field === 'supplier') return r.supplier || 'UNKNOWN';
+  if (field === 'category') return r.category || 'OTHER';
   return 'Unknown';
 }
 

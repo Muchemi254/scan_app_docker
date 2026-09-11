@@ -66,7 +66,7 @@ async def test_full_authenticated_pipeline(client, monkeypatch):
     )
     assert resp.status_code == 200, resp.text
     extracted = resp.json()
-    assert extracted["supplier"] == "ACME Grocery"
+    assert extracted["supplier"] == "ACME GROCERY"
     assert len(extracted["items"]) == 2
 
     # ── 5. Save the receipt (multipart form + image) ────────────────────
@@ -108,7 +108,7 @@ async def test_full_authenticated_pipeline(client, monkeypatch):
         files={"receipt_data": (None, json.dumps({"category": "Office"}))},
     )
     assert resp.status_code == 200, resp.text
-    assert resp.json()["category"] == "Office"
+    assert resp.json()["category"] == "OFFICE"
 
     # ── 8. Multi-tenant isolation ───────────────────────────────────────
     resp = await client.get(f"/api/v1/users/{alice_uid}/receipts", headers=bob_headers)

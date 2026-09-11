@@ -92,14 +92,15 @@ const parseGeminiResponse = (text: string): ReceiptData => {
     
     return {
       id: parsed.id || '',
-      supplier: parsed.supplier,
+      // Suppliers + categories are always UPPERCASE (backend dedupe rule).
+      supplier: String(parsed.supplier || 'UNKNOWN').trim().replace(/\s+/g, ' ').toUpperCase() || 'UNKNOWN',
       totalAmount: sanitizePrice(parsed.totalAmount),
       taxAmount: sanitizePrice(parsed.taxAmount),
       receiptDate: normalizeDateStrict(parsed.receiptDate),
       cuInvoice: parsed.cuInvoice || 'N/A',
       kraPin: parsed.kraPin || 'N/A',
       invoiceNumber: parsed.invoiceNumber || 'N/A',
-      category: parsed.category || 'Other', // Include category in response
+      category: String(parsed.category || 'OTHER').trim().replace(/\s+/g, ' ').toUpperCase() || 'OTHER', // Include category in response
       items: Array.isArray(parsed.items) 
         ? parsed.items.map((item: any) => ({
         name: item.name || 'N/A',
@@ -199,20 +200,20 @@ export const extractReceiptData = async (
   };
 
   // Reusable cached category list (will be cached by Gemini)
-  // Canonical taxonomy — keep identical to backend/app/services/gemini.py CATEGORIES
+  // Canonical taxonomy — keep identical to backend/app/services/gemini.py CATEGORIES (UPPERCASE)
 const CATEGORY_LIST = [
-  "Building Materials", "Hardware & Tools", "Paint & Finishes", "Plumbing & Sanitary", "Electrical Supplies", "Security & Surveillance",
-  "Fuel & Lubricants", "Vehicle Maintenance", "Transport Services", "Utilities & Bills",
-  "Seeds & Inputs", "Fertilizers & Chemicals", "Farm Tools & Equipment", "Greenhouse Supplies",
-  "Crop Harvesting & Processing", "Agro Consultancy & Training",
-  "Animal Feed & Supplements", "Livestock & Poultry", "Veterinary Services",
-  "Food & Groceries", "Furniture & Fixtures", "Utensils & Cutlery", "Cleaning Supplies", "Baby & Kids Supplies",
-  "Clothing & Footwear", "Personal Care & Beauty", "Health & Medicine",
-  "Stationery & Office Supplies", "Professional & Business Services", "Employee Salaries & Wages",
-  "Licenses & Permits", "Rent, Lease & Property",
-  "Electronics & Appliances", "Phones & Accessories", "Computers & IT Equipment",
-  "Raw Materials", "Packaging Supplies", "Gifts & Donations", "Entertainment & Leisure",
-  "Repairs & Maintenance", "Emergency Purchases", "Other"
+  "BUILDING MATERIALS", "HARDWARE & TOOLS", "PAINT & FINISHES", "PLUMBING & SANITARY", "ELECTRICAL SUPPLIES", "SECURITY & SURVEILLANCE",
+  "FUEL & LUBRICANTS", "VEHICLE MAINTENANCE", "TRANSPORT SERVICES", "UTILITIES & BILLS",
+  "SEEDS & INPUTS", "FERTILIZERS & CHEMICALS", "FARM TOOLS & EQUIPMENT", "GREENHOUSE SUPPLIES",
+  "CROP HARVESTING & PROCESSING", "AGRO CONSULTANCY & TRAINING",
+  "ANIMAL FEED & SUPPLEMENTS", "LIVESTOCK & POULTRY", "VETERINARY SERVICES",
+  "FOOD & GROCERIES", "FURNITURE & FIXTURES", "UTENSILS & CUTLERY", "CLEANING SUPPLIES", "BABY & KIDS SUPPLIES",
+  "CLOTHING & FOOTWEAR", "PERSONAL CARE & BEAUTY", "HEALTH & MEDICINE",
+  "STATIONERY & OFFICE SUPPLIES", "PROFESSIONAL & BUSINESS SERVICES", "EMPLOYEE SALARIES & WAGES",
+  "LICENSES & PERMITS", "RENT, LEASE & PROPERTY",
+  "ELECTRONICS & APPLIANCES", "PHONES & ACCESSORIES", "COMPUTERS & IT EQUIPMENT",
+  "RAW MATERIALS", "PACKAGING SUPPLIES", "GIFTS & DONATIONS", "ENTERTAINMENT & LEISURE",
+  "REPAIRS & MAINTENANCE", "EMERGENCY PURCHASES", "OTHER"
 ];
 
 const categoryInstructions = `
@@ -359,28 +360,28 @@ Return ONLY the exact category name (copy-paste from list above).`;
     console.log("🧠 Gemini raw category response:", category);
 
     const validCategories: string[] = [ 
-      "Building Materials", "Hardware & Tools", "Paint & Finishes", "Plumbing & Sanitary", "Electrical Supplies", "Security & Surveillance",
-      "Fuel & Lubricants", "Vehicle Maintenance", "Transport Services", "Utilities & Bills",
-      "Seeds & Inputs", "Fertilizers & Chemicals", "Farm Tools & Equipment", "Greenhouse Supplies",
-      "Crop Harvesting & Processing", "Agro Consultancy & Training",
-      "Animal Feed & Supplements", "Livestock & Poultry", "Veterinary Services",
-      "Food & Groceries", "Furniture & Fixtures", "Utensils & Cutlery", "Cleaning Supplies", "Baby & Kids Supplies",
-      "Clothing & Footwear", "Personal Care & Beauty", "Health & Medicine",
-      "Stationery & Office Supplies", "Professional & Business Services", "Employee Salaries & Wages",
-      "Licenses & Permits", "Rent, Lease & Property",
-      "Electronics & Appliances", "Phones & Accessories", "Computers & IT Equipment",
-      "Raw Materials", "Packaging Supplies", "Gifts & Donations", "Entertainment & Leisure",
-      "Repairs & Maintenance", "Emergency Purchases", "Other"
+      "BUILDING MATERIALS", "HARDWARE & TOOLS", "PAINT & FINISHES", "PLUMBING & SANITARY", "ELECTRICAL SUPPLIES", "SECURITY & SURVEILLANCE",
+      "FUEL & LUBRICANTS", "VEHICLE MAINTENANCE", "TRANSPORT SERVICES", "UTILITIES & BILLS",
+      "SEEDS & INPUTS", "FERTILIZERS & CHEMICALS", "FARM TOOLS & EQUIPMENT", "GREENHOUSE SUPPLIES",
+      "CROP HARVESTING & PROCESSING", "AGRO CONSULTANCY & TRAINING",
+      "ANIMAL FEED & SUPPLEMENTS", "LIVESTOCK & POULTRY", "VETERINARY SERVICES",
+      "FOOD & GROCERIES", "FURNITURE & FIXTURES", "UTENSILS & CUTLERY", "CLEANING SUPPLIES", "BABY & KIDS SUPPLIES",
+      "CLOTHING & FOOTWEAR", "PERSONAL CARE & BEAUTY", "HEALTH & MEDICINE",
+      "STATIONERY & OFFICE SUPPLIES", "PROFESSIONAL & BUSINESS SERVICES", "EMPLOYEE SALARIES & WAGES",
+      "LICENSES & PERMITS", "RENT, LEASE & PROPERTY",
+      "ELECTRONICS & APPLIANCES", "PHONES & ACCESSORIES", "COMPUTERS & IT EQUIPMENT",
+      "RAW MATERIALS", "PACKAGING SUPPLIES", "GIFTS & DONATIONS", "ENTERTAINMENT & LEISURE",
+      "REPAIRS & MAINTENANCE", "EMERGENCY PURCHASES", "OTHER"
     ];
 
     if (category && validCategories.includes(category)) {
       return category;
     }
 
-    return "Other";
+    return "OTHER";
   } catch (error) {
     console.error("Category suggestion failed:", error);
-    return "Other";
+    return "OTHER";
   }
 }; */
 /**
@@ -403,7 +404,7 @@ export const generateSummary = async (receipts: ReceiptData[]): Promise<string> 
   // Prepare structured data (optimized format to reduce tokens)
   const receiptTexts = receipts.map(r => {
     const items = r.items?.map(i => `${i.name}(${i.quantity}×${i.price})`).join('; ') || '-';
-    return `${r.receiptDate}|${r.supplier}|${r.totalAmount}|${r.category || 'Other'}|${items}`;
+    return `${r.receiptDate}|${r.supplier}|${r.totalAmount}|${r.category || 'OTHER'}|${items}`;
   }).join('\n');
 
   // Use prompt caching: static instructions are cached, only dynamic data changes

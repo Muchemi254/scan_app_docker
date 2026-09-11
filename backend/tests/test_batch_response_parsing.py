@@ -155,7 +155,7 @@ async def test_batch_empty_supplier_does_not_fail(monkeypatch):
     """OCR models (e.g. qwen-vl-ocr) fill unreadable fields with "" instead of
     omitting them or using 'N/A'. supplier has min_length=1, so a literal empty
     string used to trip a Pydantic validation error and the item was marked
-    AI_EMPTY_RESPONSE. Empty/whitespace supplier must fall back to 'Unknown'."""
+    AI_EMPTY_RESPONSE. Empty/whitespace supplier must fall back to 'UNKNOWN'."""
     async def fake_qwen(api_key, model_id, prompt, content=None, thinking_mode=False, max_tokens=None):
         receipts = [_receipt_dict("ACME", "INV-1"), _receipt_dict("BETA", "INV-2")]
         receipts[0]["imageIndex"] = 0
@@ -167,7 +167,7 @@ async def test_batch_empty_supplier_does_not_fail(monkeypatch):
     results = await extract_receipt_batch(FILES, "sk-test", "qwen-vl-ocr", "qwen")
     assert len(results) == 2
     assert results[0].supplier == "ACME"
-    assert results[1].supplier == "Unknown", "empty supplier must become 'Unknown', not fail"
+    assert results[1].supplier == "UNKNOWN", "empty supplier must become 'UNKNOWN', not fail"
 
 
 async def test_batch_single_object_coercion_raises_count_error(monkeypatch):

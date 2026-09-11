@@ -184,9 +184,9 @@ async def test_list_and_search_has_pdf_filter(client):
     assert img.status_code == 201, img.text
 
     pdfs = (await client.get(f"/api/v1/users/{uid}/receipts", params={"hasPdf": "true"}, headers=headers)).json()
-    assert [i["supplier"] for i in pdfs["items"]] == ["Pdf Co"]
+    assert [i["supplier"] for i in pdfs["items"]] == ["PDF CO"]
     non_pdfs = (await client.get(f"/api/v1/users/{uid}/receipts", params={"hasPdf": "false"}, headers=headers)).json()
-    assert [i["supplier"] for i in non_pdfs["items"]] == ["Img Co"]
+    assert [i["supplier"] for i in non_pdfs["items"]] == ["IMG CO"]
 
     s = (await client.get(
         f"/api/v1/users/{uid}/receipts/search",
@@ -194,4 +194,4 @@ async def test_list_and_search_has_pdf_filter(client):
         headers=headers,
     )).json()
     assert s["total"] == 1
-    assert s["results"][0]["supplier"] == "Pdf Co"
+    assert s["results"][0]["supplier"] == "PDF CO"

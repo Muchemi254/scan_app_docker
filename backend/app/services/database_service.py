@@ -32,6 +32,10 @@ from app.services.search_query import (
     receipt_index_text,
     receipt_search_vector,
 )
+from app.services.text_normalize import (
+    normalize_category_text,
+    normalize_supplier_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -320,6 +324,10 @@ class DatabaseService:
         total = sanitize_numeric(receipt_data.get("totalAmount"))
         tax = sanitize_numeric(receipt_data.get("taxAmount")) if receipt_data.get("taxAmount") else None
 
+        # Suppliers + categories are always UPPERCASE (single dedupe rule).
+        supplier = normalize_supplier_name(receipt_data.get("supplier", ""))
+        category = normalize_category_text(receipt_data.get("category", "OTHER"))
+
         items = receipt_data.get("items") or []
         image_filename = receipt_data.get("image_filename")
         image_sha256 = receipt_data.get("image_sha256")
@@ -343,11 +351,11 @@ class DatabaseService:
                     user_id,
                     receipt_data.get("status", "processed"),
                     receipt_data.get("entryType") or "expense",
-                    receipt_data.get("supplier", ""),
+                    supplier,
                     total,
                     tax,
                     receipt_date,
-                    receipt_data.get("category"),
+                    category,
                     receipt_data.get("invoiceNumber"),
                     receipt_data.get("kraPin"),
                     receipt_data.get("buyerKraPin"),
@@ -496,8 +504,8 @@ class DatabaseService:
                 )
                 param_idx += 1
             if category:
-                params.append(category)
-                conditions.append(f"category = ${param_idx}")
+                params.append(normalize_category_text(category))
+                conditions.append(f"UPPER(category) = ${param_idx}")
                 param_idx += 1
             if batch_title and batch_title != "__ungrouped__":
                 params.append(batch_title)
@@ -611,7 +619,7 @@ class DatabaseService:
             p_idx += 1
         if receipt_data.get("supplier"):
             set_parts.append(f"supplier = ${p_idx}")
-            params.append(receipt_data["supplier"])
+            params.append(normalize_supplier_name(receipt_data["supplier"]))
             p_idx += 1
         if "totalAmount" in receipt_data:
             set_parts.append(f"total_amount = ${p_idx}")
@@ -634,7 +642,7 @@ class DatabaseService:
 
         if receipt_data.get("category") is not None and _provided(receipt_data["category"]):
             set_parts.append(f"category = ${p_idx}")
-            params.append(receipt_data["category"])
+            params.append(normalize_category_text(receipt_data["category"]))
             p_idx += 1
         if "category_id" in receipt_data or "categoryId" in receipt_data:
             set_parts.append(f"category_id = ${p_idx}")
@@ -768,12 +776,12 @@ class DatabaseService:
             p = 2
 
             if supplier:
-                params.append(supplier)
-                conditions.append(f"supplier = ${p}")
+                params.append(normalize_supplier_name(supplier))
+                conditions.append(f"UPPER(supplier) = ${p}")
                 p += 1
             if category:
-                params.append(category)
-                conditions.append(f"category = ${p}")
+                params.append(normalize_category_text(category))
+                conditions.append(f"UPPER(category) = ${p}")
                 p += 1
             if date_from:
                 d = _parse_date_mmddyyyy(date_from)
@@ -830,14 +838,15 @@ class DatabaseService:
             if supplier and totalAmount:
                 date_val = _parse_date_mmddyyyy(receiptDate) if receiptDate else None
                 amount = sanitize_numeric(totalAmount)
+                supplier_norm = normalize_supplier_name(supplier)
                 rows = await conn.fetch(
                     f"""
                     SELECT {_RECEIPT_COLS} FROM receipts
-                    WHERE user_id = $1 AND supplier = $2
+                    WHERE user_id = $1 AND UPPER(supplier) = $2
                       AND total_amount = $3::numeric
                       AND id != $4
                     """,
-                    user_id, supplier, amount, exclude_uuid,
+                    user_id, supplier_norm, amount, exclude_uuid,
                 )
                 seen = {r["id"] for r in results if "id" in r}
                 for r in rows:
@@ -942,9 +951,9 @@ class DatabaseService:
         if status:
             add(status, "r.status = ${index}")
         if category:
-            add(category, "r.category = ${index}")
+            add(normalize_category_text(category), "UPPER(r.category) = ${index}")
         if supplier:
-            add(supplier, "r.supplier = ${index}")
+            add(normalize_supplier_name(supplier), "UPPER(r.supplier) = ${index}")
         if batch_title == "__ungrouped__":
             where.append("(r.batch_title IS NULL OR BTRIM(r.batch_title) = '' OR UPPER(BTRIM(r.batch_title)) = 'N/A')")
         elif batch_title:
@@ -1367,7 +1376,9 @@ class DatabaseService:
                     p = await conn.fetchrow("SELECT industry_id FROM categories WHERE id = $1", parent_id)
                     if not p or str(p["industry_id"]) != str(industry_id):
                         return None
-                row = await conn.fetchrow("INSERT INTO categories (industry_id, name, label, parent_id, created_by) VALUES ($1, $2, $3, $4, $5) RETURNING *", industry_id, name.strip(), (label.strip() if label else name.strip()), parent_id, created_by)
+                name_norm = " ".join(str(name).split()).upper()
+                label_norm = " ".join(str(label).split()).upper() if label else name_norm
+                row = await conn.fetchrow("INSERT INTO categories (industry_id, name, label, parent_id, created_by) VALUES ($1, $2, $3, $4, $5) RETURNING *", industry_id, name_norm, label_norm, parent_id, created_by)
             except Exception:
                 return None
             return dict(row) if row else None
@@ -1385,9 +1396,9 @@ class DatabaseService:
         params: List[Any] = []
         p_idx = 1
         if "name" in data and data["name"] is not None:
-            set_parts.append(f"name = ${p_idx}"); params.append(str(data["name"]).strip()); p_idx += 1
+            set_parts.append(f"name = ${p_idx}"); params.append(" ".join(str(data["name"]).split()).upper()); p_idx += 1
         if "label" in data and data["label"] is not None:
-            set_parts.append(f"label = ${p_idx}"); params.append(str(data["label"]).strip()); p_idx += 1
+            set_parts.append(f"label = ${p_idx}"); params.append(" ".join(str(data["label"]).split()).upper()); p_idx += 1
         if "parent_id" in data:
             set_parts.append(f"parent_id = ${p_idx}"); params.append(data["parent_id"]); p_idx += 1
         if "industry_id" in data and data["industry_id"] is not None:

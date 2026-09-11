@@ -92,9 +92,9 @@ def field_value(r: dict, field: str) -> str:
     if field == "month":
         return month_only(r.get("receiptDate", ""))
     if field == "supplier":
-        return r.get("supplier", "Unknown")
+        return r.get("supplier", "UNKNOWN")
     if field == "category":
-        return r.get("category", "Other")
+        return r.get("category", "OTHER")
     return "Unknown"
 
 
@@ -148,7 +148,13 @@ def aggregate_receipts(
     if n_to:
         filtered = [r for r in filtered if _normalize_receipt_date(r) <= n_to]
     if category:
-        filtered = [r for r in filtered if r.get("category") == category]
+        from app.services.text_normalize import normalize_category_text
+
+        want = normalize_category_text(category)
+        filtered = [
+            r for r in filtered
+            if (r.get("category") or "").strip().upper() == want
+        ]
     if year:
         filtered = [r for r in filtered if extract_year(r.get("receiptDate", "")) == year]
     return filtered
@@ -189,7 +195,7 @@ def category_breakdown(receipts: List[dict]) -> List[dict]:
     cats: Dict[str, float] = {}
     cnts: Dict[str, int] = {}
     for r in receipts:
-        c = r.get("category", "Other")
+        c = r.get("category", "OTHER")
         cats[c] = cats.get(c, 0) + sanitize_numeric(r.get("totalAmount"))
         cnts[c] = cnts.get(c, 0) + 1
     total = sum(cats.values())
@@ -203,7 +209,7 @@ def supplier_breakdown(receipts: List[dict]) -> List[dict]:
     sups: Dict[str, float] = {}
     cnts: Dict[str, int] = {}
     for r in receipts:
-        s = r.get("supplier", "Unknown")
+        s = r.get("supplier", "UNKNOWN")
         sups[s] = sups.get(s, 0) + sanitize_numeric(r.get("totalAmount"))
         cnts[s] = cnts.get(s, 0) + 1
     return [
