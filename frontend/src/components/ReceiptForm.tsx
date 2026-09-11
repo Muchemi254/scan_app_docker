@@ -4,7 +4,7 @@ import { parseCurrencyToNumber } from '../utils/helpers';
 import { addTax, splitTax } from '../utils/taxCalc';
 import type { ReceiptData } from '../types/gemini';
 import { ENTRY_TYPE_OPTIONS, entryTypeLabel } from '../types/gemini';
-import { industriesApi, categoriesApi } from '../services/api';
+import { getIndustries, getCategories, getDefaultIndustry } from '../services/referenceData';
 
 const ReceiptForm = ({
   initialData,
@@ -32,9 +32,7 @@ const ReceiptForm = ({
     taxAmount: initialData?.taxAmount || '',
     receiptDate: initialData?.receiptDate || '',
     category: initialData?.category || '',
-    // @ts-ignore
     category_id: (initialData as any)?.category_id || (initialData as any)?.categoryId || '',
-    // @ts-ignore
     industry_id: (initialData as any)?.industry_id || (initialData as any)?.industryId || '',
     invoiceNumber: initialData?.invoiceNumber || '',
     kraPin: initialData?.kraPin || '',
@@ -54,18 +52,23 @@ const ReceiptForm = ({
       : [],
   } as any));
   const [industries, setIndustries] = useState<{ id: string; name: string }[]>([]);
-  const [categories, setCategories] = useState<{ id: string; name: string; label: string; parent_id?: string | null }[]>([]);
+  const [categories, setCategories] = useState<{ id: string; industry_id: string; name: string; label: string; parent_id?: string | null }[]>([]);
+  // Industry on board at mount (before the user-default fills an empty one).
+  // A ref keeps the mount-once effects below honest for exhaustive-deps.
+  const initialIndustryRef = useRef((initialData as any)?.industry_id || (initialData as any)?.industryId || '');
+  const industryId = (formData as any).industry_id as string;
   useEffect(() => {
-    industriesApi.list().then(r => setIndustries(r.items)).catch(() => {});
-    categoriesApi.getDefault().then(d => {
-      if (d.industry_id && !(formData as any).industry_id) setFormData(prev => ({ ...prev, industry_id: d.industry_id } as any));
+    // Reference data is cached (referenceData.ts) — opening N edit forms
+    // reuses one fetch instead of re-calling the backend every time.
+    getIndustries().then(r => setIndustries(r.items)).catch(() => {});
+    getDefaultIndustry().then(d => {
+      if (d.industry_id && !initialIndustryRef.current) setFormData(prev => ({ ...prev, industry_id: d.industry_id } as any));
     }).catch(() => {});
   }, []);
   useEffect(() => {
-    const iid = (formData as any).industry_id as string;
-    if (!iid) { setCategories([]); return; }
-    categoriesApi.list(iid).then(r => setCategories(r.items)).catch(() => setCategories([]));
-  }, [(formData as any).industry_id]);
+    if (!industryId) { setCategories([]); return; }
+    getCategories(industryId).then(r => setCategories(r.items)).catch(() => setCategories([]));
+  }, [industryId]);
 
   // Receipt-level default tax rate for bulk operations. Higher precedence:
   // the receipt's own override > the user's default passed from Settings.
@@ -133,17 +136,15 @@ const ReceiptForm = ({
   // Sync form state when initialData loads (async fetch completes after mount)
   useEffect(() => {
     if (initialData) {
-      setFormData({
+      setFormData(prev => ({
         id: initialData.id || '',
         supplier: initialData.supplier || '',
         totalAmount: initialData.totalAmount || '',
         taxAmount: initialData.taxAmount || '',
         receiptDate: initialData.receiptDate || '',
         category: initialData.category || '',
-        // @ts-ignore
         category_id: (initialData as any).category_id || (initialData as any).categoryId || '',
-        // @ts-ignore
-        industry_id: (initialData as any).industry_id || (initialData as any).industryId || (formData as any).industry_id || '',
+        industry_id: (initialData as any).industry_id || (initialData as any).industryId || (prev as any).industry_id || '',
         invoiceNumber: initialData.invoiceNumber || '',
         kraPin: initialData.kraPin || '',
         buyerKraPin: initialData.buyerKraPin || '',
@@ -160,7 +161,7 @@ const ReceiptForm = ({
               isZeroRated: item.isZeroRated || false,
             }))
           : [],
-      } as any);
+      } as any));
     }
   }, [initialData]);
 

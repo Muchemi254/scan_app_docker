@@ -7,9 +7,10 @@
  * now or weeks later. Held work survives restarts and never needs re-upload.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { batchApi, industriesApi, categoriesApi } from '../services/api';
+import { batchApi } from '../services/api';
+import { getIndustries, getDefaultIndustry } from '../services/referenceData';
 import { toast } from '../stores/toastStore';
 
 const MAX_UPLOAD_SIZE_MB = 500;
@@ -38,15 +39,21 @@ const ScannerPage = ({ userId }: { userId: string | null }) => {
   // Industries
   const [industries, setIndustries] = useState<{ id: string; name: string }[]>([]);
   const [selectedIndustry, setSelectedIndustry] = useState<string>('');
+  // Live ref so the mount-once fetch below never clobbers a user pick that
+  // lands before the industries response resolves (keeps exhaustive-deps happy).
+  const selectedIndustryRef = useRef(selectedIndustry);
+  useEffect(() => { selectedIndustryRef.current = selectedIndustry; }, [selectedIndustry]);
   useEffect(() => {
-    industriesApi.list().then(r => {
+    // Cached reference data — shared with edit forms, no refetch per visit.
+    getIndustries().then(r => {
       setIndustries(r.items);
-      if (r.items.length && !selectedIndustry) {
+      if (r.items.length && !selectedIndustryRef.current) {
         // try default from user_preferences
-        categoriesApi.getDefault().then(d => {
+        getDefaultIndustry().then(d => {
+          if (selectedIndustryRef.current) return;
           if (d.industry_id) setSelectedIndustry(d.industry_id);
           else setSelectedIndustry(r.items[0].id);
-        }).catch(() => setSelectedIndustry(r.items[0].id));
+        }).catch(() => { if (!selectedIndustryRef.current) setSelectedIndustry(r.items[0].id); });
       }
     }).catch(() => {});
   }, []);

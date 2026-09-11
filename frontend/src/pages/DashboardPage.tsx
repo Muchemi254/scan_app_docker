@@ -1,6 +1,7 @@
-import { useEffect, useState, useMemo, useCallback } from 'react';
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { dashboardApi, industriesApi } from '../services/api';
+import { dashboardApi } from '../services/api';
+import { getIndustries } from '../services/referenceData';
 import {
   Chart as ChartJS,
   ArcElement, Tooltip, Legend,
@@ -13,12 +14,10 @@ import {
   Calendar, ChevronDown, Layers, Settings2, X,
   Sparkles, AlertTriangle, Lightbulb, Zap, Target,
   CheckCircle2, Clock, Eye, EyeOff, Filter,
-  Building2, PieChart as PieIcon,
+  Building2,
 } from 'lucide-react';
 
 ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement, PointElement, LineElement, Filler);
-
-type ChartType = 'bar' | 'line' | 'doughnut';
 
 interface Overview {
   total_spent: number;
@@ -120,14 +119,18 @@ const DashboardPage = ({ userId }: { userId: string | null }) => {
   const [loading, setLoading] = useState({overview:false,trends:false,breakdown:false,insights:false,yearly:false});
   const [batchModal, setBatchModal] = useState(false);
 
+  // Mount-time year snapshot: the fetch below runs once; a ref keeps
+  // exhaustive-deps happy without refetching when the user changes year.
+  const mountState = useRef({ year, currentYear });
   // fetch years + industries
   useEffect(()=>{
-    industriesApi.list().then(r=> setIndustries(r.items)).catch(()=>{});
+    getIndustries().then(r=> setIndustries(r.items)).catch(()=>{});
     dashboardApi.years().then(r=>{
-      const ys = r.years.length?r.years:[currentYear];
+      const { year: yearAtMount, currentYear: currentYearAtMount } = mountState.current;
+      const ys = r.years.length?r.years:[currentYearAtMount];
       setYears(ys);
       // if current year has no data, default to most recent year with data
-      if (!ys.includes(currentYear as number) && year === currentYear) setYear(ys[0] as any);
+      if (!ys.includes(currentYearAtMount as number) && yearAtMount === currentYearAtMount) setYear(ys[0] as any);
     }).catch(()=>{});
   },[]);
   useEffect(()=>{ setPref('includeUnreviewed', includeUnreviewed); },[includeUnreviewed]);

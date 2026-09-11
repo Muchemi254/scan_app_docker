@@ -16,6 +16,7 @@ import {
 } from '../services/auth';
 import { opsApi } from '../services/opsApi';
 import { settingsApi, locationsApi, entryTypesApi, industriesApi, categoriesApi } from '../services/api';
+import { invalidateReferenceData } from '../services/referenceData';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import { toast } from '../stores/toastStore';
 import {
@@ -339,13 +340,13 @@ const AdminPage = ({ userId }: Props) => {
   const addIndustry = async () => {
     const name = industryInput.trim(); if (!name) return;
     setSavingIndustries(true); setError(''); setNotice('');
-    try { await industriesApi.create(name, industryDesc.trim() || undefined); setIndustryInput(''); setIndustryDesc(''); setNotice(`Added industry "${name}"`); await loadIndustries(); }
+    try { await industriesApi.create(name, industryDesc.trim() || undefined); setIndustryInput(''); setIndustryDesc(''); setNotice(`Added industry "${name}"`); await loadIndustries(); invalidateReferenceData(); }
     catch (err: any) { setError(err?.message || 'Failed to add industry'); }
     finally { setSavingIndustries(false); }
   };
   const toggleIndustry = async (ind: { id: string; name: string; is_active: boolean }) => {
     setSavingIndustries(true); setError(''); setNotice('');
-    try { await industriesApi.update(ind.id, { is_active: !ind.is_active }); setNotice(ind.is_active ? `Deactivated "${ind.name}"` : `Activated "${ind.name}"`); await loadIndustries(); }
+    try { await industriesApi.update(ind.id, { is_active: !ind.is_active }); setNotice(ind.is_active ? `Deactivated "${ind.name}"` : `Activated "${ind.name}"`); await loadIndustries(); invalidateReferenceData(); }
     catch (err: any) { setError(err?.message || 'Failed to update industry'); }
     finally { setSavingIndustries(false); }
   };
@@ -353,7 +354,7 @@ const AdminPage = ({ userId }: Props) => {
     if (ind.is_system) { setError('System industries cannot be deleted'); return; }
     if (!(await confirm({ title: 'Delete industry?', message: <>Delete <strong>{ind.name}</strong>? Must have no categories/receipts.</> }))) return;
     setSavingIndustries(true); setError(''); setNotice('');
-    try { await industriesApi.remove(ind.id); setNotice(`Deleted "${ind.name}"`); toast.success('Industry deleted', `"${ind.name}" was removed.`); await loadIndustries(); if (selectedIndustryId===ind.id) setSelectedIndustryId(null); }
+    try { await industriesApi.remove(ind.id); setNotice(`Deleted "${ind.name}"`); toast.success('Industry deleted', `"${ind.name}" was removed.`); await loadIndustries(); if (selectedIndustryId===ind.id) setSelectedIndustryId(null); invalidateReferenceData(); }
     catch (err: any) { setError(err?.message || 'Failed to delete industry'); toast.error('Delete failed', err?.message || 'Failed to delete industry'); }
     finally { setSavingIndustries(false); }
   };
@@ -361,13 +362,13 @@ const AdminPage = ({ userId }: Props) => {
     if (!selectedIndustryId) { setError('Select an industry first'); return; }
     const name = categoryName.trim(); if (!name) return;
     setSavingCategories(true); setError(''); setNotice('');
-    try { await categoriesApi.create(selectedIndustryId, name, categoryLabel.trim() || name, categoryParent || null); setCategoryName(''); setCategoryLabel(''); setCategoryParent(''); setNotice(`Added category "${name}"`); await loadCategories(selectedIndustryId); }
+    try { await categoriesApi.create(selectedIndustryId, name, categoryLabel.trim() || name, categoryParent || null); setCategoryName(''); setCategoryLabel(''); setCategoryParent(''); setNotice(`Added category "${name}"`); await loadCategories(selectedIndustryId); invalidateReferenceData(); }
     catch (err: any) { setError(err?.message || 'Failed to add category'); }
     finally { setSavingCategories(false); }
   };
   const toggleCategory = async (cat: { id: string; name: string; is_active: boolean }) => {
     setSavingCategories(true); setError(''); setNotice('');
-    try { await categoriesApi.update(cat.id, { is_active: !cat.is_active }); setNotice(cat.is_active ? `Deactivated "${cat.name}"` : `Activated "${cat.name}"`); await loadCategories(selectedIndustryId!); }
+    try { await categoriesApi.update(cat.id, { is_active: !cat.is_active }); setNotice(cat.is_active ? `Deactivated "${cat.name}"` : `Activated "${cat.name}"`); await loadCategories(selectedIndustryId!); invalidateReferenceData(); }
     catch (err: any) { setError(err?.message || 'Failed to update category'); }
     finally { setSavingCategories(false); }
   };
@@ -375,7 +376,7 @@ const AdminPage = ({ userId }: Props) => {
     if (cat.is_system) { setError('System categories cannot be deleted (deactivate instead)'); return; }
     if (!(await confirm({ title: 'Delete category?', message: <>Delete <strong>{cat.name}</strong>? Must have no subcategories/receipts.</> }))) return;
     setSavingCategories(true); setError(''); setNotice('');
-    try { await categoriesApi.remove(cat.id); setNotice(`Deleted "${cat.name}"`); toast.success('Category deleted', `"${cat.name}" was removed.`); await loadCategories(selectedIndustryId!); }
+    try { await categoriesApi.remove(cat.id); setNotice(`Deleted "${cat.name}"`); toast.success('Category deleted', `"${cat.name}" was removed.`); await loadCategories(selectedIndustryId!); invalidateReferenceData(); }
     catch (err: any) { setError(err?.message || 'Failed to delete category'); toast.error('Delete failed', err?.message || 'Failed to delete category'); }
     finally { setSavingCategories(false); }
   };
@@ -437,6 +438,7 @@ const AdminPage = ({ userId }: Props) => {
       }
       setNotice(`CSV import: ${ok} created, ${skip} skipped (duplicates/invalid)`);
       await loadCategories(selectedIndustryId);
+      invalidateReferenceData();
     } catch (err: any) { setError(err?.message || 'CSV import failed'); }
     finally { setCsvUploading(false); if (csvInputRef.current) csvInputRef.current.value = ''; }
   };
@@ -535,7 +537,8 @@ const AdminPage = ({ userId }: Props) => {
       if (updated.uid === currentUser?.uid) {
         const raw = localStorage.getItem('scan-app-user');
         if (raw) {
-          try { const parsed = JSON.parse(raw); localStorage.setItem('scan-app-user', JSON.stringify({ ...parsed, ...updated })); } catch {}
+          try { const parsed = JSON.parse(raw); localStorage.setItem('scan-app-user', JSON.stringify({ ...parsed, ...updated })); }
+          catch { localStorage.removeItem('scan-app-user'); } // corrupt cache: drop it rather than keep a stale profile
         }
         useAuthStore.setState({ user: { ...(currentUser as AuthUser), ...updated } });
       }
