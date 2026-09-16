@@ -10,7 +10,8 @@ import {
 } from '../utils/receiptStatus';
 import ReviewPanel from '../components/ReviewPanel';
 import SearchBar from '../components/SearchBar';
-import ReceiptsTableView, { cellValue, isBlankCellValue } from '../components/ReceiptsTableView';
+import ReceiptsTableView from '../components/ReceiptsTableView';
+import { useColumnFilters, filterRowsClient } from '../hooks/useColumnFilters';
 import ExportNameModal from '../components/ExportNameModal';
 import { exportRowsAsCsv, visibleColumnKeys, defaultExportName } from '../utils/exportTableCsv';
 import { ChevronDown, ChevronRight, Table2, LayoutGrid } from 'lucide-react';
@@ -71,7 +72,7 @@ const MyApprovalsPage = () => {
   const [tablePageSize, setTablePageSize] = useState(25);
   const [tableSortBy, setTableSortBy] = useState<string | null>(null);
   const [tableSortOrder, setTableSortOrder] = useState<'asc' | 'desc'>('desc');
-  const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
+  const { columnFilters, handleColumnFilter } = useColumnFilters();
   const [exporting, setExporting] = useState(false);
   const [exportModalOpen, setExportModalOpen] = useState(false);
 
@@ -277,19 +278,7 @@ const MyApprovalsPage = () => {
   }
 
   // Table view — client-side filter + sort + pagination over current tab's rows
-  const tableFiltered = useMemo(() => {
-    const entries = Object.entries(columnFilters).filter(([, v]) => v);
-    if (entries.length === 0) return listForTab;
-    return listForTab.filter((r: any) => {
-      for (const [k, v] of entries) {
-        const raw = String(v);
-        const val = cellValue(r, k);
-        if (raw === '__BLANK__') { if (!isBlankCellValue(val)) return false; }
-        else if (!val.toLowerCase().includes(raw.toLowerCase())) return false;
-      }
-      return true;
-    });
-  }, [listForTab, columnFilters]);
+  const tableFiltered = useMemo(() => filterRowsClient(listForTab as any[], columnFilters), [listForTab, columnFilters]);
   const tableSorted = useMemo(() => {
     if (!tableSortBy) return tableFiltered;
     const dir = tableSortOrder === 'asc' ? 1 : -1;
@@ -328,7 +317,7 @@ const MyApprovalsPage = () => {
   const tablePages = Math.max(1, Math.ceil(tableTotal / tablePageSize));
   const handleTableSort = (sortBy: string | null, order: 'asc' | 'desc') => { setTableSortBy(sortBy); setTableSortOrder(order); setTablePage(1); };
   const handleTablePage = (p: number, s: number) => { setTablePage(p); setTablePageSize(s); };
-  const handleColumnFilter = (k: string, v: string) => { setColumnFilters(prev => { const n = { ...prev, [k]: v }; if (!v) delete n[k]; return n; }); setTablePage(1); };
+  const handleColumnFilterWrapped = (k: string, v: string) => { handleColumnFilter(k, v); setTablePage(1); };
   const handleTableExport = () => { if (tableTotal === 0) return; setExportModalOpen(true); };
   const confirmTableExport = (filename: string) => {
     setExportModalOpen(false);
@@ -424,7 +413,7 @@ const MyApprovalsPage = () => {
             sortOrder={tableSortOrder}
             onSortChange={handleTableSort}
             columnFilters={columnFilters}
-            onColumnFilter={handleColumnFilter}
+            onColumnFilter={handleColumnFilterWrapped}
             loading={loading}
             onRowClick={(r: any) => setViewTarget(r)}
             onExport={handleTableExport}

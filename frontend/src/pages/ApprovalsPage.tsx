@@ -6,7 +6,8 @@ import { useAuthStore } from '../stores/authStore';
 import { receiptStatusLabel, receiptStatusClass } from '../utils/receiptStatus';
 import ReviewPanel from '../components/ReviewPanel';
 import SearchBar from '../components/SearchBar';
-import ReceiptsTableView, { cellValue, isBlankCellValue } from '../components/ReceiptsTableView';
+import ReceiptsTableView from '../components/ReceiptsTableView';
+import { useColumnFilters, filterRowsClient } from '../hooks/useColumnFilters';
 import { Table2, LayoutGrid, ChevronLeft, ChevronRight } from 'lucide-react';
 
 const PAGE_SIZE = 25;
@@ -46,7 +47,7 @@ const ApprovalsPage = () => {
   const [tPageSize, setTPageSize] = useState(25);
   const [tSortBy, setTSortBy] = useState<string | null>(null);
   const [tSortOrder, setTSortOrder] = useState<'asc' | 'desc'>('desc');
-  const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
+  const { columnFilters, handleColumnFilter } = useColumnFilters();
   // Table modal (mirrors cards detail panel capabilities)
   const [tableModalId, setTableModalId] = useState<string | null>(null);
   const [tableModalReceipt, setTableModalReceipt] = useState<any | null>(null);
@@ -280,19 +281,7 @@ const ApprovalsPage = () => {
     : filteredRows.slice((clampedPage - 1) * PAGE_SIZE, clampedPage * PAGE_SIZE);
 
   // Table view — client filter + sort over filteredRows (date-aware)
-  const tableFiltered = (() => {
-    const entries = Object.entries(columnFilters).filter(([, v]) => v);
-    if (entries.length === 0) return filteredRows;
-    return filteredRows.filter((r: any) => {
-      for (const [k, v] of entries) {
-        const raw = String(v);
-        const val = cellValue(r, k);
-        if (raw === '__BLANK__') { if (!isBlankCellValue(val)) return false; }
-        else if (!val.toLowerCase().includes(raw.toLowerCase())) return false;
-      }
-      return true;
-    });
-  })();
+  const tableFiltered = filterRowsClient(filteredRows as any[], columnFilters);
   const tableSorted = (() => {
     if (!tSortBy) return tableFiltered;
     const dir = tSortOrder === 'asc' ? 1 : -1;
@@ -467,7 +456,7 @@ const ApprovalsPage = () => {
             sortOrder={tSortOrder}
             onSortChange={(sb, o) => { setTSortBy(sb); setTSortOrder(o); setTPage(1); }}
             columnFilters={columnFilters}
-            onColumnFilter={(k, v) => { setColumnFilters(prev => { const n = { ...prev, [k]: v }; if (!v) delete n[k]; return n; }); setTPage(1); }}
+            onColumnFilter={(k, v) => { handleColumnFilter(k, v); setTPage(1); }}
             loading={loading}
             onRowClick={(r: any) => setTableModalId(r.id)}
           />

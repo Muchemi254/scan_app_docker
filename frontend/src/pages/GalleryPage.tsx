@@ -2,7 +2,9 @@ import { useEffect, useState, useCallback } from 'react';
 import { receiptApi } from '../services/api';
 import ImageViewer from '../components/ImageViewer';
 import SearchBar from '../components/SearchBar';
-import ReceiptsTableView, { cellValue, isBlankCellValue } from '../components/ReceiptsTableView';
+import ReceiptsTableView from '../components/ReceiptsTableView';
+import { useColumnFilters, serverParamsFromColumnFilters } from '../hooks/useColumnFilters';
+import { cellValue, isBlankCellValue } from '../components/ReceiptsTableView';
 import ReviewPanel from '../components/ReviewPanel';
 import ExportNameModal from '../components/ExportNameModal';
 import { exportRowsAsCsv, visibleColumnKeys, defaultExportName } from '../utils/exportTableCsv';
@@ -55,7 +57,7 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
   const [tSortOrder, setTSortOrder] = useState<'asc' | 'desc'>('desc');
   const [batchFilter, setBatchFilter] = useState<string>('__all__');
   const [exporting, setExporting] = useState(false);
-  const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
+  const { columnFilters, handleColumnFilter: handleColumnFilterInner } = useColumnFilters();
   const [tableModalReceipt, setTableModalReceipt] = useState<any | null>(null);
   const [exportModalOpen, setExportModalOpen] = useState(false);
 
@@ -111,12 +113,8 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
     setTableLoading(true);
     try {
       const cf = colFilters ?? columnFilters;
-      const blankKeys = Object.entries(cf).filter(([, v]) => v === '__BLANK__').map(([k]) => k);
-      const serverFilters: any = { hasImage: true, sortBy: sortBy ?? undefined, order };
-      for (const [k, v] of Object.entries(cf)) {
-        if (v === '__BLANK__') continue;
-        serverFilters[k] = v;
-      }
+      const { params: cfParams, blankKeys } = serverParamsFromColumnFilters(cf);
+      const serverFilters: any = { hasImage: true, sortBy: sortBy ?? undefined, order, ...cfParams };
       const scope = batch ?? batchFilter;
       if (scope && scope !== '__all__') {
         serverFilters.batchTitle = scope === 'Ungrouped' ? '__ungrouped__' : scope;
@@ -161,9 +159,9 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
   };
 
   const handleColumnFilter = (key: string, value: string) => {
+    handleColumnFilterInner(key, value);
     const next = { ...columnFilters, [key]: value };
     if (!value) delete next[key];
-    setColumnFilters(next);
     setTPage(1);
     loadTable(1, tPageSize, tSortBy, tSortOrder, undefined, next);
   };

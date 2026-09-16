@@ -7,7 +7,8 @@ import { useAuthStore } from '../stores/authStore';
 import { receiptApi } from '../services/api';
 import ReviewPanel from '../components/ReviewPanel';
 import SearchBar from '../components/SearchBar';
-import ReceiptsTableView, { cellValue, isBlankCellValue } from '../components/ReceiptsTableView';
+import ReceiptsTableView from '../components/ReceiptsTableView';
+import { useColumnFilters, filterRowsClient } from '../hooks/useColumnFilters';
 import ExportNameModal from '../components/ExportNameModal';
 import { exportRowsAsCsv, visibleColumnKeys, defaultExportName } from '../utils/exportTableCsv';
 import type { ReceiptData } from '../types/gemini';
@@ -47,7 +48,7 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
   const [tPageSize, setTPageSize] = useState(50);
   const [tSortBy, setTSortBy] = useState<string | null>(null);
   const [tSortOrder, setTSortOrder] = useState<'asc' | 'desc'>('desc');
-  const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
+  const { columnFilters, handleColumnFilter } = useColumnFilters();
   const [tableExporting, setTableExporting] = useState(false);
   const [tableModalReceipt, setTableModalReceipt] = useState<any | null>(null);
   const [exportModalOpen, setExportModalOpen] = useState(false);
@@ -241,19 +242,7 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
   const selected     = filteredReceipts.find(r => r.id === selectedId);
 
   // Table view — client filter + sort over filteredReceipts (date-chronological)
-  const tableFiltered = (() => {
-    const entries = Object.entries(columnFilters).filter(([, v]) => v);
-    if (entries.length === 0) return filteredReceipts;
-    return filteredReceipts.filter((r: any) => {
-      for (const [k, v] of entries) {
-        const raw = String(v);
-        const val = cellValue(r, k);
-        if (raw === '__BLANK__') { if (!isBlankCellValue(val)) return false; }
-        else if (!val.toLowerCase().includes(raw.toLowerCase())) return false;
-      }
-      return true;
-    });
-  })();
+  const tableFiltered = filterRowsClient(filteredReceipts as any[], columnFilters);
   const tableSorted = (() => {
     if (!tSortBy) return tableFiltered;
     const dir = tSortOrder === 'asc' ? 1 : -1;
@@ -540,7 +529,7 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
             sortOrder={tSortOrder}
             onSortChange={handleTableSort}
             columnFilters={columnFilters}
-            onColumnFilter={(k, v) => { setColumnFilters(prev => { const n = { ...prev, [k]: v }; if (!v) delete n[k]; return n; }); setTPage(1); }}
+            onColumnFilter={(k, v) => { handleColumnFilter(k, v); setTPage(1); }}
             loading={loading}
             onRowClick={(r: any) => setTableModalReceipt(r)}
             onExport={handleTableExport}
