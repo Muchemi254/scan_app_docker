@@ -248,7 +248,7 @@ export default function ReceiptsTableView({
                   const isBlank = columnFilters?.[col.key] === '__BLANK__';
                   return (
                     <th key={col.key} className="px-1 py-1">
-                      {col.key === 'itemCount' ? null : isBlank ? (
+                      {isBlank ? (
                         <button
                           onClick={() => onColumnFilter(col.key, '')}
                           className="w-full px-1 py-0.5 text-[10px] leading-tight bg-blue-100 text-blue-700 border border-blue-300 rounded hover:bg-blue-200 flex items-center justify-center gap-1"
