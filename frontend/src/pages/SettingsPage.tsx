@@ -5,6 +5,7 @@ import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import { toast } from '../stores/toastStore';
 import { opsApi, type OpProgress } from '../services/opsApi';
 import { settingsApi } from '../services/api';
+import { invalidateReferenceData } from '../services/referenceData';
 import { useAuthStore } from '../stores/authStore';
 import {
   Download, Upload, Trash2, RefreshCw, FileArchive,
@@ -253,6 +254,7 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
     try {
       const pref = await settingsApi.setTaxPreference(rate);
       setPersonalTax(String(pref.default_tax_rate));
+      invalidateReferenceData();
       setTaxNotice('Default tax rate saved');
     } catch (e: any) { setTaxError(e.message || 'Failed to save tax rate'); }
     finally { setTaxSaving(false); }
@@ -264,6 +266,7 @@ const SettingsPage = ({ userId }: { userId: string | null }) => {
     setTaxSaving(true); setTaxError(''); setTaxNotice('');
     try {
       await settingsApi.setGlobalTaxRate(rate);
+      invalidateReferenceData();
       setTaxNotice('Global default tax rate saved');
     } catch (e: any) { setTaxError(e.message || 'Failed to save global tax rate'); }
     finally { setTaxSaving(false); }

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
-import { receiptApi, locationsApi, entryTypesApi, settingsApi } from '../services/api';
+import { receiptApi } from '../services/api';
+import { getLocations, getEntryTypes, getTaxPreference } from '../services/referenceData';
 import { useReceiptStore } from '../stores/receiptStore';
 import ReceiptForm from '../components/ReceiptForm';
 import { lineTotalOf, sumItemTotals } from '../utils/itemTotals';
@@ -44,9 +45,9 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
 
     // Reference data + the user's personal tax default for the editor.
     const fetchMeta = async () => {
-      try { setLocations((await locationsApi.list()).items); } catch { /* non-fatal */ }
-      try { setEntryTypes((await entryTypesApi.list()).items); } catch { /* non-fatal */ }
-      try { setDefaultTaxRate((await settingsApi.getTaxPreference()).default_tax_rate); } catch { /* non-fatal */ }
+      try { setLocations((await getLocations()).items); } catch { /* non-fatal */ }
+      try { setEntryTypes((await getEntryTypes()).items); } catch { /* non-fatal */ }
+      try { setDefaultTaxRate((await getTaxPreference()).default_tax_rate); } catch { /* non-fatal */ }
     };
     fetchMeta();
   }, [userId, id, navigate]);

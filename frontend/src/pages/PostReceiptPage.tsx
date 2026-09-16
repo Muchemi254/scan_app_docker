@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { receiptApi, locationsApi, entryTypesApi } from '../services/api';
+import { receiptApi } from '../services/api';
+import { getLocations, getEntryTypes } from '../services/referenceData';
 import { useReceiptStore } from '../stores/receiptStore';
 import ReceiptForm from '../components/ReceiptForm';
 
@@ -12,8 +13,8 @@ const PostReceiptPage = ({ userId }: { userId: string | null }) => {
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
   const [entryTypes, setEntryTypes] = useState<{ id: string; name: string; label: string }[]>([]);
   useEffect(() => {
-    locationsApi.list().then(r => setLocations(r.items)).catch(() => {});
-    entryTypesApi.list().then(r => setEntryTypes(r.items)).catch(() => {});
+    getLocations().then(r => setLocations(r.items)).catch(() => {});
+    getEntryTypes().then(r => setEntryTypes(r.items)).catch(() => {});
   }, []);
 
   const handleSubmit = async (data: any) => {

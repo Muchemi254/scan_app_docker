@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { receiptApi, locationsApi, entryTypesApi, settingsApi } from '../services/api';
+import { receiptApi } from '../services/api';
+import { getLocations, getEntryTypes, getTaxPreference } from '../services/referenceData';
 import { useReceiptStore } from '../stores/receiptStore';
 import ReceiptForm from './ReceiptForm';
 import AuditTrail from './AuditTrail';
@@ -191,9 +192,9 @@ const ReviewPanel = ({
 
   // Reference data + the user's personal tax default for the editor.
   useEffect(() => {
-    locationsApi.list().then((r) => setLocations(r.items)).catch(() => {});
-    entryTypesApi.list().then((r) => setEntryTypes(r.items)).catch(() => {});
-    settingsApi.getTaxPreference().then((r) => setDefaultTaxRate(r.default_tax_rate)).catch(() => {});
+    getLocations().then((r) => setLocations(r.items)).catch(() => {});
+    getEntryTypes().then((r) => setEntryTypes(r.items)).catch(() => {});
+    getTaxPreference().then((r) => setDefaultTaxRate(r.default_tax_rate)).catch(() => {});
   }, []);
 
   // Reset editing state when the selected receipt changes

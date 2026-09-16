@@ -9,6 +9,7 @@ import type { AuthUser } from '../services/auth';
 import * as authService from '../services/auth';
 import { useScopeStore } from './scopeStore';
 import { useReceiptStore } from './receiptStore';
+import { invalidateReferenceData } from '../services/referenceData';
 
 export type AuthStatus = 'loading' | 'authenticated' | 'unauthenticated';
 
@@ -26,6 +27,7 @@ export const useAuthStore = create<AuthState>()((set) => ({
 
   signIn: async (email: string, password: string) => {
     const user = await authService.login(email, password);
+    invalidateReferenceData();
     // Enter the new account's own scope (never inherit the previous
     // account's selected workspace).
     useScopeStore.getState().setActiveUid(null);
@@ -41,7 +43,9 @@ export const useAuthStore = create<AuthState>()((set) => ({
   signOut: () => {
     // Clear everything that references the previous session so no protected
     // page keeps rendering after logout (scope was the cause of the "stuck"
-    // page) and later logins start from a clean slate.
+    // page) and later logins start from a clean slate. Also drop cached
+    // per-user prefs so the next login doesn't see the previous user's data.
+    invalidateReferenceData();
     useScopeStore.getState().setActiveUid(null);
     useReceiptStore.getState().reset();
     authService.logout();

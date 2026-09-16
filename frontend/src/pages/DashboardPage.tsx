@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { dashboardApi } from '../services/api';
-import { getIndustries } from '../services/referenceData';
+import { getIndustries, getDashboardYears } from '../services/referenceData';
 import {
   Chart as ChartJS,
   ArcElement, Tooltip, Legend,
@@ -125,7 +125,7 @@ const DashboardPage = ({ userId }: { userId: string | null }) => {
   // fetch years + industries
   useEffect(()=>{
     getIndustries().then(r=> setIndustries(r.items)).catch(()=>{});
-    dashboardApi.years().then(r=>{
+    getDashboardYears().then(r=>{
       const { year: yearAtMount, currentYear: currentYearAtMount } = mountState.current;
       const ys = r.years.length?r.years:[currentYearAtMount];
       setYears(ys);

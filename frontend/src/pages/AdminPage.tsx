@@ -260,6 +260,7 @@ const AdminPage = ({ userId }: Props) => {
       setLocationInput('');
       setNotice(`Added location "${name}"`);
       await loadLocations();
+      invalidateReferenceData();
     } catch (err: any) {
       setError(err?.message || 'Failed to add location');
     } finally {
@@ -275,6 +276,7 @@ const AdminPage = ({ userId }: Props) => {
       await locationsApi.update(loc.id, { is_active: !loc.is_active });
       setNotice(loc.is_active ? `Deactivated "${loc.name}"` : `Activated "${loc.name}"`);
       await loadLocations();
+      invalidateReferenceData();
     } catch (err: any) {
       setError(err?.message || 'Failed to update location');
     } finally {
@@ -299,6 +301,7 @@ const AdminPage = ({ userId }: Props) => {
       setNotice(`Deleted "${loc.name}"`);
       toast.success('Location deleted', `"${loc.name}" was removed.`);
       await loadLocations();
+      invalidateReferenceData();
     } catch (err: any) {
       setError(err?.message || 'Failed to delete location');
       toast.error('Delete failed', err?.message || 'Failed to delete location');
@@ -317,6 +320,7 @@ const AdminPage = ({ userId }: Props) => {
       setEntryTypeName(''); setEntryTypeLabel('');
       setNotice(`Added entry type "${label}"`);
       await loadEntryTypes();
+      invalidateReferenceData();
     } catch (err: any) { setError(err?.message || 'Failed to add entry type'); }
     finally { setSavingEntryTypes(false); }
   };
@@ -326,6 +330,7 @@ const AdminPage = ({ userId }: Props) => {
       await entryTypesApi.update(et.id, { is_active: !et.is_active });
       setNotice(et.is_active ? `Deactivated "${et.label}"` : `Activated "${et.label}"`);
       await loadEntryTypes();
+      invalidateReferenceData();
     } catch (err: any) { setError(err?.message || 'Failed to update entry type'); }
     finally { setSavingEntryTypes(false); }
   };
@@ -333,7 +338,7 @@ const AdminPage = ({ userId }: Props) => {
     if (et.is_system) { setError('System entry types cannot be deleted (deactivate instead)'); return; }
     if (!(await confirm({ title: 'Delete entry type?', message: <>Delete <strong>{et.label}</strong> ({et.name})? Receipts keep their stored type.</> }))) return;
     setSavingEntryTypes(true); setError(''); setNotice('');
-    try { await entryTypesApi.remove(et.id); setNotice(`Deleted "${et.label}"`); toast.success('Entry type deleted', `"${et.label}" was removed.`); await loadEntryTypes(); }
+    try { await entryTypesApi.remove(et.id); setNotice(`Deleted "${et.label}"`); toast.success('Entry type deleted', `"${et.label}" was removed.`); await loadEntryTypes(); invalidateReferenceData(); }
     catch (err: any) { setError(err?.message || 'Failed to delete entry type'); toast.error('Delete failed', err?.message || 'Failed to delete entry type'); }
     finally { setSavingEntryTypes(false); }
   };
