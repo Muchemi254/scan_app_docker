@@ -9,6 +9,8 @@ import ReviewPanel from '../components/ReviewPanel';
 import SearchBar from '../components/SearchBar';
 import ReceiptsTableView from '../components/ReceiptsTableView';
 import { useColumnFilters, filterRowsClient } from '../hooks/useColumnFilters';
+import { getLocations, getEntryTypes } from '../services/referenceData';
+import { toSearchFilters } from '../components/ReceiptFilterBar';
 import ExportNameModal from '../components/ExportNameModal';
 import { exportRowsAsCsv, visibleColumnKeys, defaultExportName } from '../utils/exportTableCsv';
 import type { ReceiptData } from '../types/gemini';
@@ -98,7 +100,14 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
     isZeroRated: '', priceMin: '', priceMax: '',
     dateStart: '', dateEnd: '',
     scanDateStart: '', scanDateEnd: '',
+    entryType: '', location: '', batchTitle: '',
   });
+  const [locationOptions, setLocationOptions] = useState<{ id: string; name: string }[]>([]);
+  const [entryTypeOptions, setEntryTypeOptions] = useState<{ id: string; name: string; label: string }[]>([]);
+  useEffect(() => {
+    getLocations().then(r => setLocationOptions(r.items)).catch(() => {});
+    getEntryTypes().then(r => setEntryTypeOptions(r.items)).catch(() => {});
+  }, []);
 
   const uniqueSuppliers = useMemo(
     () => [...new Set(receipts.map((r: any) => r.supplier).filter(Boolean))].sort(),
@@ -146,19 +155,15 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
 
   const batchParam = new URLSearchParams(window.location.search).get('batch');
   const searchKey = JSON.stringify({ batchParam, filters });
-  const searchFilters = {
-    category: filters.category || undefined,
-    supplier: filters.supplier || undefined,
-    batchTitle: batchParam || undefined,
-    dateFrom: filters.dateStart || undefined,
-    dateTo: filters.dateEnd || undefined,
-    complete: filters.status ? filters.status === 'processed' : undefined,
-    zeroRated: filters.isZeroRated !== '' ? filters.isZeroRated === 'true' : undefined,
-    priceMin: filters.priceMin ? Number(filters.priceMin) : undefined,
-    priceMax: filters.priceMax ? Number(filters.priceMax) : undefined,
-    scanDateFrom: filters.scanDateStart || undefined,
-    scanDateTo: filters.scanDateEnd || undefined,
-  };
+  // Shared helper maps the expanded top-bar keys to the backend query shape.
+  const _topForSearch = {
+    ...filters,
+    batchTitle: batchParam || filters.batchTitle || undefined,
+  } as any;
+  // Legacy `status` -> `complete` mapping kept for ViewScans (processed/needs_review)
+  if (filters.status === 'processed') _topForSearch.complete = 'true';
+  else if (filters.status === 'needs_review') _topForSearch.complete = 'false';
+  const searchFilters = toSearchFilters(_topForSearch);
 
   const parseReceiptTs = (v: string) => {
     if (!v) return null;
@@ -186,9 +191,12 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
     }
 
     const result = (receipts as ReceiptData[]).filter(r => {
-      const batchMatch = batchParam ? (r.batchTitle || '').trim() === batchParam : true;
+      const effectiveBatch = filters.batchTitle || batchParam;
+      const batchMatch = effectiveBatch ? (r.batchTitle || '').trim().toLowerCase().includes(effectiveBatch.trim().toLowerCase()) : true;
       const categoryMatch = filters.category ? r.category === filters.category : true;
       const supplierMatch = filters.supplier ? r.supplier === filters.supplier : true;
+      const entryTypeMatch = filters.entryType ? (r.entryType || 'expense') === filters.entryType : true;
+      const locationMatch = filters.location ? (r.location || '').toLowerCase().includes(filters.location.toLowerCase()) : true;
       const statusMatch = filters.status
         ? filters.status === 'processed' ? isComplete(r) : !isComplete(r)
         : true;
@@ -217,7 +225,7 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
         const e = parseFilterBound(filters.scanDateEnd, true);
         return (s === null || ts >= s) && (e === null || ts <= e);
       })();
-      return batchMatch && categoryMatch && supplierMatch && statusMatch && zeroRatedMatch && priceMatch && dateMatch && scanDateMatch;
+      return batchMatch && categoryMatch && supplierMatch && entryTypeMatch && locationMatch && statusMatch && zeroRatedMatch && priceMatch && dateMatch && scanDateMatch;
     });
 
     // Apply Sorting
@@ -481,6 +489,15 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
             <option value="">All Suppliers</option>
             {uniqueSuppliers.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
+          <select value={filters.entryType} onChange={e => setFilters(f => ({ ...f, entryType: e.target.value }))} className="px-2 py-1 text-xs border rounded bg-white">
+            <option value="">All Types</option>
+            {entryTypeOptions.map(o => <option key={o.name} value={o.name}>{o.label}</option>)}
+          </select>
+          <select value={filters.location} onChange={e => setFilters(f => ({ ...f, location: e.target.value }))} className="px-2 py-1 text-xs border rounded bg-white">
+            <option value="">All Locations</option>
+            {locationOptions.map(o => <option key={o.id} value={o.name}>{o.name}</option>)}
+          </select>
+          <input type="text" value={filters.batchTitle} onChange={e => setFilters(f => ({ ...f, batchTitle: e.target.value }))} placeholder="Batch" className="px-2 py-1 text-xs border rounded bg-white w-28" title="Filter by batch title" />
           <select value={filters.status} onChange={e => setFilters(f => ({ ...f, status: e.target.value }))} className="px-2 py-1 text-xs border rounded bg-white">
             <option value="">All Statuses</option>
             <option value="processed">Processed</option>
@@ -497,7 +514,7 @@ const ViewScansPage = ({ userId }: { userId: string | null }) => {
 
           {Object.values(filters).some(Boolean) && (
             <button
-              onClick={() => setFilters({ category: '', supplier: '', status: '', isZeroRated: '', priceMin: '', priceMax: '', dateStart: '', dateEnd: '', scanDateStart: '', scanDateEnd: '' })}
+              onClick={() => setFilters({ category: '', supplier: '', status: '', isZeroRated: '', priceMin: '', priceMax: '', dateStart: '', dateEnd: '', scanDateStart: '', scanDateEnd: '', entryType: '', location: '', batchTitle: '' })}
               className="px-2 py-1 text-xs text-red-600 border border-red-200 rounded hover:bg-red-50"
             >Clear</button>
           )}

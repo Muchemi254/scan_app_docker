@@ -12,6 +12,7 @@ import ReviewPanel from '../components/ReviewPanel';
 import SearchBar from '../components/SearchBar';
 import ReceiptsTableView from '../components/ReceiptsTableView';
 import { useColumnFilters, filterRowsClient } from '../hooks/useColumnFilters';
+import { getLocations, getEntryTypes } from '../services/referenceData';
 import ExportNameModal from '../components/ExportNameModal';
 import { exportRowsAsCsv, visibleColumnKeys, defaultExportName } from '../utils/exportTableCsv';
 import { ChevronDown, ChevronRight, Table2, LayoutGrid } from 'lucide-react';
@@ -58,7 +59,14 @@ const MyApprovalsPage = () => {
   // Client-side filters (same pattern as the main receipts list)
   const [filters, setFilters] = useState({
     category: '', supplier: '', dateStart: '', dateEnd: '',
+    entryType: '', location: '', batchTitle: '',
   });
+  const [locationOptions, setLocationOptions] = useState<{ id: string; name: string }[]>([]);
+  const [entryTypeOptions, setEntryTypeOptions] = useState<{ id: string; name: string; label: string }[]>([]);
+  useEffect(() => {
+    getLocations().then(r => setLocationOptions(r.items)).catch(() => {});
+    getEntryTypes().then(r => setEntryTypeOptions(r.items)).catch(() => {});
+  }, []);
 
   // View modal — shows the shared ReviewPanel with admin actions disabled
   const [viewTarget, setViewTarget] = useState<any | null>(null);
@@ -163,12 +171,15 @@ const MyApprovalsPage = () => {
       list.filter((r: any) => {
         const catMatch = filters.category ? r.category === filters.category : true;
         const supMatch = filters.supplier ? r.supplier === filters.supplier : true;
-        if (!filters.dateStart && !filters.dateEnd) return catMatch && supMatch;
+        const entryMatch = filters.entryType ? (r.entryType || r.entry_type || 'expense') === filters.entryType : true;
+        const locMatch = filters.location ? (r.location || '').toLowerCase().includes(filters.location.toLowerCase()) : true;
+        const batchMatch = filters.batchTitle ? (r.batchTitle || r.batch_title || '').toLowerCase().includes(filters.batchTitle.toLowerCase()) : true;
+        if (!filters.dateStart && !filters.dateEnd) return catMatch && supMatch && entryMatch && locMatch && batchMatch;
         const ts = parseReceiptTs(r.receiptDate || r.receipt_date || '');
         if (ts === null) return false;
         const s = parseFilterBound(filters.dateStart, false);
         const e = parseFilterBound(filters.dateEnd, true);
-        return catMatch && supMatch && (s === null || ts >= s) && (e === null || ts <= e);
+        return catMatch && supMatch && entryMatch && locMatch && batchMatch && (s === null || ts >= s) && (e === null || ts <= e);
       }),
     [filters],
   );
@@ -261,6 +272,9 @@ const MyApprovalsPage = () => {
     status: tab === 'pending' ? 'pending_approval' : tab === 'approved' ? 'processed' : 'needs_review',
     category: filters.category || undefined,
     supplier: filters.supplier || undefined,
+    batchTitle: filters.batchTitle || undefined,
+    location: filters.location || undefined,
+    entryType: filters.entryType || undefined,
     dateFrom: filters.dateStart || undefined,
     dateTo: filters.dateEnd || undefined,
     rejected: tab === 'rejected' ? true : undefined,
@@ -338,7 +352,7 @@ const MyApprovalsPage = () => {
   ];
 
   const clearAll = () => {
-    setFilters({ category: '', supplier: '', dateStart: '', dateEnd: '' });
+    setFilters({ category: '', supplier: '', dateStart: '', dateEnd: '', entryType: '', location: '', batchTitle: '' });
     onSearchClear();
   };
 
@@ -381,6 +395,15 @@ const MyApprovalsPage = () => {
             <option value="">All Suppliers</option>
             {uniqueSuppliers.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
+          <select value={filters.entryType} onChange={(e) => setFilters((f) => ({ ...f, entryType: e.target.value }))} className="px-2 py-1 text-xs border rounded bg-white">
+            <option value="">All Types</option>
+            {entryTypeOptions.map(o => <option key={o.name} value={o.name}>{o.label}</option>)}
+          </select>
+          <select value={filters.location} onChange={(e) => setFilters((f) => ({ ...f, location: e.target.value }))} className="px-2 py-1 text-xs border rounded bg-white">
+            <option value="">All Locations</option>
+            {locationOptions.map(o => <option key={o.id} value={o.name}>{o.name}</option>)}
+          </select>
+          <input type="text" value={filters.batchTitle} onChange={(e) => setFilters((f) => ({ ...f, batchTitle: e.target.value }))} placeholder="Batch" className="px-2 py-1 text-xs border rounded bg-white w-28" title="Filter by batch" />
           <input type="date" value={filters.dateStart} onChange={(e) => setFilters((f) => ({ ...f, dateStart: e.target.value }))} className="px-2 py-1 text-xs border rounded bg-white" title="Receipt Date Start" />
           <input type="date" value={filters.dateEnd} onChange={(e) => setFilters((f) => ({ ...f, dateEnd: e.target.value }))} className="px-2 py-1 text-xs border rounded bg-white" title="Receipt Date End" />
           {(Object.values(filters).some(Boolean) || searchResults !== null) && (

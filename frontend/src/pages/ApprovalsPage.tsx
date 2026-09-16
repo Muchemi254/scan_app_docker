@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { receiptApi } from '../services/api';
+import { getLocations, getEntryTypes } from '../services/referenceData';
 import { useAuthStore } from '../stores/authStore';
 import { receiptStatusLabel, receiptStatusClass } from '../utils/receiptStatus';
 import ReviewPanel from '../components/ReviewPanel';
@@ -32,7 +33,9 @@ const ApprovalsPage = () => {
   const [searchResults, setSearchResults] = useState<any[] | null>(null);
   const [searchTotal, setSearchTotal] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
-  const [filters, setFilters] = useState({ category: '', batch: '' });
+  const [filters, setFilters] = useState({ category: '', batch: '', supplier: '', entryType: '', location: '' });
+  const [locationOptions, setLocationOptions] = useState<{ id: string; name: string }[]>([]);
+  const [entryTypeOptions, setEntryTypeOptions] = useState<{ id: string; name: string; label: string }[]>([]);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedReceipt, setSelectedReceipt] = useState<any | null>(null);
@@ -66,7 +69,11 @@ const ApprovalsPage = () => {
   }, []);
 
   useEffect(() => {
-    if (isAdmin) load();
+    if (isAdmin) {
+      load();
+      getLocations().then(r => setLocationOptions(r.items)).catch(() => {});
+      getEntryTypes().then(r => setEntryTypeOptions(r.items)).catch(() => {});
+    }
   }, [isAdmin, load]);
 
   const onSearchResults = (results: any[], t: number) => {
@@ -86,6 +93,9 @@ const ApprovalsPage = () => {
   const searchFilters = {
     category: filters.category || undefined,
     batchTitle: filters.batch || undefined,
+    supplier: filters.supplier || undefined,
+    location: filters.location || undefined,
+    entryType: (filters as any).entryType || undefined,
   };
   async function loadSearchPage(pageNum: number) {
     if (!searchQuery.trim()) return;
@@ -232,7 +242,10 @@ const ApprovalsPage = () => {
       sourceRows.filter((r: any) => {
         const catMatch = filters.category ? r.category === filters.category : true;
         const batchMatch = filters.batch ? (r.batch_title || '') === filters.batch : true;
-        return catMatch && batchMatch;
+        const supMatch = filters.supplier ? (r.supplier || '').toLowerCase().includes(filters.supplier.toLowerCase()) : true;
+        const locMatch = filters.location ? (r.location || '').toLowerCase().includes(filters.location.toLowerCase()) : true;
+        const typeMatch = (filters as any).entryType ? (r.entry_type || r.entryType || 'expense') === (filters as any).entryType : true;
+        return catMatch && batchMatch && supMatch && locMatch && typeMatch;
       }),
     [sourceRows, filters],
   );
@@ -349,9 +362,20 @@ const ApprovalsPage = () => {
             <option value="">All Batches</option>
             {uniqueBatches.map(b => <option key={b} value={b}>{b}</option>)}
           </select>
+        </div>
+        <div className="flex gap-2">
+          <select value={(filters as any).entryType} onChange={e => setFilters(f => ({ ...f, entryType: e.target.value } as any))} className="px-2 py-1 text-xs border rounded bg-white flex-1 min-w-0">
+            <option value="">All Types</option>
+            {entryTypeOptions.map(o => <option key={o.name} value={o.name}>{o.label}</option>)}
+          </select>
+          <input type="text" value={filters.supplier} onChange={e => setFilters(f => ({ ...f, supplier: e.target.value }))} placeholder="Supplier" className="px-2 py-1 text-xs border rounded bg-white flex-1 min-w-0" />
+          <select value={filters.location} onChange={e => setFilters(f => ({ ...f, location: e.target.value }))} className="px-2 py-1 text-xs border rounded bg-white flex-1 min-w-0">
+            <option value="">All Locations</option>
+            {locationOptions.map(o => <option key={o.id} value={o.name}>{o.name}</option>)}
+          </select>
           {(Object.values(filters).some(Boolean) || searchResults !== null) && (
             <button
-              onClick={() => { setFilters({ category: '', batch: '' }); onSearchClear(); }}
+              onClick={() => { setFilters({ category: '', batch: '', supplier: '', location: '', entryType: '' }); onSearchClear(); }}
               className="px-2 py-1 text-xs text-red-600 border border-red-200 rounded hover:bg-red-50 flex-shrink-0"
             >Clear</button>
           )}
