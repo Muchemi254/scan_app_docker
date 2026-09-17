@@ -36,7 +36,10 @@ from app.services.receipt_workflow_service import (
     reject as workflow_reject,
     is_admin_actor,
 )
-from app.services.database_service import save_image, save_thumbnail, save_pdf, save_pdf_thumbnail, delete_receipt_images
+from app.services.database_service import (
+    save_image, save_thumbnail, save_pdf, save_pdf_thumbnail, delete_receipt_images,
+    save_receipt_image_file, save_receipt_thumbnail_file,
+)
 from app.services.firebase_service import StorageService
 from app.services.gemini import extract_receipt_data
 from app.services.image_service import process_image, generate_thumbnail, prepare_for_ai
@@ -113,18 +116,18 @@ def _gather_uploads(file: Optional[UploadFile], files: Optional[List[UploadFile]
     return uploads
 
 
-async def _prepare_uploads(uploads: List[UploadFile]) -> tuple:
-    """Read + normalize a receipt's upload(s).
+async def _prepare_uploads(uploads: List[UploadFile]) -> List[dict]:
+    """Read + normalize each uploaded file into its own prepared image.
 
-    Returns ``(processed_bytes, mime_type, pdf_page_count)``.
-
-    - one file: unchanged behavior — image optimized to JPEG, or a PDF kept raw
-      (page cap enforced)
-    - multiple files: each must be an image; they are combined, in order, into
-      ONE multi-page PDF so the receipt holds every page. ``pdf_page_count`` is
-      the number of images combined.
+    Returns an ordered list of ``{bytes, mime, sha256, pdf_page_count}`` —
+    ONE entry per uploaded file (a receipt holds 1..N images; nothing is
+    merged). Images go through ``process_image`` (magic-byte validation,
+    HEIC→JPEG, EXIF rotate, resize); a single PDF is kept raw (page cap
+    enforced). The sha256 is of the stored bytes, used for dedup.
     """
-    prepared: List[tuple] = []  # (bytes, mime)
+    import hashlib
+
+    prepared: List[dict] = []
     for f in uploads:
         if not f.content_type or f.content_type not in _UPLOAD_ALLOWED:
             raise HTTPException(
@@ -135,96 +138,126 @@ async def _prepare_uploads(uploads: List[UploadFile]) -> tuple:
         if len(contents) > settings.MAX_UPLOAD_SIZE:
             raise HTTPException(status_code=413, detail="File too large")
         if _is_pdf_upload(contents, f.content_type):
-            _check_pdf_pages(contents)
-            prepared.append((contents, PDF_MIME))
+            pages = _check_pdf_pages(contents)
+            prepared.append({
+                "bytes": contents, "mime": PDF_MIME,
+                "sha256": hashlib.sha256(contents).hexdigest(),
+                "pdf_page_count": pages,
+            })
         else:
             processed, ptype = process_image(contents, f.content_type or "image/jpeg")
-            prepared.append((processed, ptype))
+            prepared.append({
+                "bytes": processed, "mime": ptype,
+                "sha256": hashlib.sha256(processed).hexdigest(),
+                "pdf_page_count": None,
+            })
 
     if not prepared:
         raise HTTPException(status_code=400, detail="No file uploaded")
 
-    if len(prepared) == 1:
-        return prepared[0][0], prepared[0][1], None
-
-    # Multiple files → combine into one multi-page PDF (one image per page).
-    if any(mime == PDF_MIME for _, mime in prepared):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Multiple images can be combined into one receipt, but a PDF cannot be merged with other files",
-        )
-    cap = settings.MAX_PDF_PAGES
+    cap = settings.MAX_RECEIPT_IMAGES
     if cap and len(prepared) > cap:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Too many images to combine — maximum supported is {cap}",
+            detail=f"Too many images — a receipt can hold at most {cap}.",
         )
-    from app.services.pdf_service import images_to_pdf
-    try:
-        pdf_bytes = images_to_pdf([b for b, _ in prepared])
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
-    return pdf_bytes, PDF_MIME, len(prepared)
+    return prepared
 
 
-def _ai_payload(processed: bytes, processed_type: str) -> tuple:
-    """The bytes + mime the AI should receive for an extraction.
+def _ai_payloads(prepared: List[dict]) -> List[tuple]:
+    """The (bytes, mime) pairs the AI should receive for one extraction.
 
-    The scan pipeline stores a high-quality copy (``process_image``) but sends a
-    downscaled ``prepare_for_ai`` copy so token cost / OCR behaviour are
-    identical. Manual extract must follow the same rule — otherwise it would
-    send the full stored-quality image. PDFs pass through unchanged (the
-    provider layer renders/normalizes their pages).
+    Stored copies are high-quality; the AI gets the downscaled
+    ``prepare_for_ai`` copy for images (matching the scan pipeline). PDFs pass
+    through unchanged (the provider layer renders/normalizes their pages).
     """
-    if processed_type == PDF_MIME:
-        return processed, processed_type
-    return prepare_for_ai(processed), "image/jpeg"
+    out = []
+    for p in prepared:
+        if p["mime"] == PDF_MIME:
+            out.append((p["bytes"], PDF_MIME))
+        else:
+            out.append((prepare_for_ai(p["bytes"]), "image/jpeg"))
+    return out
 
 
-async def _append_to_existing(receipt_id: str, processed: bytes, processed_type: str, current: dict) -> tuple:
-    """Combine newly uploaded pages with a receipt's already-stored file.
+def _persist_prepared_images(receipt_id: str, prepared: List[dict]) -> List[dict]:
+    """Write each prepared file + thumbnail to disk. Returns the image dicts.
 
-    Returns ``(pdf_bytes, PDF_MIME, page_count)`` — an edit that adds a page
-    to an existing (review OR processed) receipt. Falls back to the plain new
-    upload when the receipt has no readable image, so the edit never fails
-    just because the old bytes are missing.
+    Each image gets its own id and ``{image_id}.jpg|.pdf`` / ``{image_id}_thumb.jpg``
+    files; the returned dicts are handed to ``create_receipt``/``update_receipt``
+    which insert the ``receipt_images`` rows and mirror the bytes.
     """
-    from app.services.database_service import read_receipt_file
-    from app.services.pdf_service import images_to_pdf, merge_pdfs, pdf_page_count
+    import uuid as _uuid
 
-    existing_bytes = None
-    existing_media = None
+    out: List[dict] = []
+    for p in prepared:
+        image_id = _uuid.uuid4().hex
+        if p["mime"] == PDF_MIME:
+            filename = save_receipt_image_file(image_id, p["bytes"], PDF_MIME)
+            thumb_name = None
+            try:
+                from app.services.pdf_service import render_first_page
+                thumb = render_first_page(p["bytes"])
+                if thumb:
+                    thumb_name = save_receipt_thumbnail_file(image_id, thumb)
+            except Exception:
+                logger.warning("PDF thumbnail failed for %s", image_id, exc_info=True)
+            out.append({
+                "id": image_id,
+                "image_filename": filename,
+                "thumbnail_filename": thumb_name,
+                "file_type": PDF_MIME,
+                "pdf_page_count": p.get("pdf_page_count"),
+                "image_sha256": p["sha256"],
+            })
+        else:
+            filename = save_receipt_image_file(image_id, p["bytes"], "image/jpeg")
+            thumb = generate_thumbnail(p["bytes"], "image/jpeg")
+            thumb_name = save_receipt_thumbnail_file(image_id, thumb) if thumb else None
+            out.append({
+                "id": image_id,
+                "image_filename": filename,
+                "thumbnail_filename": thumb_name,
+                "file_type": "image/jpeg",
+                "pdf_page_count": None,
+                "image_sha256": p["sha256"],
+            })
+    return out
+
+
+async def _assert_no_duplicate_images(
+    user_id: str, prepared: List[dict], exclude_receipt_id: Optional[str] = None
+) -> None:
+    """Raise 409 when an uploaded image already belongs to another receipt.
+
+    The error detail is structured so the client can show "already used in
+    <supplier>" with a link to that receipt.
+    """
+    hashes = [p["sha256"] for p in prepared if p.get("sha256")]
+    if not hashes:
+        return
+    existing = await DataService.find_receipts_by_image_hashes(user_id, hashes)
+    conflict_id = next(
+        (rid for rid in existing.values() if rid and rid != exclude_receipt_id),
+        None,
+    )
+    if not conflict_id:
+        return
+    supplier = None
     try:
-        existing_bytes, existing_media = await read_receipt_file(receipt_id)
+        row = await DataService.get_receipt(user_id, conflict_id)
+        supplier = (row or {}).get("supplier")
     except Exception:
-        logger.warning("Could not read existing file for append on %s", receipt_id, exc_info=True)
-
-    if not existing_bytes:
-        return processed, processed_type, None
-
-    if existing_media == PDF_MIME:
-        combined = merge_pdfs(existing_bytes, processed if processed_type == PDF_MIME else images_to_pdf([processed]))
-    elif processed_type == PDF_MIME:
-        combined = merge_pdfs(images_to_pdf([existing_bytes]), processed)
-    else:
-        # Existing single image + newly added image(s).
-        combined = images_to_pdf([existing_bytes, processed])
-
-    try:
-        count = pdf_page_count(combined)
-    except ValueError:
-        count = None
-    cap = settings.MAX_PDF_PAGES
-    if cap and count and count > cap:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Adding these page(s) would make {count} pages — maximum supported is {cap}",
-        )
-
-    # The combined PDF replaces the receipt's previous file(s); remove the old
-    # artifacts now that their bytes are safely in memory.
-    delete_receipt_images(receipt_id)
-    return combined, PDF_MIME, count
+        pass
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "code": "DUPLICATE_IMAGE",
+            "message": "This image is already used on another receipt.",
+            "receiptId": conflict_id,
+            "supplier": supplier,
+        },
+    )
 
 
 # ============================================================================
@@ -318,21 +351,32 @@ async def extract_receipt_from_image(
     await verify_user_access(userId, current_user_id)
 
     try:
-        # One file → image or PDF; multiple images → combined into one PDF
-        # (so a receipt that spans several photos extracts as one receipt).
+        # All uploaded files belong to ONE receipt (a long receipt captured as
+        # several photos). Each image is sent to the AI as its own part.
         uploads = _gather_uploads(file, files)
-        processed, processed_type, _page_count = await _prepare_uploads(uploads)
+        prepared = await _prepare_uploads(uploads)
+        hashes = [p["sha256"] for p in prepared if p.get("sha256")]
+        existing = await DataService.find_receipts_by_image_hashes(userId, hashes) if hashes else {}
+        conflict_id = next((r for r in existing.values() if r), None)
 
-        # Same AI rule as the scan worker: send the downscaled copy, never the
-        # stored-quality original.
-        ai_bytes, ai_mime = _ai_payload(processed, processed_type)
-
-        # Convert to base64 for the provider
         import base64
-        base64_data = base64.standard_b64encode(ai_bytes).decode()
+        ai_images = [
+            (base64.standard_b64encode(b).decode(), m)
+            for b, m in _ai_payloads(prepared)
+        ]
 
         # Extract using provider (images → JPEG; PDFs converted per provider)
-        receipt = await extract_receipt_data(base64_data, ai_mime, userId, industry_id=industry_id)
+        receipt = await extract_receipt_data(user_id=userId, industry_id=industry_id, images=ai_images)
+
+        # Surface an existing-image warning without blocking the (unsaved)
+        # extraction — the create call enforces dedup.
+        if conflict_id:
+            try:
+                row = await DataService.get_receipt(userId, conflict_id)
+                receipt.duplicateOfReceiptId = conflict_id
+                receipt.duplicateOfSupplier = (row or {}).get("supplier")
+            except Exception:
+                pass
 
         return receipt
 
@@ -346,6 +390,51 @@ async def extract_receipt_from_image(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Image extraction failed"
         )
+
+
+@router.post(
+    "/{userId}/receipts/check-images",
+    summary="Check whether uploaded images already belong to a receipt"
+)
+async def check_images_duplicate(
+    userId: str,
+    files: List[UploadFile] = File(default=[]),
+    exclude_receipt_id: Optional[str] = Form(None),
+    current_user_id: str = Depends(get_current_user_id),
+):
+    """Dry-run dedup for the image manager modal.
+
+    Processes each uploaded image the same way storage does (so the sha256
+    matches the stored one) and returns any that already exist on another
+    receipt, with that receipt's id + supplier for a "view it" link. Never
+    stores anything.
+    """
+    await verify_user_access(userId, current_user_id)
+    if not files:
+        return {"conflicts": []}
+
+    prepared = await _prepare_uploads(files)
+    hashes = [p["sha256"] for p in prepared if p.get("sha256")]
+    existing = await DataService.find_receipts_by_image_hashes(userId, hashes) if hashes else {}
+
+    conflicts = []
+    for idx, p in enumerate(prepared):
+        rid = existing.get(p["sha256"])
+        if not rid or rid == exclude_receipt_id:
+            continue
+        supplier = None
+        try:
+            row = await DataService.get_receipt(userId, rid)
+            supplier = (row or {}).get("supplier")
+        except Exception:
+            pass
+        conflicts.append({
+            "index": idx,
+            "sha256": p["sha256"],
+            "receiptId": rid,
+            "supplier": supplier,
+        })
+    return {"conflicts": conflicts}
 
 
 @router.post(
@@ -364,8 +453,8 @@ async def create_receipt(
     """
     Create a new receipt.
     receipt_data: JSON-encoded ReceiptCreate (sent as a single form field).
-    Send one file via `file`, or several images via `files` (combined into one
-    multi-page PDF so one receipt can hold multiple images).
+    Send one file via `file`, or several images via `files`; each is stored as
+    its own image and the receipt holds all of them (up to MAX_RECEIPT_IMAGES).
     """
     await verify_user_access(userId, current_user_id)
 
@@ -393,50 +482,30 @@ async def create_receipt(
         import uuid as _uuid
         receipt_id = str(_uuid.uuid4())
 
-        # Upload image(s) if provided
+        # Upload image(s) if provided — each becomes its own stored image.
         image_url = parsed.imageUrl
-        image_filename = None
-        thumbnail_filename = None
-        file_type = None
-        pdf_page_count = None
         uploads = _gather_uploads(file, files)
+        images_payload = None
         if uploads:
-            processed, processed_type, combined_pages = await _prepare_uploads(uploads)
-
+            prepared = await _prepare_uploads(uploads)
+            await _assert_no_duplicate_images(userId, prepared)
             if settings.USE_POSTGRES:
-                if processed_type == PDF_MIME:
-                    image_filename = save_pdf(receipt_id, processed)
-                    thumb_name = save_pdf_thumbnail(receipt_id, processed)
-                    if thumb_name:
-                        thumbnail_filename = thumb_name
-                    file_type = PDF_MIME
-                    pdf_page_count = combined_pages or _check_pdf_pages(processed)
-                else:
-                    thumb = generate_thumbnail(processed, processed_type or "image/jpeg")
-                    image_filename = save_image(receipt_id, processed)
-                    if thumb:
-                        save_thumbnail(receipt_id, thumb)
-                    file_type = "image/jpeg"
+                images_payload = _persist_prepared_images(receipt_id, prepared)
             else:
-                # Legacy firestore path — images only (PDF parity deferred)
-                thumb = generate_thumbnail(processed, processed_type or "image/jpeg")
+                # Legacy firestore path — single-image parity only.
+                p = prepared[0]
+                thumb = generate_thumbnail(p["bytes"], p["mime"])
                 base = f"receipt_{int(datetime.utcnow().timestamp())}"
                 image_url, _ = await StorageService.upload_receipt_images(
-                    userId, base, processed, thumb,
+                    userId, base, p["bytes"], thumb,
                 )
 
         # Prepare data for storage
         data = parsed.model_dump(exclude_unset=True)
         data["userId"] = userId
         if settings.USE_POSTGRES:
-            if image_filename:
-                data["image_filename"] = image_filename
-                if file_type:
-                    data["fileType"] = file_type
-                if pdf_page_count:
-                    data["pdfPageCount"] = pdf_page_count
-                if thumbnail_filename:
-                    data["thumbnail_filename"] = thumbnail_filename
+            if images_payload:
+                data["images"] = images_payload
         else:
             if image_url:
                 data["imageUrl"] = image_url
@@ -746,67 +815,39 @@ async def update_receipt(
             if not (location or "").strip():
                 raise location_required_for_processed()
 
-        # Upload new image(s) if provided.
-        #   appendImages=True  → add the new pages to the receipt's existing
-        #                        image/PDF (one receipt gains a page).
-        #   otherwise          → replace the stored image(s).
+        # Image edits: remove some existing images and/or append new ones.
+        # The modal sends `removeImageIds` (JSON in receipt_data) and new files
+        # via `files`. Nothing is merged — each file stays its own image.
         image_url = current.get("imageUrl")
-        image_filename = None
-        thumbnail_filename = None
-        file_type = None
-        pdf_page_count = None
-        uploads = _gather_uploads(file, files)
-        if uploads:
-            processed, processed_type, combined_pages = await _prepare_uploads(uploads)
-            append = bool(updates.appendImages)
-
-            if settings.USE_POSTGRES:
-                if append:
-                    processed, processed_type, combined_pages = await _append_to_existing(
-                        receiptId, processed, processed_type, current
-                    )
-                elif processed_type == PDF_MIME:
-                    # Replace: drop the old file(s) so a .jpg→.pdf (or back)
-                    # switch never leaves an orphan behind.
-                    delete_receipt_images(receiptId)
-
-                if processed_type == PDF_MIME:
-                    # Non-append PDFs were already cleaned above; the old files
-                    # of an appended receipt are removed inside _append_to_existing.
-                    image_filename = save_pdf(receiptId, processed)
-                    thumb_name = save_pdf_thumbnail(receiptId, processed)
-                    if thumb_name:
-                        thumbnail_filename = thumb_name
-                    file_type = PDF_MIME
-                    pdf_page_count = combined_pages or _check_pdf_pages(processed)
-                else:
-                    # Plain single-image replace (append never reaches here).
-                    delete_receipt_images(receiptId)
-                    thumb = generate_thumbnail(processed, processed_type or "image/jpeg")
-                    image_filename = save_image(receiptId, processed)
-                    if thumb:
-                        save_thumbnail(receiptId, thumb)
-                    file_type = "image/jpeg"
-            else:
-                base = f"receipt_{int(datetime.utcnow().timestamp())}"
-                thumb = generate_thumbnail(processed, processed_type or "image/jpeg")
-                image_url, _ = await StorageService.upload_receipt_images(
-                    userId, base, processed, thumb,
-                )
-
-        # Prepare update data
         data = updates.model_dump(exclude_unset=True)
-        data.pop("appendImages", None)  # API-only flag, not a receipt column
-        if uploads:
-            if settings.USE_POSTGRES:
-                data["image_filename"] = image_filename
-                if file_type:
-                    data["fileType"] = file_type
-                if pdf_page_count:
-                    data["pdfPageCount"] = pdf_page_count
-                if thumbnail_filename:
-                    data["thumbnail_filename"] = thumbnail_filename
-            else:
+        remove_ids = data.pop("removeImageIds", None) or []
+
+        uploads = _gather_uploads(file, files)
+        current_count = len(current.get("images") or [])
+
+        if settings.USE_POSTGRES:
+            remaining = current_count - len(remove_ids)
+            if uploads:
+                prepared = await _prepare_uploads(uploads)
+                cap = settings.MAX_RECEIPT_IMAGES
+                if cap and remaining + len(prepared) > cap:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"A receipt can hold at most {cap} images.",
+                    )
+                await _assert_no_duplicate_images(userId, prepared, exclude_receipt_id=receiptId)
+                data["images"] = _persist_prepared_images(receiptId, prepared)
+            if remove_ids:
+                data["removeImageIds"] = remove_ids
+        else:
+            # Legacy firestore path — single-image parity only.
+            if uploads:
+                p = (await _prepare_uploads(uploads))[0]
+                base = f"receipt_{int(datetime.utcnow().timestamp())}"
+                thumb = generate_thumbnail(p["bytes"], p["mime"])
+                image_url, _ = await StorageService.upload_receipt_images(
+                    userId, base, p["bytes"], thumb,
+                )
                 data["imageUrl"] = image_url
 
         # Audit log before update

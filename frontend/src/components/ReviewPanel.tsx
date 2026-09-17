@@ -37,6 +37,7 @@ const ReceiptSummary = ({ data, showImage = true }: { data: ReceiptData; showIma
     {showImage && data.imageUrl && (
       <div>
         <ImageViewer
+          images={data.images}
           imageUrl={data.imageUrl}
           altText="Receipt"
           containerClass="h-44 sm:h-60"
@@ -175,6 +176,7 @@ const ReviewPanel = ({
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [newImages, setNewImages] = useState<File[]>([]);
+  const [removedImageIds, setRemovedImageIds] = useState<string[]>([]);
   const [showUnsavedModal, setShowUnsavedModal] = useState(false);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
@@ -186,6 +188,7 @@ const ReviewPanel = ({
   const [approveMode, setApproveMode] = useState<'view' | 'edit'>('view');
   const [approveDraft, setApproveDraft] = useState<ReceiptData | null>(null);
   const [approveDraftImages, setApproveDraftImages] = useState<File[]>([]);
+  const [approveDraftRemovedIds, setApproveDraftRemovedIds] = useState<string[]>([]);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectNote, setRejectNote] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
@@ -202,6 +205,7 @@ const ReviewPanel = ({
   useEffect(() => {
     setEditing(false);
     setNewImages([]);
+    setRemovedImageIds([]);
   }, [receipt.id]);
 
   useEffect(() => {
@@ -235,6 +239,8 @@ const ReviewPanel = ({
       if (useStore) upsert(updated);
       setEditing(false);
       setNewImages([]);
+      setRemovedImageIds([]);
+    setRemovedImageIds([]);
       onSaved?.(updated);
       toast.success('Receipt updated', 'Changes saved successfully');
     } catch (error) {
@@ -305,6 +311,7 @@ const ReviewPanel = ({
     setActionError(null);
     setApproveDraft(receipt);
     setApproveDraftImages([]);
+    setApproveDraftRemovedIds([]);
     setApproveMode('view');
     setApproveOpen(true);
   };
@@ -345,6 +352,8 @@ const ReviewPanel = ({
       );
       setApproveDraft(updated);
       setApproveDraftImages([]);
+      setApproveDraftRemovedIds([]);
+    setApproveDraftRemovedIds([]);
       setApproveMode('view');
       onSaved?.(updated);
       toast.success('Receipt updated', 'Draft saved');
@@ -450,6 +459,7 @@ const ReviewPanel = ({
                       </div>
                       <div className="p-2 flex-1">
                         <ImageViewer
+                          images={(approveDraft.images || []).filter((im: any) => !(im.id && approveDraftRemovedIds.includes(im.id)))}
                           imageUrl={approveDraftImages.length ? URL.createObjectURL(approveDraftImages[0]) : (approveDraft.imageUrl || '')}
                           altText="Receipt"
                           containerClass="h-40 sm:h-56 lg:h-full lg:min-h-[50vh]"
@@ -463,7 +473,9 @@ const ReviewPanel = ({
                     <ReceiptForm
                       initialData={approveDraft}
                       onSubmit={saveApproveDraft}
-                      onImageChange={setApproveDraftImages}
+                      onImagesChange={(pending, removed) => { setApproveDraftImages(pending); setApproveDraftRemovedIds(removed); }}
+                      pendingImages={approveDraftImages}
+                      removedImageIds={approveDraftRemovedIds}
                       loading={loading}
                       isAdmin={isAdmin}
                       locations={locations}
@@ -639,6 +651,7 @@ const ReviewPanel = ({
                 </div>
                 <div className="p-2 lg:flex-1">
                   <ImageViewer
+                    images={(receipt.images || []).filter(im => !(im.id && removedImageIds.includes(im.id)))}
                     imageUrl={imageUrl}
                     altText="Receipt"
                     containerClass="h-36 sm:h-48 lg:h-full lg:min-h-[50vh]"
@@ -654,7 +667,9 @@ const ReviewPanel = ({
               <ReceiptForm
                 initialData={receipt}
                 onSubmit={handleUpdate}
-                onImageChange={setNewImages}
+                onImagesChange={(pending, removed) => { setNewImages(pending); setRemovedImageIds(removed); }}
+                pendingImages={newImages}
+                removedImageIds={removedImageIds}
                 loading={loading}
                 isAdmin={isAdmin}
                 locations={locations}
@@ -672,6 +687,7 @@ const ReviewPanel = ({
               <div className="mt-4">
                 <h4 className="font-semibold text-gray-700 mb-2">Receipt Image</h4>
                 <ImageViewer
+                  images={receipt.images}
                   imageUrl={receipt.imageUrl}
                   altText="Receipt"
                   containerClass="h-56 sm:h-80 md:h-96"

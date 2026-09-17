@@ -17,6 +17,7 @@ import logging
 import json
 import os
 import re
+import uuid
 from datetime import datetime, timezone, date
 from decimal import Decimal
 from typing import Optional, List, Dict, Any
@@ -130,24 +131,80 @@ _RECEIPT_SORT_COLUMNS = {
 }
 
 
+def image_dict_for_cover(rid: str, file_type=None, pdf_page_count=None, sort_order: int = 0) -> Dict[str, Any]:
+    """The single-image URL pair for a receipt's cover (index 0).
+
+    Kept for backward compatibility: ``imageUrl``/``thumbnailUrl`` point at
+    the first image, while ``images[]`` carries the full ordered set.
+    """
+    return {
+        "id": None,
+        "sortOrder": sort_order,
+        "imageUrl": f"/receipt-images/{rid}/{sort_order}",
+        "thumbnailUrl": f"/receipt-images/{rid}/{sort_order}?thumb=1",
+        "fileType": file_type,
+        "pdfPageCount": pdf_page_count,
+    }
+
+
+def receipt_images_from_rows(rid: str, rows: Optional[List[Any]]) -> List[Dict[str, Any]]:
+    """Map receipt_images rows to the API ``images[]`` shape (sorted)."""
+    out = []
+    for r in rows or []:
+        idx = r["sort_order"]
+        out.append({
+            "id": str(r["id"]),
+            "sortOrder": idx,
+            "imageUrl": f"/receipt-images/{rid}/{idx}",
+            "thumbnailUrl": f"/receipt-images/{rid}/{idx}?thumb=1",
+            "fileType": r.get("file_type"),
+            "pdfPageCount": r.get("pdf_page_count"),
+        })
+    out.sort(key=lambda x: x["sortOrder"])
+    return out
+
+
 def _receipt_row_to_dict(
-    row, items: Optional[List[dict]] = None
+    row, items: Optional[List[dict]] = None, images: Optional[List[dict]] = None
 ) -> Dict[str, Any]:
     """
     Convert a PostgreSQL receipts row + reconstructed items into the
     same dict shape the API currently returns from Firestore.
+
+    ``images`` is the ordered child-image list (when the caller batch-loaded
+    ``receipt_images``). When omitted, the denormalized cover columns are
+    used to synthesize a single-item list so imageUrl/thumbnailUrl and
+    images[] stay consistent.
     """
     rid = str(row["id"]) if not isinstance(row["id"], str) else row["id"]
 
-    # Compute image + thumbnail URLs
-    image_url = None
-    thumbnail_url = None
-    if row.get("image_filename"):
-        image_url = f"/receipt-images/{rid}"
-        thumbnail_url = f"/receipt-images/{rid}?thumb=1"
-    elif row.get("legacy_image_url"):
-        image_url = row["legacy_image_url"]
-        thumbnail_url = row.get("legacy_thumbnail_url")  # may be None
+    # Cover image + thumbnail URLs. Prefer the loaded child rows; fall back to
+    # the denormalized cover columns (legacy rows / callers without children).
+    if images is None:
+        if row.get("image_filename"):
+            images = [{
+                "id": None,
+                "sortOrder": 0,
+                "imageUrl": f"/receipt-images/{rid}/0",
+                "thumbnailUrl": f"/receipt-images/{rid}/0?thumb=1",
+                "fileType": row.get("file_type"),
+                "pdfPageCount": row.get("pdf_page_count"),
+            }]
+        elif row.get("legacy_image_url"):
+            images = [{
+                "id": None,
+                "sortOrder": 0,
+                "imageUrl": row["legacy_image_url"],
+                "thumbnailUrl": row.get("legacy_thumbnail_url"),
+                "fileType": None,
+                "pdfPageCount": None,
+            }]
+        else:
+            images = []
+
+    cover = images[0] if images else None
+    image_url = cover["imageUrl"] if cover else None
+    thumbnail_url = cover["thumbnailUrl"] if cover else None
 
     # Always return totalAmount/taxAmount as 2dp strings (contract)
     total_amount = row.get("total_amount")
@@ -185,8 +242,10 @@ def _receipt_row_to_dict(
         "taxRate": tax_rate,
         "imageUrl": image_url,
         "thumbnailUrl": thumbnail_url,
-        "fileType": row.get("file_type"),
-        "pdfPageCount": row.get("pdf_page_count"),
+        "fileType": cover.get("fileType") if cover else None,
+        "pdfPageCount": cover.get("pdfPageCount") if cover else None,
+        "images": images,
+        "imageCount": len(images),
         "category_id": row.get("category_id"),
         "industry_id": row.get("industry_id"),
         "items": items or [],
@@ -230,6 +289,49 @@ async def _batch_load_items(conn, receipt_ids: List[str]) -> Dict[str, List[dict
             "taxRate": format(Decimal(str(tax_rate)), "g") if tax_rate is not None else None,
         })
     return items_map
+
+
+async def _batch_load_receipt_images(conn, receipt_ids: List[str]) -> Dict[str, List[dict]]:
+    """Load child images for many receipts in ONE query, grouped by receipt_id.
+
+    Returns {receipt_id: [image dicts, ordered]} in the API ``images[]`` shape
+    (via receipt_images_from_rows). Callers pass the list to
+    ``_receipt_row_to_dict`` so the payload carries the full ordered set.
+    """
+    if not receipt_ids:
+        return {}
+    rows = await conn.fetch(
+        """
+        SELECT id, receipt_id, sort_order, image_filename, thumbnail_filename,
+               file_type, pdf_page_count
+        FROM receipt_images
+        WHERE receipt_id = ANY($1::text[])
+        ORDER BY receipt_id, sort_order
+        """,
+        receipt_ids,
+    )
+    by_receipt: Dict[str, List[Any]] = {}
+    for r in rows:
+        by_receipt.setdefault(r["receipt_id"], []).append(r)
+    return {
+        rid: receipt_images_from_rows(rid, els)
+        for rid, els in by_receipt.items()
+    }
+
+
+async def list_receipt_image_rows(conn, receipt_id: str) -> List[dict]:
+    """Ordered receipt_images rows for one receipt (metadata only)."""
+    rows = await conn.fetch(
+        """
+        SELECT id, receipt_id, user_id, sort_order, image_filename,
+               thumbnail_filename, file_type, pdf_page_count, image_sha256
+        FROM receipt_images
+        WHERE receipt_id = $1
+        ORDER BY sort_order
+        """,
+        receipt_id,
+    )
+    return [dict(r) for r in rows]
 
 
 async def _fetch_items(conn, receipt_id: str) -> List[dict]:
@@ -388,6 +490,24 @@ class DatabaseService:
                 except Exception:
                     logger.warning("Failed to mirror image bytes for %s", receipt_id, exc_info=True)
 
+                # Child images: API flows pass an explicit ordered list; the
+                # Celery worker / legacy paths pass only the scalar cover
+                # filename, so synthesize one child row for them.
+                images_payload = receipt_data.get("images")
+                if not images_payload and image_filename:
+                    images_payload = [{
+                        "id": uuid.uuid4().hex,
+                        "image_filename": image_filename,
+                        "thumbnail_filename": receipt_data.get("thumbnail_filename"),
+                        "file_type": file_type,
+                        "pdf_page_count": pdf_page_count,
+                        "image_sha256": image_sha256,
+                    }]
+                await _insert_receipt_images(conn, receipt_id, user_id, images_payload)
+                if images_payload:
+                    # Keep the denormalized cover columns = first image.
+                    await sync_receipt_cover(conn, receipt_id)
+
                 if items:
                     await conn.executemany(
                         """
@@ -426,7 +546,8 @@ class DatabaseService:
             if not row:
                 return None
             items = await _fetch_items(conn, receipt_id)
-            return _receipt_row_to_dict(row, items)
+            images_map = await _batch_load_receipt_images(conn, [receipt_id])
+            return _receipt_row_to_dict(row, items, images_map.get(receipt_id))
 
     @staticmethod
     async def get_receipts_by_ids(user_id: str, receipt_ids: List[str]) -> List[Dict[str, Any]]:
@@ -439,12 +560,13 @@ class DatabaseService:
                 f"SELECT {_RECEIPT_COLS} FROM receipts WHERE user_id = $1 AND id = ANY($2::text[])",
                 user_id, receipt_ids,
             )
-            items_map = await _batch_load_items(
-                conn, [str(r["id"]) for r in rows]
-            )
+            ids = [str(r["id"]) for r in rows]
+            items_map = await _batch_load_items(conn, ids)
+            images_map = await _batch_load_receipt_images(conn, ids)
             results = []
             for row in rows:
-                results.append(_receipt_row_to_dict(row, items_map.get(str(row["id"]), [])))
+                rid = str(row["id"])
+                results.append(_receipt_row_to_dict(row, items_map.get(rid, []), images_map.get(rid)))
             return results
 
     @staticmethod
@@ -528,10 +650,16 @@ class DatabaseService:
                     "NULLIF(BTRIM(legacy_image_url), '') IS NULL)"
                 )
             if has_pdf is True:
-                conditions.append("file_type = 'application/pdf'")
+                conditions.append(
+                    "(file_type = 'application/pdf' OR EXISTS ("
+                    "SELECT 1 FROM receipt_images ri WHERE ri.receipt_id = receipts.id "
+                    "AND ri.file_type = 'application/pdf'))"
+                )
             elif has_pdf is False:
                 conditions.append(
-                    "(file_type IS NULL OR file_type <> 'application/pdf')"
+                    "(COALESCE(file_type, '') <> 'application/pdf' AND NOT EXISTS ("
+                    "SELECT 1 FROM receipt_images ri WHERE ri.receipt_id = receipts.id "
+                    "AND ri.file_type = 'application/pdf'))"
                 )
             # Additional column filters (ILIKE contains for text search)
             if supplier:
@@ -580,14 +708,14 @@ class DatabaseService:
                 *params,
             )
             total = rows[0]["full_count"] if rows else 0
+            ids = [str(r["id"]) for r in rows]
+            images_map = await _batch_load_receipt_images(conn, ids)
             # Batch-load items only when needed — text-only table skips 70% payload
             if include_items:
-                items_map = await _batch_load_items(
-                    conn, [str(r["id"]) for r in rows]
-                )
-                receipts = [_receipt_row_to_dict(r, items_map.get(r["id"], [])) for r in rows]
+                items_map = await _batch_load_items(conn, ids)
+                receipts = [_receipt_row_to_dict(r, items_map.get(str(r["id"]), []), images_map.get(str(r["id"]))) for r in rows]
             else:
-                receipts = [_receipt_row_to_dict(r, []) for r in rows]
+                receipts = [_receipt_row_to_dict(r, [], images_map.get(str(r["id"]))) for r in rows]
             return receipts, total
 
     @staticmethod
@@ -749,13 +877,62 @@ class DatabaseService:
                             ],
                         )
 
+                # Multi-image children: remove requested rows and/or append new
+                # ones, then keep the denormalized cover in sync. The scalar
+                # image_filename path (worker single-image replace) wipes and
+                # re-creates the single child.
+                removed = receipt_data.get("removeImageIds")
+                new_images = receipt_data.get("images")
+                scalar_replace = (
+                    receipt_data.get("image_filename") is not None
+                    and not new_images
+                )
+                if scalar_replace:
+                    existing = await conn.fetch(
+                        "SELECT id, image_filename, thumbnail_filename FROM receipt_images WHERE receipt_id = $1",
+                        receipt_id,
+                    )
+                    for r in existing:
+                        delete_receipt_image_files(str(r["id"]))
+                        delete_receipt_image_files_by_name(
+                            r["image_filename"], receipt_image_thumb_filename(r)
+                        )
+                    await conn.execute(
+                        "DELETE FROM receipt_images WHERE receipt_id = $1", receipt_id
+                    )
+                    if receipt_data.get("image_filename"):
+                        await _insert_receipt_images(conn, receipt_id, user_id, [{
+                            "id": uuid.uuid4().hex,
+                            "image_filename": receipt_data.get("image_filename"),
+                            "thumbnail_filename": receipt_data.get("thumbnail_filename"),
+                            "file_type": receipt_data.get("fileType") or receipt_data.get("file_type"),
+                            "pdf_page_count": receipt_data.get("pdfPageCount") or receipt_data.get("pdf_page_count"),
+                            "image_sha256": receipt_data.get("image_sha256"),
+                        }])
+                else:
+                    if removed:
+                        await delete_receipt_image_rows(conn, receipt_id, removed)
+                    if new_images:
+                        await _insert_receipt_images(conn, receipt_id, user_id, new_images)
+                if removed or new_images or scalar_replace:
+                    await sync_receipt_cover(conn, receipt_id)
+
                 return True
 
     @staticmethod
     async def delete_receipt(user_id: str, receipt_id: str) -> bool:
-        """Delete receipt + CASCADE deletes items."""
+        """Delete receipt + CASCADE deletes items. Child image files removed."""
         pool = await get_pool()
         async with pool.acquire() as conn:
+            children = await conn.fetch(
+                "SELECT id, image_filename, thumbnail_filename FROM receipt_images WHERE receipt_id = $1",
+                receipt_id,
+            )
+            for r in children:
+                delete_receipt_image_files(str(r["id"]))
+                delete_receipt_image_files_by_name(
+                    r["image_filename"], receipt_image_thumb_filename(r)
+                )
             result = await conn.execute(
                 "DELETE FROM receipts WHERE id = $1 AND user_id = $2",
                 receipt_id, user_id,
@@ -881,15 +1058,19 @@ class DatabaseService:
         async with pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT id, image_sha256
+                SELECT receipt_id, image_sha256
+                FROM receipt_images
+                WHERE user_id = $1 AND image_sha256 = ANY($2::text[])
+                UNION
+                SELECT id AS receipt_id, image_sha256
                 FROM receipts
-                WHERE user_id = $1
-                  AND image_sha256 = ANY($2::text[])
+                WHERE user_id = $1 AND image_sha256 = ANY($2::text[])
+                  AND NOT EXISTS (SELECT 1 FROM receipt_images ri WHERE ri.receipt_id = receipts.id)
                 """,
                 user_id,
                 hashes,
             )
-            return {r["image_sha256"]: str(r["id"]) for r in rows}
+            return {r["image_sha256"]: str(r["receipt_id"]) for r in rows}
 
     @staticmethod
     async def search_receipts_fulltext(
@@ -1009,9 +1190,17 @@ class DatabaseService:
                 add(entry_type, "r.entry_type = ${index}")
 
         if has_pdf is True:
-            where.append("r.file_type = 'application/pdf'")
+            where.append(
+                "(r.file_type = 'application/pdf' OR EXISTS ("
+                "SELECT 1 FROM receipt_images ri WHERE ri.receipt_id = r.id "
+                "AND ri.file_type = 'application/pdf'))"
+            )
         elif has_pdf is False:
-            where.append("(r.file_type IS NULL OR r.file_type <> 'application/pdf')")
+            where.append(
+                "(COALESCE(r.file_type, '') <> 'application/pdf' AND NOT EXISTS ("
+                "SELECT 1 FROM receipt_images ri WHERE ri.receipt_id = r.id "
+                "AND ri.file_type = 'application/pdf'))"
+            )
 
         limit_index = len(args) + 1
         offset_index = len(args) + 2
@@ -1051,10 +1240,11 @@ class DatabaseService:
             # Batch-load items for all results (single query, not N+1)
             ids = [str(r["id"]) for r in rows]
             items_map = await _batch_load_items(conn, ids) if ids else {}
+            images_map = await _batch_load_receipt_images(conn, ids) if ids else {}
             results = []
             for row in rows:
-                items = items_map.get(str(row["id"]), [])
-                receipt = _receipt_row_to_dict(row, items)
+                rid = str(row["id"])
+                receipt = _receipt_row_to_dict(row, items_map.get(rid, []), images_map.get(rid))
                 receipt["_search_rank"] = float(row["rank"])
                 receipt["_item_names"] = row.get("item_names", "")
                 results.append(receipt)
@@ -1667,6 +1857,166 @@ def _write_receipt_file(receipt_id: str, suffix: str, data: bytes) -> str:
     return filename
 
 
+# ── Multi-image (receipt_images) file helpers ─────────────────────────────────
+
+def receipt_image_base(image_filename: Optional[str]) -> Optional[str]:
+    """Strip the extension from a stored image filename."""
+    if not image_filename:
+        return None
+    return image_filename.rsplit(".", 1)[0]
+
+
+def receipt_image_thumb_filename(row: Any) -> Optional[str]:
+    """Thumbnail filename for a receipt_images row.
+
+    Uses the recorded name when present, else derives ``{base}_thumb.jpg``
+    from the image filename — which works for legacy receipts
+    (``{receipt_id}.jpg`` → ``{receipt_id}_thumb.jpg``) and new images
+    (``{image_id}.jpg`` → ``{image_id}_thumb.jpg``).
+    """
+    recorded = row.get("thumbnail_filename") if hasattr(row, "get") else None
+    if recorded:
+        return recorded
+    base = receipt_image_base(row["image_filename"])
+    return f"{base}_thumb.jpg" if base else None
+
+
+def save_receipt_image_file(image_id: str, data: bytes, file_type: Optional[str]) -> str:
+    """Save one receipt-image file as ``{image_id}.jpg|.pdf``. Returns filename."""
+    os.makedirs(settings.IMAGE_STORAGE_DIR, exist_ok=True)
+    ext = ".pdf" if file_type == "application/pdf" else ".jpg"
+    filename = f"{image_id}{ext}"
+    with open(os.path.join(settings.IMAGE_STORAGE_DIR, filename), "wb") as f:
+        f.write(data)
+    logger.info("Saved receipt image %s (%d KB)", filename, len(data) // 1024)
+    return filename
+
+
+def save_receipt_thumbnail_file(image_id: str, jpeg_bytes: bytes) -> str:
+    """Save one receipt-image thumbnail as ``{image_id}_thumb.jpg``."""
+    os.makedirs(settings.IMAGE_STORAGE_DIR, exist_ok=True)
+    filename = f"{image_id}_thumb.jpg"
+    with open(os.path.join(settings.IMAGE_STORAGE_DIR, filename), "wb") as f:
+        f.write(jpeg_bytes)
+    return filename
+
+
+def delete_receipt_image_files(image_id: str) -> None:
+    """Remove all on-disk artifacts for one receipt_images row."""
+    for suffix in (".jpg", ".pdf", "_thumb.jpg"):
+        path = os.path.join(settings.IMAGE_STORAGE_DIR, f"{image_id}{suffix}")
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        except Exception:
+            logger.warning("Failed to delete %s", path, exc_info=True)
+
+
+def delete_receipt_image_files_by_name(image_filename: Optional[str], thumb_filename: Optional[str]) -> None:
+    """Remove on-disk artifacts for a child row given its recorded names.
+
+    Handles legacy filenames (``{receipt_id}.jpg``) that are not derived from
+    the image id.
+    """
+    for name in (image_filename, thumb_filename):
+        if not name:
+            continue
+        try:
+            os.remove(os.path.join(settings.IMAGE_STORAGE_DIR, name))
+        except FileNotFoundError:
+            pass
+        except Exception:
+            logger.warning("Failed to delete %s", name, exc_info=True)
+
+
+async def read_receipt_image(receipt_id: str, index: int, thumb: bool = False):
+    """Serve one receipt image/PDF by its ordered index.
+
+    Returns ``(bytes, media_type)`` or ``(None, None)``. Rebuild-proof:
+    a missing disk file is re-materialized from the child row's byte mirror.
+    """
+    from app.core.database import get_pool
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT id, image_filename, thumbnail_filename, file_type,
+                   image_bytes, thumb_bytes
+            FROM receipt_images
+            WHERE receipt_id = $1 AND sort_order = $2
+            """,
+            receipt_id, index,
+        )
+        if not row:
+            # Legacy receipt without child rows: fall back to the cover file.
+            if index == 0:
+                return await read_receipt_file(receipt_id, thumb=thumb)
+            return (None, None)
+
+        if thumb:
+            name = receipt_image_thumb_filename(row)
+            data = _read_disk_file(name) if name else None
+            if data:
+                return (data, "image/jpeg")
+            if row["thumb_bytes"] is not None:
+                data = bytes(row["thumb_bytes"])
+                if name:
+                    _rewrite_disk_file(name, data)
+                return (data, "image/jpeg")
+            # Degrade to the full image.
+            return await _read_child_full(conn, row)
+
+        return await _read_child_full(conn, row)
+
+
+async def _read_child_full(conn, row) -> tuple:
+    """Read a child row's full file (disk → DB mirror)."""
+    name = row["image_filename"]
+    ftype = row["file_type"] or "image/jpeg"
+    if name:
+        data = _read_disk_file(name)
+        if data:
+            return (data, ftype)
+    if row["image_bytes"] is not None:
+        data = bytes(row["image_bytes"])
+        if name:
+            _rewrite_disk_file(name, data)
+        return (data, ftype)
+    return (None, None)
+
+
+async def sync_receipt_image_bytes(conn, image_id: str) -> None:
+    """Mirror a child row's on-disk files into its byte columns.
+
+    Called after the receipt-images are written. Best-effort: a missing disk
+    file simply leaves the mirror NULL (self-heal backfills later).
+    """
+    row = await conn.fetchrow(
+        "SELECT image_filename, thumbnail_filename FROM receipt_images WHERE id = $1",
+        image_id,
+    )
+    if not row:
+        return
+    fn = row["image_filename"]
+    if fn:
+        data = _read_disk_file(fn)
+        if data is not None:
+            await conn.execute(
+                "UPDATE receipt_images SET image_bytes = $1 WHERE id = $2 AND image_bytes IS NULL",
+                data, image_id,
+            )
+    thumb_fn = receipt_image_thumb_filename(row)
+    if thumb_fn:
+        data = _read_disk_file(thumb_fn)
+        if data is not None:
+            await conn.execute(
+                "UPDATE receipt_images SET thumb_bytes = $1 WHERE id = $2 AND thumb_bytes IS NULL",
+                data, image_id,
+            )
+
+
 async def fetch_receipt_image_bytes(receipt_id: str, thumb: bool = False) -> Optional[bytes]:
     """Read the mirrored image bytes from Postgres (None if not mirrored)."""
     from app.core.database import get_pool
@@ -1755,14 +2105,22 @@ async def count_missing_image_files() -> tuple[int, int]:
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT image_filename FROM receipts WHERE image_filename IS NOT NULL"
+            """
+            SELECT image_filename, thumbnail_filename FROM receipt_images
+            UNION ALL
+            SELECT image_filename, NULL FROM receipts
+            WHERE image_filename IS NOT NULL
+              AND NOT EXISTS (SELECT 1 FROM receipt_images ri WHERE ri.receipt_id = receipts.id)
+            """
         )
     referenced = len(rows)
     if referenced == 0:
         return 0, 0
     missing = 0
     for row in rows:
-        name = str(row["image_filename"])
+        name = row["image_filename"]
+        if not name:
+            continue
         if not os.path.exists(os.path.join(settings.IMAGE_STORAGE_DIR, name)):
             missing += 1
     return referenced, missing
@@ -1801,6 +2159,131 @@ async def _sync_image_bytes(conn, receipt_id: str, image_filename, thumbnail_fil
         await conn.execute(
             "UPDATE receipts SET thumb_bytes = $1 WHERE id = $2",
             data, receipt_id,
+        )
+
+
+async def _insert_receipt_images(conn, receipt_id: str, user_id: str, images) -> None:
+    """Insert ordered child image rows + mirror their bytes.
+
+    ``images`` is the list the API built after writing each file to disk:
+    ``[{id, image_filename, thumbnail_filename, file_type, pdf_page_count,
+    image_sha256}, ...]`` (index order = sort_order).
+    """
+    if not images:
+        return
+    start = await conn.fetchval(
+        "SELECT COALESCE(MAX(sort_order) + 1, 0) FROM receipt_images WHERE receipt_id = $1",
+        receipt_id,
+    )
+    for offset, img in enumerate(images):
+        await conn.execute(
+            """
+            INSERT INTO receipt_images
+                (id, receipt_id, user_id, sort_order, image_filename,
+                 thumbnail_filename, file_type, pdf_page_count, image_sha256)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+            ON CONFLICT (id) DO NOTHING
+            """,
+            str(img["id"]), receipt_id, user_id, int(start) + offset,
+            img.get("image_filename"), img.get("thumbnail_filename"),
+            img.get("file_type"), img.get("pdf_page_count"),
+            img.get("image_sha256"),
+        )
+        try:
+            await sync_receipt_image_bytes(conn, str(img["id"]))
+        except Exception:
+            logger.warning("Failed to mirror child image %s", img.get("id"), exc_info=True)
+
+
+async def delete_receipt_image_rows(conn, receipt_id: str, image_ids, delete_files: bool = True) -> int:
+    """Delete child rows by id, removing their on-disk files.
+
+    Returns the number of rows removed.
+    """
+    if not image_ids:
+        return 0
+    rows = await conn.fetch(
+        """
+        SELECT id, image_filename, thumbnail_filename
+        FROM receipt_images
+        WHERE receipt_id = $1 AND id = ANY($2::text[])
+        """,
+        receipt_id, [str(i) for i in image_ids],
+    )
+    if not rows:
+        return 0
+    if delete_files:
+        for r in rows:
+            # New rows store files under the image id; legacy rows under the
+            # receipt id. Try both derived and recorded names.
+            delete_receipt_image_files(str(r["id"]))
+            delete_receipt_image_files_by_name(
+                r["image_filename"], receipt_image_thumb_filename(r)
+            )
+    await conn.execute(
+        "DELETE FROM receipt_images WHERE receipt_id = $1 AND id = ANY($2::text[])",
+        receipt_id, [str(i) for i in image_ids],
+    )
+    await _renumber_receipt_images(conn, receipt_id)
+    return len(rows)
+
+
+async def _renumber_receipt_images(conn, receipt_id: str) -> None:
+    """Make sort_order contiguous 0..n-1 (two-phase to dodge the unique key)."""
+    await conn.execute(
+        "UPDATE receipt_images SET sort_order = sort_order + 1000000 WHERE receipt_id = $1",
+        receipt_id,
+    )
+    rows = await conn.fetch(
+        "SELECT id FROM receipt_images WHERE receipt_id = $1 ORDER BY sort_order",
+        receipt_id,
+    )
+    for i, r in enumerate(rows):
+        await conn.execute(
+            "UPDATE receipt_images SET sort_order = $2 WHERE id = $1",
+            str(r["id"]), i,
+        )
+
+
+async def sync_receipt_cover(conn, receipt_id: str) -> None:
+    """Point the denormalized receipts cover columns at the first child row."""
+    first = await conn.fetchrow(
+        """
+        SELECT image_filename, thumbnail_filename, file_type,
+               pdf_page_count, image_sha256
+        FROM receipt_images
+        WHERE receipt_id = $1
+        ORDER BY sort_order
+        LIMIT 1
+        """,
+        receipt_id,
+    )
+    if first:
+        await conn.execute(
+            """
+            UPDATE receipts SET image_filename = $2, file_type = $3,
+                pdf_page_count = $4, image_sha256 = $5
+            WHERE id = $1
+            """,
+            receipt_id, first["image_filename"], first["file_type"],
+            first["pdf_page_count"], first["image_sha256"],
+        )
+        try:
+            await _sync_image_bytes(
+                conn, receipt_id, first["image_filename"],
+                receipt_image_thumb_filename(first),
+            )
+        except Exception:
+            logger.warning("Failed to mirror cover for %s", receipt_id, exc_info=True)
+    else:
+        await conn.execute(
+            """
+            UPDATE receipts SET image_filename = NULL, file_type = NULL,
+                pdf_page_count = NULL, image_sha256 = NULL,
+                image_bytes = NULL, thumb_bytes = NULL
+            WHERE id = $1
+            """,
+            receipt_id,
         )
 
 
@@ -1908,6 +2391,73 @@ async def self_heal_image_files() -> dict:
                         thumb_fn, bytes(data)
                     ):
                         stats["repaired"] += 1
+
+            last_id = rows[-1]["id"]
+
+        # ── Child rows (receipt_images) ──────────────────────────────────
+        last_id = None
+        while True:
+            rows = await conn.fetch(
+                """
+                SELECT id, image_filename, thumbnail_filename,
+                       image_bytes IS NULL AS image_bytes_null,
+                       thumb_bytes IS NULL AS thumb_bytes_null
+                FROM receipt_images
+                WHERE image_filename IS NOT NULL
+                  AND ($1::text IS NULL OR id > $1::text)
+                ORDER BY id
+                LIMIT $2
+                """,
+                last_id, page_size,
+            )
+            if not rows:
+                break
+
+            for row in rows:
+                iid = str(row["id"])
+                stats["scanned"] += 1
+
+                fn = row["image_filename"]
+                if fn:
+                    path = os.path.join(settings.IMAGE_STORAGE_DIR, fn)
+                    if os.path.exists(path):
+                        if row["image_bytes_null"]:
+                            data = _read_disk_file(fn)
+                            if data is not None:
+                                await conn.execute(
+                                    "UPDATE receipt_images SET image_bytes = $1 WHERE id = $2 AND image_bytes IS NULL",
+                                    data, iid,
+                                )
+                                stats["backfilled"] += 1
+                    elif not row["image_bytes_null"]:
+                        payload = await conn.fetchrow(
+                            "SELECT image_bytes FROM receipt_images WHERE id = $1", iid
+                        )
+                        data = payload["image_bytes"] if payload else None
+                        if data is not None and _rewrite_disk_file(fn, bytes(data)):
+                            stats["repaired"] += 1
+
+                thumb_fn = receipt_image_thumb_filename(row)
+                if thumb_fn:
+                    tpath = os.path.join(settings.IMAGE_STORAGE_DIR, thumb_fn)
+                    if os.path.exists(tpath):
+                        if row["thumb_bytes_null"]:
+                            data = _read_disk_file(thumb_fn)
+                            if data is not None:
+                                await conn.execute(
+                                    "UPDATE receipt_images SET thumb_bytes = $1 WHERE id = $2 AND thumb_bytes IS NULL",
+                                    data, iid,
+                                )
+                                stats["backfilled"] += 1
+                    elif not row["thumb_bytes_null"]:
+                        payload = await conn.fetchrow(
+                            "SELECT thumb_bytes FROM receipt_images WHERE id = $1", iid
+                        )
+                        data = payload["thumb_bytes"] if payload else None
+                        if data is not None and _rewrite_disk_file(
+                            thumb_fn, bytes(data)
+                        ):
+                            stats["repaired"] += 1
 
             last_id = rows[-1]["id"]
 

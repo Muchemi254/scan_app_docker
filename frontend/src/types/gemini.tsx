@@ -44,10 +44,23 @@ export interface ReceiptData {
   batchTitle?: string;
   /** expense (counts in totals) | quotation | proforma | deposit | note (retained, excluded from totals/exports) */
   entryType?: string;
-  /** Stored file MIME: image/jpeg or application/pdf */
+  /** Stored file MIME: image/jpeg or application/pdf (cover) */
   fileType?: string;
-  /** Page count when fileType is application/pdf */
+  /** Page count when fileType is application/pdf (cover) */
   pdfPageCount?: number;
+  /** All stored images of this receipt, ordered (a receipt holds 1..N) */
+  images?: ReceiptImageData[];
+  /** Number of stored images */
+  imageCount?: number;
+}
+
+export interface ReceiptImageData {
+  id?: string | null;
+  sortOrder?: number;
+  imageUrl: string;
+  thumbnailUrl?: string | null;
+  fileType?: string;
+  pdfPageCount?: number | null;
 }
 
 export const ENTRY_TYPE_OPTIONS = [

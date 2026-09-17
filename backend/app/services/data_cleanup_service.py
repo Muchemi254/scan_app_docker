@@ -82,6 +82,24 @@ def _remove_receipt_images(receipt_ids: list[str]) -> int:
     return removed
 
 
+def _remove_child_image_files(image_rows) -> int:
+    """Delete the on-disk files for receipt_images rows."""
+    removed = 0
+    for r in image_rows or []:
+        iid = str(r["id"])
+        for suffix in (".jpg", ".pdf", "_thumb.jpg"):
+            removed += _unlink(os.path.join(settings.IMAGE_STORAGE_DIR, f"{iid}{suffix}"))
+        fn = r["image_filename"]
+        if fn:
+            removed += _unlink(os.path.join(settings.IMAGE_STORAGE_DIR, str(fn)))
+        thumb = r["thumbnail_filename"]
+        if not thumb and fn:
+            thumb = f"{str(fn).rsplit('.', 1)[0]}_thumb.jpg"
+        if thumb:
+            removed += _unlink(os.path.join(settings.IMAGE_STORAGE_DIR, str(thumb)))
+    return removed
+
+
 def _remove_backup_files(backup_ids: list[str]) -> int:
     removed = 0
     for bid in backup_ids:
@@ -127,12 +145,17 @@ async def purge_user_data(user_id: str, op_id: str = None) -> dict:
     tasks = await _fetch("SELECT id FROM tasks WHERE user_id = $1", user_id)
     sessions = await _fetch("SELECT id FROM scan_sessions WHERE user_id = $1", user_id)
     backups = await _fetch("SELECT id FROM backups WHERE user_id = $1", user_id)
+    # Collect child image filenames BEFORE the rows are cascade-deleted.
+    image_rows = await _fetch(
+        "SELECT id, image_filename, thumbnail_filename FROM receipt_images WHERE user_id = $1",
+        user_id,
+    )
     total_rows = len(receipts) + len(tasks) + len(sessions) + len(backups)
 
     if op_id:
         await ops_service.update_op(
             op_id, stage="purging", message="Removing account data…",
-            total={"rows": total_rows, "images": len(receipts) * 2},
+            total={"rows": total_rows, "images": len(image_rows) or len(receipts) * 2},
         )
 
     pool = await get_pool()
@@ -152,6 +175,7 @@ async def purge_user_data(user_id: str, op_id: str = None) -> dict:
                     )
 
     removed_images = _remove_receipt_images([str(r["id"]) for r in receipts])
+    removed_images += _remove_child_image_files(image_rows)
     removed_backups = _remove_backup_files([str(r["id"]) for r in backups])
     removed_dirs = _remove_temp_dirs(
         [str(r["id"]) for r in sessions], [str(r["id"]) for r in tasks]
@@ -218,6 +242,17 @@ async def _sweep_orphan_image_files() -> int:
         if name.endswith(".jpg") or name.endswith(".pdf"):
             base = name.rsplit(".", 1)[0]
             referenced.add(base + "_thumb.jpg")
+    for r in await _fetch(
+        "SELECT image_filename, thumbnail_filename FROM receipt_images "
+        "WHERE image_filename IS NOT NULL"
+    ):
+        name = r["image_filename"]
+        referenced.add(name)
+        thumb = r["thumbnail_filename"]
+        if thumb:
+            referenced.add(thumb)
+        if name.endswith(".jpg") or name.endswith(".pdf"):
+            referenced.add(name.rsplit(".", 1)[0] + "_thumb.jpg")
     for r in await _fetch(
         "SELECT image_filename FROM scan_session_items WHERE image_filename IS NOT NULL"
     ):

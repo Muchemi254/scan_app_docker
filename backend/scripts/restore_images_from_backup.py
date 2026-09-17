@@ -28,8 +28,12 @@ async def fetch_referenced() -> set[str]:
     conn = await asyncpg.connect(settings.DATABASE_URL)
     try:
         rows = await conn.fetch(
+            "SELECT image_filename, thumbnail_filename FROM receipt_images "
+            "WHERE image_filename IS NOT NULL "
+            "UNION ALL "
             "SELECT image_filename, thumbnail_filename FROM receipts "
-            "WHERE image_filename IS NOT NULL"
+            "WHERE image_filename IS NOT NULL "
+            "AND NOT EXISTS (SELECT 1 FROM receipt_images ri WHERE ri.receipt_id = receipts.id)"
         )
     finally:
         await conn.close()
@@ -42,7 +46,7 @@ async def fetch_referenced() -> set[str]:
         if thumb:
             wanted.add(thumb)
         elif name.endswith(".jpg") or name.endswith(".pdf"):
-            # PDF receipts (incl. combined multi-image) use {id}_thumb.jpg too.
+            # PDF receipts use {base}_thumb.jpg too.
             wanted.add(name.rsplit(".", 1)[0] + "_thumb.jpg")
     return wanted
 

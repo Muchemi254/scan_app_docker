@@ -72,6 +72,9 @@ class ReceiptCreate(ReceiptBase):
     """Receipt creation schema"""
     imageUrl: Optional[str] = Field(None, description="Image URL (set by backend)")
     status: Optional[ReceiptStatus] = Field(default=ReceiptStatus.NEEDS_REVIEW)
+    # Extraction hint: an uploaded image already exists on this receipt.
+    duplicateOfReceiptId: Optional[str] = Field(None, description="Existing receipt using this image")
+    duplicateOfSupplier: Optional[str] = Field(None, description="Supplier of that existing receipt")
 
     @field_validator("supplier", mode="before")
     @classmethod
@@ -111,10 +114,9 @@ class ReceiptUpdate(BaseModel):
     location: Optional[str] = None
     taxRate: Optional[str] = None
     entryType: Optional[str] = None
-    # When true, uploaded files are appended as extra pages to the receipt's
-    # existing image/PDF instead of replacing it (add-a-photo to a saved
-    # receipt). Handled by the API; never persisted as a receipt column.
-    appendImages: Optional[bool] = None
+    # Multi-image receipts: ids of child images to remove, and (via the
+    # multipart `files`) new images to append. API-only; not receipt columns.
+    removeImageIds: Optional[List[str]] = None
 
     @field_validator("supplier", mode="before")
     @classmethod
@@ -135,6 +137,16 @@ class ReceiptUpdate(BaseModel):
         return normalize_category_text(v)
 
 
+class ReceiptImage(BaseModel):
+    """One stored image/PDF of a receipt (a receipt holds 1..N)."""
+    id: Optional[str] = None
+    sortOrder: int = 0
+    imageUrl: str = Field(..., description="Image/PDF proxy URL")
+    thumbnailUrl: Optional[str] = Field(None, description="Thumbnail URL")
+    fileType: Optional[str] = Field(None, description="image/jpeg or application/pdf")
+    pdfPageCount: Optional[int] = Field(None, description="Page count for PDFs")
+
+
 class Receipt(ReceiptBase):
     """Complete receipt response schema"""
     id: str = Field(..., description="Receipt ID")
@@ -143,10 +155,12 @@ class Receipt(ReceiptBase):
     entryType: str = Field(default="expense")
     category_id: Optional[str] = None
     industry_id: Optional[str] = None
-    imageUrl: Optional[str] = Field(None, description="Image URL in storage")
-    thumbnailUrl: Optional[str] = Field(None, description="Thumbnail image URL for fast preview")
-    fileType: Optional[str] = Field(None, description="Stored file MIME: image/jpeg or application/pdf")
-    pdfPageCount: Optional[int] = Field(None, description="Page count when fileType is application/pdf")
+    imageUrl: Optional[str] = Field(None, description="Cover image URL in storage (first image)")
+    thumbnailUrl: Optional[str] = Field(None, description="Cover thumbnail URL for fast preview")
+    fileType: Optional[str] = Field(None, description="Cover file MIME: image/jpeg or application/pdf")
+    pdfPageCount: Optional[int] = Field(None, description="Page count when the cover fileType is application/pdf")
+    images: List[ReceiptImage] = Field(default_factory=list, description="All stored images, ordered")
+    imageCount: int = Field(default=0, description="Number of stored images")
     createdAt: datetime = Field(...)
     updatedAt: Optional[datetime] = Field(None)
     scannedAt: Optional[datetime] = Field(None, description="Time when the receipt was scanned/uploaded")

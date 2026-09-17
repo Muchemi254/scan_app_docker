@@ -28,7 +28,7 @@ const PostReceiptPage = ({ userId }: { userId: string | null }) => {
     try {
       const created = await receiptApi.create(
         { ...data, status: 'needs_review' },
-        imageFiles.length ? imageFiles : undefined
+        imageFiles.length ? imageFiles : undefined,
       );
       add(created);
       navigate('/receipts');
@@ -48,7 +48,8 @@ const PostReceiptPage = ({ userId }: { userId: string | null }) => {
       <ReceiptForm
         initialData={{}}
         onSubmit={handleSubmit}
-        onImageChange={setImageFiles}
+        pendingImages={imageFiles}
+        onImagesChange={(pending) => setImageFiles(pending)}
         loading={loading}
         locations={locations}
         entryTypes={entryTypes}

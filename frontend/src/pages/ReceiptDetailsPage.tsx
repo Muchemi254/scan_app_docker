@@ -22,6 +22,7 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [newImages, setNewImages] = useState<File[]>([]);
+  const [removedImageIds, setRemovedImageIds] = useState<string[]>([]);
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
   const [entryTypes, setEntryTypes] = useState<{ id: string; name: string; label: string }[]>([]);
   const [defaultTaxRate, setDefaultTaxRate] = useState(16);
@@ -62,6 +63,7 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
       setReceipt(updated);
       setEditing(false);
       setNewImages([]);
+      setRemovedImageIds([]);
       if (returnTo) {
         navigate(returnTo);
         return;
@@ -160,6 +162,7 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
                 </div>
                 <div className="p-2 lg:flex-1">
                   <ImageViewer
+                    images={(receipt?.images || []).filter((im: any) => !(im.id && removedImageIds.includes(im.id)))}
                     imageUrl={imageUrl}
                     altText="Receipt"
                     containerClass="h-48 sm:h-64 lg:h-full lg:min-h-[60vh]"
@@ -173,7 +176,9 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
               <ReceiptForm
                 initialData={receipt}
                 onSubmit={handleUpdate}
-                onImageChange={setNewImages}
+                onImagesChange={(pending, removed) => { setNewImages(pending); setRemovedImageIds(removed); }}
+                pendingImages={newImages}
+                removedImageIds={removedImageIds}
                 loading={loading}
                 locations={locations}
                 entryTypes={entryTypes}
@@ -197,6 +202,7 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
               <div className="mt-4">
                 <h3 className="font-semibold text-gray-700 mb-2">Receipt Image</h3>
                 <ImageViewer
+                  images={receipt.images}
                   imageUrl={receipt.imageUrl}
                   altText="Receipt"
                   containerClass="h-56 sm:h-80 md:h-96"

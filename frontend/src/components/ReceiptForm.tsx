@@ -5,11 +5,17 @@ import { addTax, splitTax } from '../utils/taxCalc';
 import type { ReceiptData } from '../types/gemini';
 import { ENTRY_TYPE_OPTIONS, entryTypeLabel } from '../types/gemini';
 import { getIndustries, getCategories, getDefaultIndustry } from '../services/referenceData';
+import ImageManagerModal from './ImageManagerModal';
+import type { ViewerImage } from './ImageViewer';
+import { Image as ImageIcon } from 'lucide-react';
 
 const ReceiptForm = ({
   initialData,
   onSubmit,
-  onImageChange,
+  onImagesChange,
+  pendingImages = [],
+  removedImageIds = [],
+  existingImages,
   loading,
   isAdmin = false,
   locations = [],
@@ -18,7 +24,13 @@ const ReceiptForm = ({
 }: {
   initialData: any;
   onSubmit: (data: any) => void;
-  onImageChange: (files: File[]) => void;
+  /** Newly picked files + existing-image ids to remove (controlled). */
+  onImagesChange?: (pending: File[], removedIds: string[]) => void;
+  pendingImages?: File[];
+  removedImageIds?: string[];
+  /** Existing stored images (from initialData.images); when omitted the form
+   *  reads initialData.images directly. */
+  existingImages?: ViewerImage[];
   loading: boolean;
   isAdmin?: boolean;
   locations?: { id: string; name: string }[];
@@ -53,10 +65,12 @@ const ReceiptForm = ({
   } as any));
   const [industries, setIndustries] = useState<{ id: string; name: string }[]>([]);
   const [categories, setCategories] = useState<{ id: string; industry_id: string; name: string; label: string; parent_id?: string | null }[]>([]);
-  // Editing an existing receipt: choose whether newly picked files replace the
-  // stored image(s) or are appended as extra pages (add a photo to a receipt).
-  const isEditing = !!initialData?.id;
-  const [appendPages, setAppendPages] = useState(false);
+  // Image management lives in a dedicated modal so the form stays compact.
+  const [imagesOpen, setImagesOpen] = useState(false);
+  const storedImages: ViewerImage[] = (existingImages
+    ?? ((initialData as any)?.images || [])) as ViewerImage[];
+  const keptExistingCount = storedImages.filter(im => !(im.id && removedImageIds.includes(im.id))).length;
+  const imageCount = keptExistingCount + pendingImages.length;
   // Industry on board at mount (before the user-default fills an empty one).
   // A ref keeps the mount-once effects below honest for exhaustive-deps.
   const initialIndustryRef = useRef((initialData as any)?.industry_id || (initialData as any)?.industryId || '');
@@ -241,9 +255,8 @@ const ReceiptForm = ({
 
     const sanitizedData = {
       ...formData,
-      // Only meaningful on edit: append uploaded pages to the existing file
-      // instead of replacing it.
-      appendImages: isEditing ? appendPages : undefined,
+      // Existing child-image ids to delete (image management modal).
+      removeImageIds: removedImageIds.length ? removedImageIds : undefined,
       status: statusOverride || formData.status,
       items: formData.items.map(({ name, quantity, price, tax, discount, isZeroRated, taxRate }) => ({
         name,
@@ -671,34 +684,30 @@ const ReceiptForm = ({
           />
         </div>
         <div>
-          <label className="block text-xs font-medium text-gray-600 mb-0.5">
-            Receipt Image(s) / PDF
-            <span className="ml-1 font-normal text-gray-400">(select 2+ images to combine into one receipt)</span>
-          </label>
-          {isEditing && (
-            <div className="flex items-center gap-1.5 mb-1">
-              <select
-                value={appendPages ? 'append' : 'replace'}
-                onChange={(e) => setAppendPages(e.target.value === 'append')}
-                className="px-1.5 py-0.5 text-xs border rounded bg-white"
-              >
-                <option value="replace">Replace image(s)</option>
-                <option value="append">Add page(s) to existing</option>
-              </select>
-              {appendPages && (
-                <span className="text-[11px] text-gray-400">keeps current page(s) + adds selected</span>
-              )}
-            </div>
-          )}
-          <input
-            type="file"
-            multiple
-            accept="image/*,.pdf,application/pdf"
-            onChange={(e) => onImageChange(Array.from(e.target.files || []))}
-            className="w-full px-2 py-1 border rounded text-sm"
-          />
+          <label className="block text-xs font-medium text-gray-600 mb-0.5">Receipt Images</label>
+          <button
+            type="button"
+            onClick={() => setImagesOpen(true)}
+            className="w-full flex items-center justify-between gap-2 px-2 py-1 border rounded text-sm bg-white hover:bg-gray-50"
+          >
+            <span className="inline-flex items-center gap-1.5 text-gray-700">
+              <ImageIcon className="h-4 w-4 text-gray-400" />
+              Manage images
+            </span>
+            <span className="text-xs text-gray-500">{imageCount} image{imageCount !== 1 ? 's' : ''}</span>
+          </button>
         </div>
       </div>
+
+      <ImageManagerModal
+        open={imagesOpen}
+        onClose={() => setImagesOpen(false)}
+        existing={storedImages}
+        pending={pendingImages}
+        removedIds={removedImageIds}
+        excludeReceiptId={(initialData as any)?.id}
+        onChange={(next) => onImagesChange?.(next.pending, next.removedIds)}
+      />
 
       {/* Items section */}
       <div className="mt-4">

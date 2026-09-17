@@ -52,19 +52,32 @@ class ExternalConflictError(Exception):
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _remap_filename(fn, id_map):
-    """Rewrites ``{old_id}.jpg`` / ``{old_id}_thumb.jpg`` → ``{new_id}...``.
+    """Rewrites ``{old_id}.jpg|.pdf`` / ``{old_id}_thumb.jpg`` → ``{new_id}...``.
 
     Used when importing a backup into a different user: the receipt gets a
-    fresh ID, so its image files must be stored under the fresh ID too.
+    fresh ID, so its legacy-named image files must be stored under the fresh ID
+    too. Child files named by their own image id are left untouched.
     """
     if not fn or not id_map:
         return fn
-    stem = fn[:-4] if fn.endswith(".jpg") else fn
+    ext = ".pdf" if fn.endswith(".pdf") else ".jpg"
+    stem = fn[: -len(ext)]
     base = stem[:-6] if stem.endswith("_thumb") else stem
     if base in id_map:
         suffix = "_thumb" if stem.endswith("_thumb") else ""
-        return f"{id_map[base]}{suffix}.jpg"
+        return f"{id_map[base]}{suffix}{ext}"
     return fn
+
+
+def _child_thumb_name(row) -> Optional[str]:
+    """Thumbnail filename for a receipt_images row (recorded or derived)."""
+    recorded = row.get("thumbnail_filename") if hasattr(row, "get") else None
+    if recorded:
+        return recorded
+    fn = row.get("image_filename") if hasattr(row, "get") else None
+    if not fn:
+        return None
+    return f"{str(fn).rsplit('.', 1)[0]}_thumb.jpg"
 
 def _serialize_row(row):
     if not row:
@@ -171,6 +184,12 @@ async def export_user_data(user_id: str) -> dict:
         items_rows = await conn.fetch(
             "SELECT * FROM line_items WHERE receipt_id = ANY($1)", receipt_ids
         ) if receipt_ids else []
+        receipt_image_rows = await conn.fetch(
+            "SELECT id, receipt_id, user_id, sort_order, image_filename, "
+            "thumbnail_filename, file_type, pdf_page_count, image_sha256 "
+            "FROM receipt_images WHERE receipt_id = ANY($1) ORDER BY receipt_id, sort_order",
+            receipt_ids,
+        ) if receipt_ids else []
 
         audit_rows = await conn.fetch(
             "SELECT * FROM audit_logs WHERE user_id = $1", user_id
@@ -192,6 +211,7 @@ async def export_user_data(user_id: str) -> dict:
     # ── Build data.json dict ──
     data = {
         "receipts": [_serialize_row(r) for r in receipt_rows],
+        "receipt_images": [_serialize_row(r) for r in receipt_image_rows],
         "line_items": [_serialize_row(r) for r in items_rows],
         "audit_logs": [_serialize_row(r) for r in audit_rows],
         "tasks": [_serialize_row(r) for r in tasks_rows],
@@ -218,14 +238,20 @@ async def export_user_data(user_id: str) -> dict:
     # so surface it instead of letting it pass unnoticed.
     missing_image_receipts: list[str] = []
     if os.path.isdir(settings.IMAGE_STORAGE_DIR):
-        for r in receipt_rows:
-            for col in ("image_filename", "thumbnail_filename"):
-                fn = r.get(col)
+        def _check(rid, *names):
+            for fn in names:
                 if not fn:
                     continue
                 if not os.path.exists(os.path.join(settings.IMAGE_STORAGE_DIR, str(fn))):
-                    if r["id"] not in missing_image_receipts:
-                        missing_image_receipts.append(str(r["id"]))
+                    if rid not in missing_image_receipts:
+                        missing_image_receipts.append(str(rid))
+                    return
+        if receipt_image_rows:
+            for r in receipt_image_rows:
+                _check(r["receipt_id"], r["image_filename"], _child_thumb_name(r))
+        else:
+            for r in receipt_rows:
+                _check(r["id"], r.get("image_filename"), r.get("thumbnail_filename"))
     if missing_image_receipts:
         logger.warning(
             "Backup integrity: %d receipt(s) reference image files missing from "
@@ -236,16 +262,34 @@ async def export_user_data(user_id: str) -> dict:
         )
 
     # ── Collect image filenames belonging to this user ──
-    # PDF receipts are stored as {id}.pdf alongside {id}.jpg / {id}_thumb.jpg
-    # — include every referenced file type in the archive.
-    image_files = []
-    if os.path.isdir(settings.IMAGE_STORAGE_DIR):
-        for fn in sorted(os.listdir(settings.IMAGE_STORAGE_DIR)):
-            if not (fn.endswith(".jpg") or fn.endswith(".pdf")):
+    # Modern receipts store each image under its own id ({image_id}.jpg|.pdf,
+    # {image_id}_thumb.jpg); legacy/cover files use {receipt_id}... — include
+    # both by walking the child rows and falling back to the cover columns.
+    image_files: list[str] = []
+    seen_files: set[str] = set()
+
+    def _collect(*names):
+        for fn in names:
+            if not fn:
                 continue
-            rid = fn.replace("_thumb.jpg", "").replace(".jpg", "").replace(".pdf", "")
-            if rid in receipt_ids or fn.split(".")[0].split("_")[0] in receipt_ids:
+            fn = str(fn)
+            if fn in seen_files:
+                continue
+            if os.path.exists(os.path.join(settings.IMAGE_STORAGE_DIR, fn)):
                 image_files.append(fn)
+                seen_files.add(fn)
+
+    if receipt_image_rows:
+        for r in receipt_image_rows:
+            _collect(r["image_filename"], _child_thumb_name(r))
+    for r in receipt_rows:
+        if r["id"] in {ir["receipt_id"] for ir in receipt_image_rows}:
+            continue  # already covered by child rows
+        _collect(r.get("image_filename"), r.get("thumbnail_filename"))
+        fn = r.get("image_filename")
+        if fn and not r.get("thumbnail_filename"):
+            _collect(str(fn).rsplit(".", 1)[0] + "_thumb.jpg")
+    image_files.sort()
 
     # ── Build manifest ──
     manifest = {
@@ -502,6 +546,34 @@ async def import_user_data(
                 pending["receipts"] += 1
                 await _report()
 
+            # ── Receipt images (child rows) ──
+            # Image ids stay stable across a remap; only legacy
+            # receipt-id-based filenames are rewritten.
+            for ri in data.get("receipt_images", []):
+                old_rid = ri.get("receipt_id")
+                if selected_ids and old_rid not in selected_ids:
+                    continue
+                new_rid = id_map.get(old_rid, old_rid)
+                img_fn = _remap_filename(ri.get("image_filename"), id_map)
+                thumb_fn = _remap_filename(_child_thumb_name(ri), id_map)
+                try:
+                    await conn.execute(
+                        """
+                        INSERT INTO receipt_images
+                            (id, receipt_id, user_id, sort_order, image_filename,
+                             thumbnail_filename, file_type, pdf_page_count, image_sha256)
+                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+                        ON CONFLICT (receipt_id, sort_order) DO NOTHING
+                        """,
+                        str(ri.get("id") or uuid.uuid4().hex), new_rid, user_id,
+                        ri.get("sort_order", 0), img_fn, thumb_fn,
+                        ri.get("file_type"), ri.get("pdf_page_count"),
+                        ri.get("image_sha256"),
+                    )
+                    stats["receipt_images_rows"] = stats.get("receipt_images_rows", 0) + 1
+                except Exception:
+                    stats["errors"] += 1
+
             # ── Line items ──
             for li in data.get("line_items", []):
                 rid = id_map.get(li.get("receipt_id"), li.get("receipt_id"))
@@ -636,6 +708,20 @@ async def import_user_data(
                 except Exception:
                     stats["errors"] += 1
 
+    # Files that belong to the selected receipts (child images + cover).
+    wanted_files: set = set()
+    if selected_ids:
+        for ri in data.get("receipt_images", []):
+            if ri.get("receipt_id") in selected_ids:
+                for n in (ri.get("image_filename"), _child_thumb_name(ri)):
+                    if n:
+                        wanted_files.add(n)
+        for r in data.get("receipts", []):
+            if r.get("id") in selected_ids:
+                for n in (r.get("image_filename"), r.get("thumbnail_filename")):
+                    if n:
+                        wanted_files.add(n)
+
     # ── Restore images — stream from tar member to disk one by one ──
     os.makedirs(settings.IMAGE_STORAGE_DIR, exist_ok=True)
     with tarfile.open(filepath, "r:gz") as tar:
@@ -645,11 +731,11 @@ async def import_user_data(
             if not (member.name.endswith(".jpg") or member.name.endswith(".pdf")):
                 continue
             fn = os.path.basename(member.name)
-            rid = fn.replace("_thumb.jpg", "").replace(".jpg", "").replace(".pdf", "")
-            if selected_ids and rid not in selected_ids:
+            if selected_ids and fn not in wanted_files:
                 continue
-            if id_map:
-                fn = fn.replace(rid, id_map[rid])
+            # Legacy receipt-id-based names are remapped; child files named by
+            # their own image id are returned unchanged.
+            fn = _remap_filename(fn, id_map)
             fpath = os.path.join(settings.IMAGE_STORAGE_DIR, fn)
             if conflict == "skip" and os.path.exists(fpath):
                 continue
@@ -687,15 +773,21 @@ def parse_backup(filepath: str) -> dict:
         for member in tar:
             if member.name == "backup/data.json":
                 data = json.loads(tar.extractfile(member).read())
+                image_counts: dict = {}
+                for ri in data.get("receipt_images", []):
+                    rid = ri.get("receipt_id")
+                    image_counts[rid] = image_counts.get(rid, 0) + 1
                 for r in data.get("receipts", []):
+                    rid = r.get("id", "")
                     result["receipts"].append({
-                        "id": r.get("id", ""),
+                        "id": rid,
                         "supplier": r.get("supplier", "")[:40],
                         "totalAmount": str(r.get("total_amount", 0)),
                         "receiptDate": str(r.get("receipt_date", "")),
                         "category": r.get("category", ""),
                         "status": r.get("status", ""),
-                        "hasImage": bool(r.get("image_filename")),
+                        "hasImage": bool(r.get("image_filename")) or image_counts.get(rid, 0) > 0,
+                        "imageCount": image_counts.get(rid, 0) or (1 if r.get("image_filename") else 0),
                     })
                 result["receipt_count"] = len(result["receipts"])
             elif member.name == "backup/manifest.json":

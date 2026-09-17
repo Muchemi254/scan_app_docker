@@ -251,6 +251,28 @@ export const receiptApi = {
     return apiUpload('POST', '/receipts', file, receipt);
   },
 
+  /** Dry-run dedup: returns { conflicts: [{ index, receiptId, supplier }] }
+   *  for any of `files` that already belong to another receipt. */
+  async checkImages(files: File[], excludeReceiptId?: string): Promise<{ conflicts: { index: number; receiptId: string; supplier?: string | null }[] }> {
+    const authorization = await getAuthHeader();
+    const userId = getScopeUid();
+    const url = `${API_BASE_URL}/users/${userId}/receipts/check-images`;
+    const formData = new FormData();
+    files.forEach((f) => formData.append('files', f));
+    if (excludeReceiptId) formData.append('exclude_receipt_id', excludeReceiptId);
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Authorization': authorization },
+      body: formData,
+    });
+    if (!response.ok) {
+      let detail = `API error: ${response.status}`;
+      try { const error = await response.json(); detail = error.detail || detail; } catch { /* non-JSON */ }
+      throw new Error(detail);
+    }
+    return response.json();
+  },
+
   /**
    * List receipts with pagination and filters
    * includeItems=false for text-only table (cuts 70% payload)

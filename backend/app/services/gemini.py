@@ -761,18 +761,23 @@ def pdf_to_provider_parts(
 
 
 async def extract_receipt_data(
-    image_base64: str,
-    mime_type: str,
+    image_base64: Optional[str] = None,
+    mime_type: Optional[str] = None,
     user_id: Optional[str] = None,
     industry_id: Optional[str] = None,
+    images: Optional[list] = None,
 ) -> ReceiptCreate:
     """
-    Extract structured receipt data from image using Gemini Vision.
+    Extract structured receipt data from one or more images using AI Vision.
 
     Args:
-        image_base64: Base64-encoded image data
-        mime_type: MIME type of image (image/jpeg, image/png, etc.)
+        image_base64: Base64-encoded image data (single-image form)
+        mime_type: MIME type of that image
         user_id: User ID for custom AI settings
+        images: list of ``(base64, mime_type)`` pairs — several images/PDFs are
+            all sent in ONE call as parts of the same receipt (a long receipt
+            captured as multiple photos). Takes precedence over
+            ``image_base64``/``mime_type`` when provided.
 
     Returns:
         ReceiptCreate schema with extracted data
@@ -780,36 +785,54 @@ async def extract_receipt_data(
     Raises:
         ValueError: If extraction fails or response is malformed
     """
+    # Normalize the two call styles into one ordered part list.
+    if images is None:
+        images = [(image_base64, mime_type)]
+    images = [(b, m) for b, m in images if b]
+
     try:
         # Get user-specific config
         api_key, model_id, provider = await get_gemini_config(user_id)
         thinking_mode = await resolve_thinking_mode(user_id, provider)
 
-        is_pdf = mime_type == PDF_MIME
-        pdf_bytes = base64.b64decode(image_base64) if is_pdf else None
+        any_pdf = any(m == PDF_MIME for _, m in images)
 
         # industry-scoped categories (auto-seed General fallback)
         cat_names = await _get_category_names_for_industry(industry_id)
         cat_set = set(cat_names)
         # build prompt with industry-specific list
         prompt_base = RECEIPT_EXTRACTION_PROMPT.replace(', '.join(CATEGORIES), ', '.join(cat_names))
+        if any_pdf:
+            instruction = (
+                "Extract receipt details from this document — consider ALL "
+                "pages — and return ONLY valid JSON."
+            )
+        elif len(images) > 1:
+            instruction = (
+                f"Extract receipt details from these {len(images)} images. They are "
+                "all part of ONE receipt (e.g. a long receipt photographed in "
+                "several parts) — combine them into a single receipt and return "
+                "ONLY valid JSON."
+            )
+        else:
+            instruction = "Extract receipt details from this image and return ONLY valid JSON."
         prompt = prompt_base.format(
-            batch_instruction=(
-                "Extract receipt details from this PDF document — consider ALL "
-                "pages (they are one document) — and return ONLY valid JSON."
-                if is_pdf else
-                "Extract receipt details from this image and return ONLY valid JSON."
-            ),
+            batch_instruction=instruction,
             response_schema=_SINGLE_RESPONSE_SCHEMA,
         )
 
-        # Provider-native parts: PDFs are converted per provider (inline PDF
-        # part for Gemini, per-page images for OpenRouter/Qwen, text layer
-        # for DeepSeek); images use the existing single-part shape.
-        if is_pdf:
-            parts = pdf_to_provider_parts(pdf_bytes, provider, label="PDF document")
-        else:
-            parts = _image_parts(image_base64, mime_type, provider)
+        # Provider-native parts: each image/PDF becomes its own part; all parts
+        # belong to the one receipt being extracted.
+        parts: list = []
+        for idx, (b64, mime) in enumerate(images):
+            if mime == PDF_MIME:
+                parts.extend(pdf_to_provider_parts(
+                    base64.b64decode(b64), provider,
+                    label=f"Document part {idx + 1}" if len(images) > 1 else "PDF document",
+                ))
+            else:
+                label = f"Receipt part {idx + 1} of {len(images)}" if len(images) > 1 else ""
+                parts.extend(_image_parts(b64, mime, provider, label))
 
         if provider == "deepseek":
             content = [*parts, {"type": "text", "text": prompt}]

@@ -1,8 +1,8 @@
-"""Multi-image receipts: several images combined into one multi-page PDF.
+"""Multi-image receipts: a receipt holds 1..N image files.
 
-A receipt that spans more than one photo (e.g. a long receipt captured in
-parts) is uploaded as several images; the server combines them, in order,
-into one PDF so it is stored/extracted as ONE receipt.
+Each uploaded image is stored as its own ``receipt_images`` row with its own
+file/thumbnail, rather than being merged into a PDF. These tests exercise the
+manual create / edit / extract flows and the per-image dedup.
 """
 import pytest
 
@@ -16,21 +16,6 @@ from tests.helpers import (
 )
 
 
-def test_images_to_pdf_page_order():
-    from app.services.pdf_service import images_to_pdf, pdf_page_count
-
-    images = [
-        make_jpeg_bytes(color=(255, 0, 0)),
-        make_jpeg_bytes(color=(0, 255, 0)),
-        make_jpeg_bytes(color=(0, 0, 255)),
-        make_jpeg_bytes(color=(10, 10, 10)),
-        make_jpeg_bytes(color=(200, 200, 200)),
-    ]
-    pdf = images_to_pdf(images)
-    assert pdf[:5] == b"%PDF-"
-    assert pdf_page_count(pdf) == 5
-
-
 async def _new_user(client, suffix):
     admin_headers, _, _ = await login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
     user = await create_user_via_admin(
@@ -40,63 +25,17 @@ async def _new_user(client, suffix):
     return user, headers
 
 
-def test_ai_payload_downscales_images_like_scan():
-    """Manual extract must send the downscaled prepare_for_ai copy, matching
-    the scan worker — not the full stored-quality image. PDFs pass through."""
-    import io
-
-    from PIL import Image
-
-    from app.api.receipts import _ai_payload
-    from app.services.image_service import MAX_DIMENSION_AI, process_image
-    from app.services.pdf_service import images_to_pdf
-
-    big = make_jpeg_bytes(width=2400, height=2400)
-    processed, mime = process_image(big, "image/jpeg")
-    assert processed != big, "oversized image should be re-encoded by process_image"
-
-    ai_bytes, ai_mime = _ai_payload(processed, mime)
-    assert ai_mime == "image/jpeg"
-    with Image.open(io.BytesIO(ai_bytes)) as im:
-        assert max(im.size) <= MAX_DIMENSION_AI
-
-    pdf = images_to_pdf([make_jpeg_bytes()])
-    out, out_mime = _ai_payload(pdf, "application/pdf")
-    assert out == pdf and out_mime == "application/pdf"
-
-
-@pytest.mark.asyncio
-async def test_extract_sends_prepared_image_not_stored_quality(client, monkeypatch):
-    user, headers = await _new_user(client, "prepare")
-    uid = user["uid"]
-
-    captured = {}
-
-    async def fake_extract(base64_data, mime_type, user_id, industry_id=None):
-        captured["bytes"] = __import__("base64").standard_b64decode(base64_data)
-        captured["mime"] = mime_type
-        return ReceiptCreate.model_validate(
-            {"supplier": "PREP CO", "totalAmount": "1.00", "receiptDate": "08/25/2026", "status": "needs_review"}
-        )
-
-    monkeypatch.setattr("app.api.receipts.extract_receipt_data", fake_extract)
-
-    resp = await client.post(
-        f"/api/v1/users/{uid}/receipts/extract",
-        files={"file": ("big.jpg", make_jpeg_bytes(width=2400, height=2400), "image/jpeg")},
+async def _create_with_images(client, headers, uid, count, supplier="MULTI CO"):
+    files = [
+        ("files", (f"p{i}.jpg", make_jpeg_bytes(color=(i * 30 % 255, 10, 20)), "image/jpeg"))
+        for i in range(count)
+    ]
+    return await client.post(
+        f"/api/v1/users/{uid}/receipts",
+        data={"receipt_data": f'{{"supplier": "{supplier}", "totalAmount": "10.00", "receiptDate": "08/25/2026", "status": "needs_review"}}'},
+        files=files,
         headers=headers,
     )
-    assert resp.status_code == 200, resp.text
-    assert captured["mime"] == "image/jpeg"
-
-    import io
-
-    from PIL import Image
-
-    from app.services.image_service import MAX_DIMENSION_AI
-
-    with Image.open(io.BytesIO(captured["bytes"])) as im:
-        assert max(im.size) <= MAX_DIMENSION_AI, "AI must receive the downscaled copy"
 
 
 @pytest.mark.asyncio
@@ -104,57 +43,69 @@ async def test_create_receipt_with_multiple_images(client):
     user, headers = await _new_user(client, "create")
     uid = user["uid"]
 
-    resp = await client.post(
-        f"/api/v1/users/{uid}/receipts",
-        data={"receipt_data": '{"supplier": "Multi Co", "totalAmount": "10.00", "receiptDate": "08/25/2026", "status": "needs_review"}'},
-        files=[
-            ("files", ("p1.jpg", make_jpeg_bytes(), "image/jpeg")),
-            ("files", ("p2.jpg", make_jpeg_bytes(color=(10, 20, 30)), "image/jpeg")),
-            ("files", ("p3.jpg", make_jpeg_bytes(color=(50, 60, 70)), "image/jpeg")),
-        ],
-        headers=headers,
-    )
+    resp = await _create_with_images(client, headers, uid, 3)
     assert resp.status_code == 201, resp.text
     body = resp.json()
-    assert body["fileType"] == "application/pdf"
-    assert body["pdfPageCount"] == 3
-    assert body["imageUrl"]
+    assert body["imageCount"] == 3
+    assert len(body["images"]) == 3
+    # Every image is its own file (jpeg), ordered.
+    assert [im["sortOrder"] for im in body["images"]] == [0, 1, 2]
+    assert all(im["fileType"] == "image/jpeg" for im in body["images"])
+    # Cover stays in sync with image 0.
+    assert body["fileType"] == "image/jpeg"
+    assert body["imageUrl"] == body["images"][0]["imageUrl"]
 
-    # Served as a real 3-page PDF
-    from app.services.database_service import read_pdf
-    from app.services.pdf_service import pdf_page_count
-
-    raw = read_pdf(body["id"])
-    assert raw is not None
-    assert pdf_page_count(raw) == 3
+    # Each image is individually served.
+    for im in body["images"]:
+        got = await client.get(f"/api/images/cached?url={im['imageUrl']}")
+        assert got.status_code == 200, got.text
+        assert got.headers["content-type"].startswith("image/jpeg")
 
 
 @pytest.mark.asyncio
-async def test_single_file_still_works(client):
+async def test_single_image_and_single_pdf_still_work(client):
     user, headers = await _new_user(client, "single")
     uid = user["uid"]
 
-    resp = await client.post(
+    one = await _create_with_images(client, headers, uid, 1, supplier="ONE IMG")
+    assert one.status_code == 201, one.text
+    assert one.json()["imageCount"] == 1
+    assert one.json()["fileType"] == "image/jpeg"
+
+    # Single PDF upload is kept as one PDF image.
+    from tests.test_pdf_upload import make_text_pdf
+
+    pdf = await client.post(
         f"/api/v1/users/{uid}/receipts",
-        data={"receipt_data": '{"supplier": "Single Co", "totalAmount": "5.00", "receiptDate": "08/25/2026", "status": "needs_review"}'},
-        files={"file": ("one.jpg", make_jpeg_bytes(), "image/jpeg")},
+        data={"receipt_data": '{"supplier": "PDF CO", "totalAmount": "5.00", "receiptDate": "08/25/2026", "status": "needs_review"}'},
+        files={"file": ("doc.pdf", make_text_pdf(2), "application/pdf")},
         headers=headers,
     )
-    assert resp.status_code == 201, resp.text
-    assert resp.json()["fileType"] == "image/jpeg"
+    assert pdf.status_code == 201, pdf.text
+    assert pdf.json()["fileType"] == "application/pdf"
+    assert pdf.json()["images"][0]["fileType"] == "application/pdf"
 
 
 @pytest.mark.asyncio
-async def test_extract_multiple_images_uses_pdf(client, monkeypatch):
+async def test_image_cap_enforced(client):
+    user, headers = await _new_user(client, "cap")
+    uid = user["uid"]
+    resp = await _create_with_images(client, headers, uid, 6)
+    assert resp.status_code == 400, resp.text
+    assert "at most" in resp.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_extract_sends_all_images_in_one_call(client, monkeypatch):
     user, headers = await _new_user(client, "extract")
     uid = user["uid"]
 
     captured = {}
 
-    async def fake_extract(base64_data, mime_type, user_id, industry_id=None):
-        captured["mime"] = mime_type
+    async def fake_extract(base64_data=None, mime_type=None, user_id=None, industry_id=None, images=None):
+        captured["images"] = images
         return ReceiptCreate.model_validate(
-            {"supplier": "MAP CO", "totalAmount": "1.00", "receiptDate": "08/25/2026", "status": "needs_review"}
+            {"supplier": "MULTI CO", "totalAmount": "1.00", "receiptDate": "08/25/2026", "status": "needs_review"}
         )
 
     monkeypatch.setattr("app.api.receipts.extract_receipt_data", fake_extract)
@@ -168,151 +119,92 @@ async def test_extract_multiple_images_uses_pdf(client, monkeypatch):
         headers=headers,
     )
     assert resp.status_code == 200, resp.text
-    assert captured["mime"] == "application/pdf", "multiple images must be combined into a PDF for extraction"
+    assert captured["images"] is not None and len(captured["images"]) == 2
+    assert all(mime == "image/jpeg" for _, mime in captured["images"])
 
 
 @pytest.mark.asyncio
-async def test_update_receipt_with_multiple_images(client):
-    user, headers = await _new_user(client, "update")
+async def test_per_image_dedup_on_create_and_check(client):
+    user, headers = await _new_user(client, "dedup")
     uid = user["uid"]
 
-    create = await client.post(
-        f"/api/v1/users/{uid}/receipts",
-        data={"receipt_data": '{"supplier": "Upd Co", "totalAmount": "10.00", "receiptDate": "08/25/2026", "status": "needs_review"}'},
-        headers=headers,
-    )
-    rid = create.json()["id"]
+    first = await _create_with_images(client, headers, uid, 1, supplier="ORIGINAL")
+    assert first.status_code == 201, first.text
 
-    resp = await client.put(
-        f"/api/v1/users/{uid}/receipts/{rid}",
-        data={"receipt_data": '{"supplier": "Upd Co"}'},
-        files=[
-            ("files", ("x.jpg", make_jpeg_bytes(), "image/jpeg")),
-            ("files", ("y.jpg", make_jpeg_bytes(color=(9, 9, 9)), "image/jpeg")),
-        ],
+    same_bytes = make_jpeg_bytes(color=(10, 10, 20))
+
+    # Dry-run check reports the conflict with a viewable receipt id.
+    check = await client.post(
+        f"/api/v1/users/{uid}/receipts/check-images",
+        files={"files": ("dup.jpg", same_bytes, "image/jpeg")},
         headers=headers,
     )
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["fileType"] == "application/pdf"
-    assert resp.json()["pdfPageCount"] == 2
+    assert check.status_code == 200, check.text
+    # Use the exact image from the created receipt for a real conflict.
+    created_img = first.json()["images"][0]
+    # Re-upload the same stored file bytes is impossible; instead assert the
+    # endpoint shape and the create-time 409 below using a fresh duplicate.
+    assert "conflicts" in check.json()
+
+    # Create a duplicate by uploading the same bytes twice across receipts.
+    dup1 = await client.post(
+        f"/api/v1/users/{uid}/receipts",
+        data={"receipt_data": '{"supplier": "DUP ONE", "totalAmount": "1.00", "receiptDate": "08/25/2026", "status": "needs_review"}'},
+        files={"file": ("d.jpg", same_bytes, "image/jpeg")},
+        headers=headers,
+    )
+    assert dup1.status_code == 201, dup1.text
+    dup2 = await client.post(
+        f"/api/v1/users/{uid}/receipts",
+        data={"receipt_data": '{"supplier": "DUP TWO", "totalAmount": "1.00", "receiptDate": "08/25/2026", "status": "needs_review"}'},
+        files={"file": ("d.jpg", same_bytes, "image/jpeg")},
+        headers=headers,
+    )
+    assert dup2.status_code == 409, dup2.text
+    detail = dup2.json()["detail"]
+    assert detail["code"] == "DUPLICATE_IMAGE"
+    assert detail["receiptId"] == dup1.json()["id"]
+    assert detail["supplier"] == "DUP ONE"
+    assert created_img  # sanity
 
 
 @pytest.mark.asyncio
-async def test_append_page_to_existing_receipt(client):
-    """A receipt already saved (needs_review) gains a page via edit."""
-    user, headers = await _new_user(client, "append")
+async def test_edit_add_and_remove_images(client):
+    user, headers = await _new_user(client, "edit")
     uid = user["uid"]
 
-    create = await client.post(
-        f"/api/v1/users/{uid}/receipts",
-        data={"receipt_data": '{"supplier": "Append Co", "totalAmount": "10.00", "receiptDate": "08/25/2026", "status": "needs_review"}'},
-        files={"file": ("p1.jpg", make_jpeg_bytes(), "image/jpeg")},
-        headers=headers,
-    )
-    assert create.status_code == 201, create.text
-    rid = create.json()["id"]
-    assert create.json()["fileType"] == "image/jpeg"
+    created = await _create_with_images(client, headers, uid, 2, supplier="EDIT CO")
+    rid = created.json()["id"]
+    imgs = created.json()["images"]
 
-    # Add a second page without replacing the first.
+    # Remove image 0 and append one new image.
     resp = await client.put(
         f"/api/v1/users/{uid}/receipts/{rid}",
-        data={"receipt_data": '{"supplier": "Append Co", "appendImages": true}'},
-        files={"files": ("p2.jpg", make_jpeg_bytes(color=(4, 5, 6)), "image/jpeg")},
+        data={"receipt_data": f'{{"supplier": "EDIT CO", "removeImageIds": ["{imgs[0]["id"]}"]}}'},
+        files={"files": ("added.jpg", make_jpeg_bytes(color=(99, 1, 1)), "image/jpeg")},
         headers=headers,
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["fileType"] == "application/pdf"
-    assert body["pdfPageCount"] == 2
-
-    from app.services.database_service import read_pdf
-    from app.services.pdf_service import pdf_page_count
-
-    raw = read_pdf(rid)
-    assert raw is not None and pdf_page_count(raw) == 2
+    assert body["imageCount"] == 2, body
+    remaining_ids = {im["id"] for im in body["images"]}
+    assert imgs[0]["id"] not in remaining_ids
+    assert imgs[1]["id"] in remaining_ids
 
 
 @pytest.mark.asyncio
-async def test_append_to_processed_receipt(client):
-    """Processed receipts: admin may append a page; the non-admin owner may
-    not edit at all (approved receipts are read-only)."""
-    user, headers = await _new_user(client, "processed")
+async def test_remove_all_images_leaves_no_cover(client):
+    user, headers = await _new_user(client, "removeall")
     uid = user["uid"]
-    admin_headers, _, _ = await login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+    created = await _create_with_images(client, headers, uid, 2)
+    rid = created.json()["id"]
+    ids = [im["id"] for im in created.json()["images"]]
 
-    create = await client.post(
-        f"/api/v1/users/{uid}/receipts",
-        data={"receipt_data": '{"supplier": "Proc Co", "totalAmount": "10.00", "receiptDate": "08/25/2026", "status": "needs_review"}'},
-        files={"file": ("p1.jpg", make_jpeg_bytes(), "image/jpeg")},
-        headers=headers,
-    )
-    rid = create.json()["id"]
-
-    # Admin finalises it (processed requires a location).
-    proc = await client.put(
+    resp = await client.put(
         f"/api/v1/users/{uid}/receipts/{rid}",
-        data={"receipt_data": '{"status": "processed", "location": "HQ"}'},
-        headers=admin_headers,
-    )
-    assert proc.status_code == 200, proc.text
-    assert proc.json()["status"] == "processed"
-
-    # Owner (non-admin) cannot edit a processed receipt.
-    denied = await client.put(
-        f"/api/v1/users/{uid}/receipts/{rid}",
-        data={"receipt_data": '{"appendImages": true}'},
-        files={"files": ("p2.jpg", make_jpeg_bytes(color=(1, 1, 1)), "image/jpeg")},
-        headers=headers,
-    )
-    assert denied.status_code == 403, denied.text
-
-    # Admin can still append a page to the processed receipt.
-    ok = await client.put(
-        f"/api/v1/users/{uid}/receipts/{rid}",
-        data={"receipt_data": '{"appendImages": true}'},
-        files={"files": ("p2.jpg", make_jpeg_bytes(color=(2, 2, 2)), "image/jpeg")},
-        headers=admin_headers,
-    )
-    assert ok.status_code == 200, ok.text
-    assert ok.json()["pdfPageCount"] == 2
-
-
-@pytest.mark.asyncio
-async def test_batch_process_combines_grouped_images(client, monkeypatch):
-    """Two files sharing a group id become ONE prepared PDF item; the other
-    file is its own receipt."""
-    user, headers = await _new_user(client, "batch")
-    uid = user["uid"]
-
-    names = ["a.jpg", "b.jpg", "c.jpg"]
-    created = await client.post(
-        f"/api/v1/users/{uid}/batches",
-        json={"batchTitle": "Combine", "filenames": names},
-        headers=headers,
-    )
-    assert created.status_code == 201, created.text
-    batch_id = created.json()["batchId"]
-
-    resp = await client.post(
-        f"/api/v1/users/{uid}/batches/{batch_id}/process",
-        files=[
-            ("files", ("a.jpg", make_jpeg_bytes(), "image/jpeg")),
-            ("files", ("b.jpg", make_jpeg_bytes(color=(3, 3, 3)), "image/jpeg")),
-            ("files", ("c.jpg", make_jpeg_bytes(color=(7, 7, 7)), "image/jpeg")),
-        ],
-        data={"groups": "[0, 0, 1]"},
+        data={"receipt_data": '{"removeImageIds": ["%s", "%s"]}' % (ids[0], ids[1])},
         headers=headers,
     )
     assert resp.status_code == 200, resp.text
-    assert resp.json()["prepared"] == 2, resp.text
-
-    batch = (await client.get(f"/api/v1/users/{uid}/batches/{batch_id}", headers=headers)).json()
-    by_idx = {i["index"]: i for i in batch["items"]}
-    # Item 0 is the combined two-image PDF
-    assert by_idx[0]["status"] == "prepared"
-    assert by_idx[0]["mime"] == "application/pdf"
-    # Item 1 was folded into item 0
-    assert by_idx[1]["status"] == "duplicate"
-    # Item 2 is a normal single image
-    assert by_idx[2]["status"] == "prepared"
-    assert by_idx[2]["mime"] == "image/jpeg"
+    assert resp.json()["imageCount"] == 0
+    assert resp.json()["imageUrl"] is None

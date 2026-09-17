@@ -46,21 +46,31 @@ async def test_serving_rematerializes_file_from_db_mirror(client):
     user, headers = await _new_user(client)
     receipt = await _create_with_image(client, headers, user["uid"])
     rid = receipt["id"]
-    path = os.path.join(settings.IMAGE_STORAGE_DIR, f"{rid}.jpg")
+
+    from app.core.database import get_pool
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        child = await conn.fetchrow(
+            "SELECT id, image_filename FROM receipt_images WHERE receipt_id = $1 ORDER BY sort_order LIMIT 1",
+            rid,
+        )
+    image_id = str(child["id"])
+    path = os.path.join(settings.IMAGE_STORAGE_DIR, child["image_filename"])
+    tpath = os.path.join(settings.IMAGE_STORAGE_DIR, f"{image_id}_thumb.jpg")
 
     assert os.path.exists(path)
     os.remove(path)  # simulate a wiped image volume
 
     # Serving path must recover from the DB mirror and rewrite the file
-    full = await client.get(f"/api/images/cached?url=%2Freceipt-images%2F{rid}")
+    full = await client.get(f"/api/images/cached?url=%2Freceipt-images%2F{rid}%2F0")
     assert full.status_code == 200, full.text
     assert full.headers["content-type"] == "image/jpeg"
     assert os.path.exists(path), "serving should re-materialize the file"
 
     # Thumbnail path too
-    tpath = os.path.join(settings.IMAGE_STORAGE_DIR, f"{rid}_thumb.jpg")
-    os.remove(tpath)
-    thumb = await client.get(f"/api/images/cached?url=%2Freceipt-images%2F{rid}&thumb=1")
+    if os.path.exists(tpath):
+        os.remove(tpath)
+    thumb = await client.get(f"/api/images/cached?url=%2Freceipt-images%2F{rid}%2F0&thumb=1")
     assert thumb.status_code == 200, thumb.text
     assert os.path.exists(tpath)
 
@@ -72,24 +82,32 @@ async def test_self_heal_backfills_and_repairs(client):
     user, headers = await _new_user(client)
     receipt = await _create_with_image(client, headers, user["uid"])
     rid = receipt["id"]
-    path = os.path.join(settings.IMAGE_STORAGE_DIR, f"{rid}.jpg")
 
-    # Already mirrored at create; delete both mirror + file for one receipt
-    # by simulating a receipt row without a mirror (backfill path)
     from app.core.database import get_pool
     pool = await get_pool()
     async with pool.acquire() as conn:
+        child = await conn.fetchrow(
+            "SELECT id, image_filename FROM receipt_images WHERE receipt_id = $1 ORDER BY sort_order LIMIT 1",
+            rid,
+        )
+    assert child is not None, "receipt should have a child image row"
+    image_id = str(child["id"])
+    path = os.path.join(settings.IMAGE_STORAGE_DIR, child["image_filename"])
+    tpath = os.path.join(settings.IMAGE_STORAGE_DIR, f"{image_id}_thumb.jpg")
+
+    # Already mirrored at create; null the child mirror to exercise backfill.
+    async with pool.acquire() as conn:
         await conn.execute(
-            "UPDATE receipts SET image_bytes = NULL, thumb_bytes = NULL WHERE id = $1", rid
+            "UPDATE receipt_images SET image_bytes = NULL, thumb_bytes = NULL WHERE id = $1",
+            image_id,
         )
     stats = await self_heal_image_files()
     assert stats["backfilled"] >= 1
 
-    # Repair path: remove the file, keep the mirror
+    # Repair path: remove the file, keep the mirror.
     os.remove(path)
-    tpath = os.path.join(settings.IMAGE_STORAGE_DIR, f"{rid}_thumb.jpg")
-    os.remove(tpath)
+    if os.path.exists(tpath):
+        os.remove(tpath)
     stats = await self_heal_image_files()
     assert stats["repaired"] >= 1
     assert os.path.exists(path)
-    assert os.path.exists(tpath)

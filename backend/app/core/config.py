@@ -88,6 +88,9 @@ class Settings(BaseSettings):
     # the worker/dispatch. Longer documents are rejected with a clear message
     # (chunked very-long-PDF extraction is deferred).
     MAX_PDF_PAGES: int = _env_int("MAX_PDF_PAGES", 15)
+    # Max image/PDF files one receipt may hold. A long receipt is captured as
+    # several photos; each is stored as its own image (receipt_images).
+    MAX_RECEIPT_IMAGES: int = _env_int("MAX_RECEIPT_IMAGES", 5)
 
     # Background cleanup of deleted users' data (rows + files). Runs on a
     # timer in the app lifetime so deleting a user never blocks on I/O.

@@ -1,23 +1,45 @@
 import { useState, useRef, useEffect } from "react";
 
+export interface ViewerImage {
+  id?: string | null;
+  imageUrl: string;
+  thumbnailUrl?: string | null;
+  fileType?: string;
+  pdfPageCount?: number | null;
+}
+
 const ImageViewer = ({
   imageUrl,
   altText,
   containerClass = 'h-56 sm:h-72 md:h-96',
   fileType,
   pdfPageCount,
+  images,
 }: {
-  imageUrl: string;
+  imageUrl?: string;
   altText: string;
   containerClass?: string;
   fileType?: string;
   pdfPageCount?: number | null;
+  /** All images of the receipt (ordered). When provided, a thumbnail strip
+   *  and prev/next controls are shown for receipts with more than one. */
+  images?: ViewerImage[];
 }) => {
-  // Combined multi-image receipts are stored as a multi-page PDF — they must
-  // render in the PDF <iframe>, not as an <img>. fileType is the source of
-  // truth, but pdfPageCount is a robust fallback for older rows where the
-  // type wasn't persisted.
-  const isPdf = fileType === 'application/pdf' || (typeof pdfPageCount === 'number' && pdfPageCount > 0);
+  // Normalize to an ordered list; fall back to the single-image props.
+  const list: ViewerImage[] = (images && images.length)
+    ? images
+    : (imageUrl ? [{ imageUrl, fileType, pdfPageCount }] : []);
+
+  const [activeIndex, setActiveIndex] = useState(0);
+  const safeIndex = Math.min(activeIndex, Math.max(0, list.length - 1));
+  const active = list[safeIndex];
+  const activeUrl = active?.imageUrl || '';
+  const activeFileType = active?.fileType ?? fileType;
+  const activePdfPages = active?.pdfPageCount ?? pdfPageCount;
+  // A PDF image must render in the <iframe>, not as an <img>.
+  const isPdf = activeFileType === 'application/pdf'
+    || (typeof activePdfPages === 'number' && activePdfPages > 0);
+
   const [rotation, setRotation] = useState(0);
   const [zoom, setZoom] = useState(1);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -32,17 +54,24 @@ const ImageViewer = ({
   // spinner would then spin forever. Resetting during render (same pass as
   // the new src) guarantees onLoad/onError arrive after the reset.
   const [view, setView] = useState({
-    url: imageUrl,
-    loading: !!imageUrl,
+    url: activeUrl,
+    loading: !!activeUrl,
     error: false,
   });
-  if (view.url !== imageUrl) {
-    setView({ url: imageUrl, loading: !!imageUrl, error: false });
+  if (view.url !== activeUrl) {
+    setView({ url: activeUrl, loading: !!activeUrl, error: false });
     setRotation(0);
     setZoom(1);
     setPanX(0);
     setPanY(0);
   }
+  // Reset index when the underlying set shrinks/changes identity.
+  useEffect(() => {
+    if (activeIndex > 0 && activeIndex >= list.length) setActiveIndex(0);
+  }, [list.length, activeIndex]);
+
+  const goPrev = () => setActiveIndex(i => (i - 1 + list.length) % list.length);
+  const goNext = () => setActiveIndex(i => (i + 1) % list.length);
 
   const touchContainerRef = useRef<HTMLDivElement>(null);
 
@@ -57,7 +86,7 @@ const ImageViewer = ({
   // the server was fixed. Changing the query string changes the cache key and
   // forces a fresh response — bump this when the embed headers change.
   const CACHE_BUST = 'v=2';
-  const displayUrl = `/api/images/cached?url=${encodeURIComponent(imageUrl)}&${CACHE_BUST}`;
+  const displayUrl = `/api/images/cached?url=${encodeURIComponent(activeUrl)}&${CACHE_BUST}`;
 
   const handleRotate = () => {
     setRotation(prev => (prev + 90) % 360);
@@ -172,12 +201,47 @@ const ImageViewer = ({
   const cursorStyle = zoom > 1 ? (isDragging ? 'grabbing' : 'grab') : 'default';
   const zoomPct = Math.round(zoom * 100);
 
-  if (!imageUrl) return null;
+  if (!activeUrl) return null;
+
+  // Thumbnail strip + prev/next for multi-image receipts.
+  const strip = list.length > 1 ? (
+    <div className="mt-2 flex items-center gap-2">
+      <button
+        onClick={goPrev}
+        className="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded border bg-white hover:bg-gray-100 text-gray-600"
+        title="Previous image"
+      >‹</button>
+      <div className="flex gap-1.5 overflow-x-auto flex-1 py-0.5">
+        {list.map((im, i) => (
+          <button
+            key={im.id || i}
+            onClick={() => setActiveIndex(i)}
+            className={`flex-shrink-0 w-12 h-12 rounded border-2 overflow-hidden bg-gray-100 ${
+              i === safeIndex ? 'border-blue-500' : 'border-gray-200 hover:border-gray-300'
+            }`}
+            title={`Image ${i + 1}`}
+          >
+            <img
+              src={`/api/images/cached?url=${encodeURIComponent(im.thumbnailUrl || im.imageUrl)}&thumb=1&${CACHE_BUST}`}
+              alt=""
+              className="w-full h-full object-cover"
+            />
+          </button>
+        ))}
+      </div>
+      <span className="flex-shrink-0 text-xs text-gray-500 tabular-nums">{safeIndex + 1} / {list.length}</span>
+      <button
+        onClick={goNext}
+        className="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded border bg-white hover:bg-gray-100 text-gray-600"
+        title="Next image"
+      >›</button>
+    </div>
+  ) : null;
 
   // ── PDF receipts: render inline via iframe (browser-native viewer) ────
   // Zoom/pan don't apply to documents; show open/download actions instead.
   if (isPdf) {
-    const pdfDisplayUrl = `/api/images/cached?url=${encodeURIComponent(imageUrl)}&${CACHE_BUST}`;
+    const pdfDisplayUrl = `/api/images/cached?url=${encodeURIComponent(activeUrl)}&${CACHE_BUST}`;
     const pdfFrame = (
       <div className="border rounded overflow-hidden bg-gray-50">
         <div className={`relative w-full ${containerClass} bg-gray-100`}>
@@ -209,6 +273,7 @@ const ImageViewer = ({
           <button onClick={handleFullscreen} className="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded border" title="Fullscreen">⛶</button>
         </div>
         {pdfFrame}
+        {strip}
         {isFullscreen && (
           <div className="fixed inset-0 bg-black bg-opacity-90 z-50 flex items-center justify-center" onClick={() => setIsFullscreen(false)}>
             <div className="relative w-full max-w-5xl h-[90vh] p-4" onClick={(e) => e.stopPropagation()}>
@@ -273,6 +338,8 @@ const ImageViewer = ({
           )}
         </div>
       </div>
+
+      {strip}
 
       {/* Zoom indicator */}
       {zoom !== 1 && (

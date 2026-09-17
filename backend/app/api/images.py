@@ -160,12 +160,25 @@ async def get_cached_image(url: str, thumb: Optional[bool] = Query(None), w: Opt
         from io import BytesIO
         from PIL import Image
         from fastapi import Request
-        from app.services.database_service import read_receipt_file
-        parts = url.rstrip("/").split("/")
-        raw_id = parts[-1]
+        from app.services.database_service import read_receipt_file, read_receipt_image
+        # Layouts:
+        #   /receipt-images/{receipt_id}/{index}   → the N-th image (new)
+        #   /receipt-images/{receipt_id}           → first image (back-compat)
+        parts = [p for p in url.rstrip("/").split("/") if p]
+        # parts == ["receipt-images", "{receipt_id}", "{index}"?]
+        raw_id = parts[1] if len(parts) >= 2 else ""
+        image_index = None
+        if len(parts) >= 3:
+            try:
+                image_index = int(parts[2].split("?")[0])
+            except (ValueError, IndexError):
+                image_index = None
         thumb = thumb if thumb is not None else ("?thumb=1" in url or url.endswith("?thumb=1"))
         receipt_id = raw_id.split("?")[0]
-        content, media_type = await read_receipt_file(receipt_id, thumb=thumb)
+        if image_index is None:
+            content, media_type = await read_receipt_file(receipt_id, thumb=thumb)
+        else:
+            content, media_type = await read_receipt_image(receipt_id, image_index, thumb=thumb)
         if content:
             if media_type == "application/pdf":
                 h = hashlib.sha256(content).hexdigest()[:16]
