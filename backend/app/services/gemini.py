@@ -321,17 +321,27 @@ async def get_gemini_config(user_id: Optional[str]) -> Tuple[str, str, str]:
     if ai_settings:
         # Only honor the user's model when it actually belongs to the active
         # provider — legacy/stale defaults (e.g. "gemini-3-flash-preview" for a
-        # deepseek user) must never leak across providers.
+        # deepseek user) must never leak across providers. An unknown id like
+        # "svs_l2" is silently healed to the provider's default so a stale row
+        # never crash-loops the app; the UI surfaces the fallback.
         user_model = ai_settings.get("model_id")
         if user_model and _is_valid_model(provider, user_model):
             model_id = user_model
+        elif user_model and not _is_valid_model(provider, user_model):
+            logger.warning("Unknown model '%s' for provider '%s' — falling back to '%s'", user_model, provider, model_id)
 
     api_key = user_api_key
     admin = await admin_keys_service.get_provider_override(provider)
     if not api_key and admin and admin.get("enabled") and admin.get("api_key"):
         api_key = admin["api_key"]
         if model_id == admin_keys_service.default_model_for(provider):
-            model_id = admin.get("model_id") or admin_keys_service.default_model_for(provider)
+            admin_model = admin.get("model_id") or ""
+            if admin_model and _is_valid_model(provider, admin_model):
+                model_id = admin_model
+            elif admin_model:
+                logger.warning("Unknown admin model '%s' for provider '%s' — falling back to '%s'", admin_model, provider, model_id)
+            else:
+                model_id = admin_keys_service.default_model_for(provider)
 
     if not api_key:
         raise ValueError(

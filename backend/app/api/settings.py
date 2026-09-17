@@ -96,7 +96,21 @@ async def update_ai_settings(
     if settings_update.provider:
         current["provider"] = settings_update.provider
     
-    if settings_update.model_id:
+    if settings_update.model_id is not None:
+        # Reject unknown model ids early so the UI never gets stuck
+        # storing an unusable value like "svs_l2". Empty means "use default".
+        mid = (settings_update.model_id or "").strip()
+        if mid:
+            from app.services.model_registry import MODELS
+            provider_for_check = settings_update.provider or current.get("provider", AIProvider.GEMINI)
+            # AIProvider is an Enum — normalize to its value for registry lookup
+            pkey = provider_for_check.value if hasattr(provider_for_check, "value") else str(provider_for_check)
+            allowed = {m["id"] for m in MODELS.get(pkey, [])}
+            if mid not in allowed:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Unknown model '{mid}' for provider '{pkey}'. Choose one of: {', '.join(sorted(allowed)) or 'none'}",
+                )
         current["model_id"] = settings_update.model_id
         
     # Update specific provider config

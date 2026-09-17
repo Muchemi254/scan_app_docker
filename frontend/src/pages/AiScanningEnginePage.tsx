@@ -52,7 +52,9 @@ const AiScanningEnginePage = ({ userId }: { userId: string | null }) => {
   const activeConfig = settings.configs[settings.provider] || { api_key: '', enabled: true, thinking_mode: false };
   const isKeyConfigured = activeConfig.api_key?.startsWith('********');
   const activeModel = models.find(m => m.id === settings.model_id);
+  const isUnknownModel = !!settings.model_id && !activeModel;
   const supportsThinking = activeModel?.supports_thinking ?? false;
+  const providerModels = models.filter(m => m.provider === settings.provider);
 
   useEffect(() => {
     if (!userId) return;
@@ -196,7 +198,12 @@ const AiScanningEnginePage = ({ userId }: { userId: string | null }) => {
                   <label className="block text-sm font-medium text-gray-700 mb-1">Provider</label>
                   <select 
                     value={settings.provider}
-                    onChange={(e) => setSettings({ ...settings, provider: e.target.value })}
+                    onChange={(e) => {
+                      const nextProvider = e.target.value;
+                      const nextModels = models.filter(m => m.provider === nextProvider);
+                      const stillValid = nextModels.some(m => m.id === settings.model_id);
+                      setSettings({ ...settings, provider: nextProvider, model_id: stillValid ? settings.model_id : (nextModels[0]?.id || settings.model_id) });
+                    }}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
                   >
                     <option value="gemini">Google Gemini</option>
@@ -213,20 +220,43 @@ const AiScanningEnginePage = ({ userId }: { userId: string | null }) => {
                     onChange={(e) => setSettings({ ...settings, model_id: e.target.value })}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
                   >
-                    {models.filter(m => m.provider === settings.provider).map(model => (
+                    {isUnknownModel && (
+                      <option value={settings.model_id}>{settings.model_id} — unknown (choose a valid model)</option>
+                    )}
+                    {providerModels.map(model => (
                       <option key={model.id} value={model.id}>{model.name}</option>
                     ))}
                   </select>
-                  <p className="mt-1 text-sm text-gray-500">
-                    {models.find(m => m.id === settings.model_id)?.description}
-                  </p>
-                  {models.find(m => m.id === settings.model_id)?.caveat && (
-                    <div className="mt-2 p-3 bg-amber-50 rounded-lg border border-amber-200 flex gap-2">
-                      <AlertCircle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
-                      <p className="text-xs text-amber-700 leading-relaxed">
-                        {models.find(m => m.id === settings.model_id)?.caveat}
-                      </p>
+                  {isUnknownModel ? (
+                    <div className="mt-2 p-3 bg-red-50 rounded-lg border border-red-200 flex gap-2 items-start">
+                      <AlertCircle className="h-4 w-4 text-red-600 shrink-0 mt-0.5" />
+                      <div className="flex-1">
+                        <p className="text-xs text-red-700 font-medium">Unknown model “{settings.model_id}” for this provider — it was ignored and the default will be used for scans.</p>
+                        <button
+                          onClick={() => {
+                            const fallback = providerModels[0]?.id || '';
+                            if (fallback) setSettings({ ...settings, model_id: fallback });
+                          }}
+                          className="mt-2 px-3 py-1 text-xs bg-white border border-red-200 text-red-700 rounded hover:bg-red-50"
+                        >
+                          Reset to default ({providerModels[0]?.name || 'provider default'})
+                        </button>
+                      </div>
                     </div>
+                  ) : (
+                    <>
+                      <p className="mt-1 text-sm text-gray-500">
+                        {activeModel?.description}
+                      </p>
+                      {activeModel?.caveat && (
+                        <div className="mt-2 p-3 bg-amber-50 rounded-lg border border-amber-200 flex gap-2">
+                          <AlertCircle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+                          <p className="text-xs text-amber-700 leading-relaxed">
+                            {activeModel.caveat}
+                          </p>
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               </div>
