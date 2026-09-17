@@ -313,7 +313,13 @@ def create_app() -> FastAPI:
     async def add_security_headers(request, call_next):
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
+        # SAMEORIGIN allows the app to frame its own PDFs (receipt viewer uses
+        # an <iframe> for application/pdf) while still blocking cross-origin.
+        # The previous DENY broke PDF previews with "Refused to display ... in a
+        # frame because it set X-Frame-Options to deny". Per-response headers
+        # (e.g. PDF inline) are respected — don't override an explicit value.
+        if "X-Frame-Options" not in response.headers:
+            response.headers["X-Frame-Options"] = "SAMEORIGIN"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         return response
 
