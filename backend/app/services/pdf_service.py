@@ -152,3 +152,22 @@ def images_to_pdf(image_bytes_list: List[bytes]) -> bytes:
     except Exception as e:
         raise ValueError(f"Could not build combined PDF: {e}") from e
     return buf.getvalue()
+
+
+def merge_pdfs(first: bytes, second: bytes) -> bytes:
+    """Append ``second``'s pages after ``first``'s (lossless pypdf merge).
+
+    Used to add pages to a receipt that already holds a multi-page PDF.
+    Raises ValueError if either PDF is unreadable.
+    """
+    from pypdf import PdfReader, PdfWriter
+
+    writer = PdfWriter()
+    try:
+        for part in (first, second):
+            writer.append(PdfReader(io.BytesIO(part)))
+        buf = io.BytesIO()
+        writer.write(buf)
+    except Exception as e:
+        raise ValueError(f"Could not merge PDFs: {e}") from e
+    return buf.getvalue()

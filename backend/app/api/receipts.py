@@ -167,6 +167,52 @@ async def _prepare_uploads(uploads: List[UploadFile]) -> tuple:
     return pdf_bytes, PDF_MIME, len(prepared)
 
 
+async def _append_to_existing(receipt_id: str, processed: bytes, processed_type: str, current: dict) -> tuple:
+    """Combine newly uploaded pages with a receipt's already-stored file.
+
+    Returns ``(pdf_bytes, PDF_MIME, page_count)`` — an edit that adds a page
+    to an existing (review OR processed) receipt. Falls back to the plain new
+    upload when the receipt has no readable image, so the edit never fails
+    just because the old bytes are missing.
+    """
+    from app.services.database_service import read_receipt_file
+    from app.services.pdf_service import images_to_pdf, merge_pdfs, pdf_page_count
+
+    existing_bytes = None
+    existing_media = None
+    try:
+        existing_bytes, existing_media = await read_receipt_file(receipt_id)
+    except Exception:
+        logger.warning("Could not read existing file for append on %s", receipt_id, exc_info=True)
+
+    if not existing_bytes:
+        return processed, processed_type, None
+
+    if existing_media == PDF_MIME:
+        combined = merge_pdfs(existing_bytes, processed if processed_type == PDF_MIME else images_to_pdf([processed]))
+    elif processed_type == PDF_MIME:
+        combined = merge_pdfs(images_to_pdf([existing_bytes]), processed)
+    else:
+        # Existing single image + newly added image(s).
+        combined = images_to_pdf([existing_bytes, processed])
+
+    try:
+        count = pdf_page_count(combined)
+    except ValueError:
+        count = None
+    cap = settings.MAX_PDF_PAGES
+    if cap and count and count > cap:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Adding these page(s) would make {count} pages — maximum supported is {cap}",
+        )
+
+    # The combined PDF replaces the receipt's previous file(s); remove the old
+    # artifacts now that their bytes are safely in memory.
+    delete_receipt_images(receipt_id)
+    return combined, PDF_MIME, count
+
+
 # ============================================================================
 # EXTRACT & CREATE ENDPOINTS
 # ============================================================================
@@ -682,17 +728,33 @@ async def update_receipt(
             if not (location or "").strip():
                 raise location_required_for_processed()
 
-        # Upload new image(s) if provided
+        # Upload new image(s) if provided.
+        #   appendImages=True  → add the new pages to the receipt's existing
+        #                        image/PDF (one receipt gains a page).
+        #   otherwise          → replace the stored image(s).
         image_url = current.get("imageUrl")
+        image_filename = None
         thumbnail_filename = None
         file_type = None
         pdf_page_count = None
         uploads = _gather_uploads(file, files)
         if uploads:
             processed, processed_type, combined_pages = await _prepare_uploads(uploads)
+            append = bool(updates.appendImages)
 
             if settings.USE_POSTGRES:
+                if append:
+                    processed, processed_type, combined_pages = await _append_to_existing(
+                        receiptId, processed, processed_type, current
+                    )
+                elif processed_type == PDF_MIME:
+                    # Replace: drop the old file(s) so a .jpg→.pdf (or back)
+                    # switch never leaves an orphan behind.
+                    delete_receipt_images(receiptId)
+
                 if processed_type == PDF_MIME:
+                    # Non-append PDFs were already cleaned above; the old files
+                    # of an appended receipt are removed inside _append_to_existing.
                     image_filename = save_pdf(receiptId, processed)
                     thumb_name = save_pdf_thumbnail(receiptId, processed)
                     if thumb_name:
@@ -700,6 +762,8 @@ async def update_receipt(
                     file_type = PDF_MIME
                     pdf_page_count = combined_pages or _check_pdf_pages(processed)
                 else:
+                    # Plain single-image replace (append never reaches here).
+                    delete_receipt_images(receiptId)
                     thumb = generate_thumbnail(processed, processed_type or "image/jpeg")
                     image_filename = save_image(receiptId, processed)
                     if thumb:
@@ -714,6 +778,7 @@ async def update_receipt(
 
         # Prepare update data
         data = updates.model_dump(exclude_unset=True)
+        data.pop("appendImages", None)  # API-only flag, not a receipt column
         if uploads:
             if settings.USE_POSTGRES:
                 data["image_filename"] = image_filename

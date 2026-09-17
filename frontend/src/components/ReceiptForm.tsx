@@ -53,6 +53,10 @@ const ReceiptForm = ({
   } as any));
   const [industries, setIndustries] = useState<{ id: string; name: string }[]>([]);
   const [categories, setCategories] = useState<{ id: string; industry_id: string; name: string; label: string; parent_id?: string | null }[]>([]);
+  // Editing an existing receipt: choose whether newly picked files replace the
+  // stored image(s) or are appended as extra pages (add a photo to a receipt).
+  const isEditing = !!initialData?.id;
+  const [appendPages, setAppendPages] = useState(false);
   // Industry on board at mount (before the user-default fills an empty one).
   // A ref keeps the mount-once effects below honest for exhaustive-deps.
   const initialIndustryRef = useRef((initialData as any)?.industry_id || (initialData as any)?.industryId || '');
@@ -237,6 +241,9 @@ const ReceiptForm = ({
 
     const sanitizedData = {
       ...formData,
+      // Only meaningful on edit: append uploaded pages to the existing file
+      // instead of replacing it.
+      appendImages: isEditing ? appendPages : undefined,
       status: statusOverride || formData.status,
       items: formData.items.map(({ name, quantity, price, tax, discount, isZeroRated, taxRate }) => ({
         name,
@@ -668,6 +675,21 @@ const ReceiptForm = ({
             Receipt Image(s) / PDF
             <span className="ml-1 font-normal text-gray-400">(select 2+ images to combine into one receipt)</span>
           </label>
+          {isEditing && (
+            <div className="flex items-center gap-1.5 mb-1">
+              <select
+                value={appendPages ? 'append' : 'replace'}
+                onChange={(e) => setAppendPages(e.target.value === 'append')}
+                className="px-1.5 py-0.5 text-xs border rounded bg-white"
+              >
+                <option value="replace">Replace image(s)</option>
+                <option value="append">Add page(s) to existing</option>
+              </select>
+              {appendPages && (
+                <span className="text-[11px] text-gray-400">keeps current page(s) + adds selected</span>
+              )}
+            </div>
+          )}
           <input
             type="file"
             multiple

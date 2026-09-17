@@ -111,6 +111,10 @@ class ReceiptUpdate(BaseModel):
     location: Optional[str] = None
     taxRate: Optional[str] = None
     entryType: Optional[str] = None
+    # When true, uploaded files are appended as extra pages to the receipt's
+    # existing image/PDF instead of replacing it (add-a-photo to a saved
+    # receipt). Handled by the API; never persisted as a receipt column.
+    appendImages: Optional[bool] = None
 
     @field_validator("supplier", mode="before")
     @classmethod

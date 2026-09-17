@@ -139,6 +139,86 @@ async def test_update_receipt_with_multiple_images(client):
 
 
 @pytest.mark.asyncio
+async def test_append_page_to_existing_receipt(client):
+    """A receipt already saved (needs_review) gains a page via edit."""
+    user, headers = await _new_user(client, "append")
+    uid = user["uid"]
+
+    create = await client.post(
+        f"/api/v1/users/{uid}/receipts",
+        data={"receipt_data": '{"supplier": "Append Co", "totalAmount": "10.00", "receiptDate": "08/25/2026", "status": "needs_review"}'},
+        files={"file": ("p1.jpg", make_jpeg_bytes(), "image/jpeg")},
+        headers=headers,
+    )
+    assert create.status_code == 201, create.text
+    rid = create.json()["id"]
+    assert create.json()["fileType"] == "image/jpeg"
+
+    # Add a second page without replacing the first.
+    resp = await client.put(
+        f"/api/v1/users/{uid}/receipts/{rid}",
+        data={"receipt_data": '{"supplier": "Append Co", "appendImages": true}'},
+        files={"files": ("p2.jpg", make_jpeg_bytes(color=(4, 5, 6)), "image/jpeg")},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["fileType"] == "application/pdf"
+    assert body["pdfPageCount"] == 2
+
+    from app.services.database_service import read_pdf
+    from app.services.pdf_service import pdf_page_count
+
+    raw = read_pdf(rid)
+    assert raw is not None and pdf_page_count(raw) == 2
+
+
+@pytest.mark.asyncio
+async def test_append_to_processed_receipt(client):
+    """Processed receipts: admin may append a page; the non-admin owner may
+    not edit at all (approved receipts are read-only)."""
+    user, headers = await _new_user(client, "processed")
+    uid = user["uid"]
+    admin_headers, _, _ = await login(client, ADMIN_EMAIL, ADMIN_PASSWORD)
+
+    create = await client.post(
+        f"/api/v1/users/{uid}/receipts",
+        data={"receipt_data": '{"supplier": "Proc Co", "totalAmount": "10.00", "receiptDate": "08/25/2026", "status": "needs_review"}'},
+        files={"file": ("p1.jpg", make_jpeg_bytes(), "image/jpeg")},
+        headers=headers,
+    )
+    rid = create.json()["id"]
+
+    # Admin finalises it (processed requires a location).
+    proc = await client.put(
+        f"/api/v1/users/{uid}/receipts/{rid}",
+        data={"receipt_data": '{"status": "processed", "location": "HQ"}'},
+        headers=admin_headers,
+    )
+    assert proc.status_code == 200, proc.text
+    assert proc.json()["status"] == "processed"
+
+    # Owner (non-admin) cannot edit a processed receipt.
+    denied = await client.put(
+        f"/api/v1/users/{uid}/receipts/{rid}",
+        data={"receipt_data": '{"appendImages": true}'},
+        files={"files": ("p2.jpg", make_jpeg_bytes(color=(1, 1, 1)), "image/jpeg")},
+        headers=headers,
+    )
+    assert denied.status_code == 403, denied.text
+
+    # Admin can still append a page to the processed receipt.
+    ok = await client.put(
+        f"/api/v1/users/{uid}/receipts/{rid}",
+        data={"receipt_data": '{"appendImages": true}'},
+        files={"files": ("p2.jpg", make_jpeg_bytes(color=(2, 2, 2)), "image/jpeg")},
+        headers=admin_headers,
+    )
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["pdfPageCount"] == 2
+
+
+@pytest.mark.asyncio
 async def test_batch_process_combines_grouped_images(client, monkeypatch):
     """Two files sharing a group id become ONE prepared PDF item; the other
     file is its own receipt."""
