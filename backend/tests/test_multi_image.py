@@ -40,6 +40,65 @@ async def _new_user(client, suffix):
     return user, headers
 
 
+def test_ai_payload_downscales_images_like_scan():
+    """Manual extract must send the downscaled prepare_for_ai copy, matching
+    the scan worker — not the full stored-quality image. PDFs pass through."""
+    import io
+
+    from PIL import Image
+
+    from app.api.receipts import _ai_payload
+    from app.services.image_service import MAX_DIMENSION_AI, process_image
+    from app.services.pdf_service import images_to_pdf
+
+    big = make_jpeg_bytes(width=2400, height=2400)
+    processed, mime = process_image(big, "image/jpeg")
+    assert processed != big, "oversized image should be re-encoded by process_image"
+
+    ai_bytes, ai_mime = _ai_payload(processed, mime)
+    assert ai_mime == "image/jpeg"
+    with Image.open(io.BytesIO(ai_bytes)) as im:
+        assert max(im.size) <= MAX_DIMENSION_AI
+
+    pdf = images_to_pdf([make_jpeg_bytes()])
+    out, out_mime = _ai_payload(pdf, "application/pdf")
+    assert out == pdf and out_mime == "application/pdf"
+
+
+@pytest.mark.asyncio
+async def test_extract_sends_prepared_image_not_stored_quality(client, monkeypatch):
+    user, headers = await _new_user(client, "prepare")
+    uid = user["uid"]
+
+    captured = {}
+
+    async def fake_extract(base64_data, mime_type, user_id, industry_id=None):
+        captured["bytes"] = __import__("base64").standard_b64decode(base64_data)
+        captured["mime"] = mime_type
+        return ReceiptCreate.model_validate(
+            {"supplier": "PREP CO", "totalAmount": "1.00", "receiptDate": "08/25/2026", "status": "needs_review"}
+        )
+
+    monkeypatch.setattr("app.api.receipts.extract_receipt_data", fake_extract)
+
+    resp = await client.post(
+        f"/api/v1/users/{uid}/receipts/extract",
+        files={"file": ("big.jpg", make_jpeg_bytes(width=2400, height=2400), "image/jpeg")},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert captured["mime"] == "image/jpeg"
+
+    import io
+
+    from PIL import Image
+
+    from app.services.image_service import MAX_DIMENSION_AI
+
+    with Image.open(io.BytesIO(captured["bytes"])) as im:
+        assert max(im.size) <= MAX_DIMENSION_AI, "AI must receive the downscaled copy"
+
+
 @pytest.mark.asyncio
 async def test_create_receipt_with_multiple_images(client):
     user, headers = await _new_user(client, "create")

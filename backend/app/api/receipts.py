@@ -167,6 +167,20 @@ async def _prepare_uploads(uploads: List[UploadFile]) -> tuple:
     return pdf_bytes, PDF_MIME, len(prepared)
 
 
+def _ai_payload(processed: bytes, processed_type: str) -> tuple:
+    """The bytes + mime the AI should receive for an extraction.
+
+    The scan pipeline stores a high-quality copy (``process_image``) but sends a
+    downscaled ``prepare_for_ai`` copy so token cost / OCR behaviour are
+    identical. Manual extract must follow the same rule — otherwise it would
+    send the full stored-quality image. PDFs pass through unchanged (the
+    provider layer renders/normalizes their pages).
+    """
+    if processed_type == PDF_MIME:
+        return processed, processed_type
+    return prepare_for_ai(processed), "image/jpeg"
+
+
 async def _append_to_existing(receipt_id: str, processed: bytes, processed_type: str, current: dict) -> tuple:
     """Combine newly uploaded pages with a receipt's already-stored file.
 
@@ -309,12 +323,16 @@ async def extract_receipt_from_image(
         uploads = _gather_uploads(file, files)
         processed, processed_type, _page_count = await _prepare_uploads(uploads)
 
+        # Same AI rule as the scan worker: send the downscaled copy, never the
+        # stored-quality original.
+        ai_bytes, ai_mime = _ai_payload(processed, processed_type)
+
         # Convert to base64 for the provider
         import base64
-        base64_data = base64.standard_b64encode(processed).decode()
+        base64_data = base64.standard_b64encode(ai_bytes).decode()
 
         # Extract using provider (images → JPEG; PDFs converted per provider)
-        receipt = await extract_receipt_data(base64_data, processed_type, userId, industry_id=industry_id)
+        receipt = await extract_receipt_data(base64_data, ai_mime, userId, industry_id=industry_id)
 
         return receipt
 
