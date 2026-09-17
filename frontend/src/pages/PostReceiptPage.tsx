@@ -4,11 +4,12 @@ import { receiptApi } from '../services/api';
 import { getLocations, getEntryTypes } from '../services/referenceData';
 import { useReceiptStore } from '../stores/receiptStore';
 import ReceiptForm from '../components/ReceiptForm';
+import type { ViewerImage } from '../components/ImageViewer';
 
 const PostReceiptPage = ({ userId }: { userId: string | null }) => {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
-  const [imageFiles, setImageFiles] = useState<File[]>([]);
+  const [stagedImages, setStagedImages] = useState<ViewerImage[]>([]);
   const { add } = useReceiptStore();
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
   const [entryTypes, setEntryTypes] = useState<{ id: string; name: string; label: string }[]>([]);
@@ -26,10 +27,7 @@ const PostReceiptPage = ({ userId }: { userId: string | null }) => {
     if (!userId) return;
     setLoading(true);
     try {
-      const created = await receiptApi.create(
-        { ...data, status: 'needs_review' },
-        imageFiles.length ? imageFiles : undefined,
-      );
+      const created = await receiptApi.create({ ...data, status: 'needs_review' });
       add(created);
       navigate('/receipts');
     } catch (error) {
@@ -48,8 +46,8 @@ const PostReceiptPage = ({ userId }: { userId: string | null }) => {
       <ReceiptForm
         initialData={{}}
         onSubmit={handleSubmit}
-        pendingImages={imageFiles}
-        onImagesChange={(pending) => setImageFiles(pending)}
+        stagedImages={stagedImages}
+        onImagesChange={(staged) => setStagedImages(staged)}
         loading={loading}
         locations={locations}
         entryTypes={entryTypes}

@@ -282,6 +282,32 @@ class DataService:
             return await db.set_user_default_industry(user_id, industry_id)
         return False
 
+    # ── Staged receipt images (processed, not yet attached) ──────────────
+
+    @classmethod
+    async def insert_staged_image(
+        cls, image_id: str, user_id: str, image_filename: str,
+        thumbnail_filename, file_type: str, pdf_page_count, image_sha256: str,
+    ) -> None:
+        _, backend = cls._backend()
+        if backend != "postgres":
+            return
+        from app.services.database_service import insert_staged_image
+
+        await insert_staged_image(
+            image_id, user_id, image_filename, thumbnail_filename,
+            file_type, pdf_page_count, image_sha256,
+        )
+
+    @classmethod
+    async def delete_staged_image_rows(cls, image_ids) -> int:
+        _, backend = cls._backend()
+        if backend != "postgres":
+            return 0
+        from app.services.database_service import delete_staged_image_rows
+
+        return await delete_staged_image_rows(image_ids)
+
     @classmethod
     async def find_receipts_by_image_hashes(
         cls, user_id: str, hashes: List[str]

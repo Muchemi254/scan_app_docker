@@ -46,6 +46,7 @@ _USER_TABLES = (
     "scan_sessions",
     "backups",
     "user_ai_settings",
+    "staged_receipt_images",
 )
 
 _TEMP_DIR_PREFIXES = ("_scan_", "_batch_", "_import_", "_preview_")
@@ -145,9 +146,13 @@ async def purge_user_data(user_id: str, op_id: str = None) -> dict:
     tasks = await _fetch("SELECT id FROM tasks WHERE user_id = $1", user_id)
     sessions = await _fetch("SELECT id FROM scan_sessions WHERE user_id = $1", user_id)
     backups = await _fetch("SELECT id FROM backups WHERE user_id = $1", user_id)
-    # Collect child image filenames BEFORE the rows are cascade-deleted.
+    # Collect child + staged image filenames BEFORE rows are deleted.
     image_rows = await _fetch(
         "SELECT id, image_filename, thumbnail_filename FROM receipt_images WHERE user_id = $1",
+        user_id,
+    )
+    staged_rows = await _fetch(
+        "SELECT id, image_filename, thumbnail_filename FROM staged_receipt_images WHERE user_id = $1",
         user_id,
     )
     total_rows = len(receipts) + len(tasks) + len(sessions) + len(backups)
@@ -176,6 +181,7 @@ async def purge_user_data(user_id: str, op_id: str = None) -> dict:
 
     removed_images = _remove_receipt_images([str(r["id"]) for r in receipts])
     removed_images += _remove_child_image_files(image_rows)
+    removed_images += _remove_child_image_files(staged_rows)
     removed_backups = _remove_backup_files([str(r["id"]) for r in backups])
     removed_dirs = _remove_temp_dirs(
         [str(r["id"]) for r in sessions], [str(r["id"]) for r in tasks]
@@ -244,6 +250,17 @@ async def _sweep_orphan_image_files() -> int:
             referenced.add(base + "_thumb.jpg")
     for r in await _fetch(
         "SELECT image_filename, thumbnail_filename FROM receipt_images "
+        "WHERE image_filename IS NOT NULL"
+    ):
+        name = r["image_filename"]
+        referenced.add(name)
+        thumb = r["thumbnail_filename"]
+        if thumb:
+            referenced.add(thumb)
+        if name.endswith(".jpg") or name.endswith(".pdf"):
+            referenced.add(name.rsplit(".", 1)[0] + "_thumb.jpg")
+    for r in await _fetch(
+        "SELECT image_filename, thumbnail_filename FROM staged_receipt_images "
         "WHERE image_filename IS NOT NULL"
     ):
         name = r["image_filename"]
@@ -426,4 +443,11 @@ async def cleanup_orphaned_data() -> dict:
     stats["orphan_backup_files_removed"] = await _sweep_orphan_backup_files()
     stats["orphan_image_files_removed"] = await _sweep_orphan_image_files()
     stats["stale_temp_dirs_removed"] = await _sweep_stale_temp_dirs()
+    # Staged images the user never attached (abandoned editors).
+    try:
+        from app.services.database_service import sweep_stale_staged_images
+        stats["stale_staged_images_removed"] = await sweep_stale_staged_images()
+    except Exception as e:
+        logger.warning("staged image sweep failed: %s", e)
+        stats["stale_staged_images_removed"] = 0
     return stats

@@ -75,6 +75,8 @@ class ReceiptCreate(ReceiptBase):
     # Extraction hint: an uploaded image already exists on this receipt.
     duplicateOfReceiptId: Optional[str] = Field(None, description="Existing receipt using this image")
     duplicateOfSupplier: Optional[str] = Field(None, description="Supplier of that existing receipt")
+    # Ids of server-processed staged images to attach to this receipt.
+    stagedImageIds: Optional[List[str]] = Field(None, description="Staged image ids to attach")
 
     @field_validator("supplier", mode="before")
     @classmethod
@@ -114,9 +116,10 @@ class ReceiptUpdate(BaseModel):
     location: Optional[str] = None
     taxRate: Optional[str] = None
     entryType: Optional[str] = None
-    # Multi-image receipts: ids of child images to remove, and (via the
-    # multipart `files`) new images to append. API-only; not receipt columns.
+    # Multi-image receipts: ids of child images to remove, server-processed
+    # staged image ids to attach, and (via multipart `files`) raw uploads.
     removeImageIds: Optional[List[str]] = None
+    stagedImageIds: Optional[List[str]] = None
 
     @field_validator("supplier", mode="before")
     @classmethod

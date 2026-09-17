@@ -150,6 +150,22 @@ async def get_cached_image(url: str, thumb: Optional[bool] = Query(None), w: Opt
     - Local files:  url starts with "/receipt-images/" → read from disk
     - External URLs: fetches from source → caches in Redis → returns
     """
+    # ── Staged images (processed, not yet attached to a receipt) ─────────
+    if url.startswith("/staged-images/"):
+        import hashlib
+        from app.services.database_service import read_staged_image
+        parts = [p for p in url.rstrip("/").split("/") if p]
+        image_id = parts[1].split("?")[0] if len(parts) >= 2 else ""
+        thumb = thumb if thumb is not None else ("?thumb=1" in url or url.endswith("?thumb=1"))
+        content, media_type = await read_staged_image(image_id, thumb=thumb)
+        if content:
+            etag = hashlib.sha256(content).hexdigest()[:16]
+            return Response(
+                content=content, media_type=media_type,
+                headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "ETag": f'"{etag}"'},
+            )
+        raise HTTPException(status_code=404, detail="Staged image not found")
+
     # ── Local filesystem path (PostgreSQL-backed receipts) ────────────────
     #
     # NOTE: Image requests via <img> tags cannot carry auth headers.

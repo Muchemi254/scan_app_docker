@@ -13,7 +13,7 @@ const ReceiptForm = ({
   initialData,
   onSubmit,
   onImagesChange,
-  pendingImages = [],
+  stagedImages = [],
   removedImageIds = [],
   existingImages,
   loading,
@@ -24,9 +24,9 @@ const ReceiptForm = ({
 }: {
   initialData: any;
   onSubmit: (data: any) => void;
-  /** Newly picked files + existing-image ids to remove (controlled). */
-  onImagesChange?: (pending: File[], removedIds: string[]) => void;
-  pendingImages?: File[];
+  /** Server-staged images (processed) + existing-image ids to remove. */
+  onImagesChange?: (staged: ViewerImage[], removedIds: string[]) => void;
+  stagedImages?: ViewerImage[];
   removedImageIds?: string[];
   /** Existing stored images (from initialData.images); when omitted the form
    *  reads initialData.images directly. */
@@ -70,7 +70,7 @@ const ReceiptForm = ({
   const storedImages: ViewerImage[] = (existingImages
     ?? ((initialData as any)?.images || [])) as ViewerImage[];
   const keptExistingCount = storedImages.filter(im => !(im.id && removedImageIds.includes(im.id))).length;
-  const imageCount = keptExistingCount + pendingImages.length;
+  const imageCount = keptExistingCount + stagedImages.length;
   // Industry on board at mount (before the user-default fills an empty one).
   // A ref keeps the mount-once effects below honest for exhaustive-deps.
   const initialIndustryRef = useRef((initialData as any)?.industry_id || (initialData as any)?.industryId || '');
@@ -255,8 +255,11 @@ const ReceiptForm = ({
 
     const sanitizedData = {
       ...formData,
-      // Existing child-image ids to delete (image management modal).
+      // Image management modal: delete these child ids, attach these staged.
       removeImageIds: removedImageIds.length ? removedImageIds : undefined,
+      stagedImageIds: stagedImages.map(im => im.id).filter(Boolean).length
+        ? stagedImages.map(im => im.id).filter(Boolean)
+        : undefined,
       status: statusOverride || formData.status,
       items: formData.items.map(({ name, quantity, price, tax, discount, isZeroRated, taxRate }) => ({
         name,
@@ -703,10 +706,10 @@ const ReceiptForm = ({
         open={imagesOpen}
         onClose={() => setImagesOpen(false)}
         existing={storedImages}
-        pending={pendingImages}
+        staged={stagedImages}
         removedIds={removedImageIds}
         excludeReceiptId={(initialData as any)?.id}
-        onChange={(next) => onImagesChange?.(next.pending, next.removedIds)}
+        onChange={(next) => onImagesChange?.(next.staged, next.removedIds)}
       />
 
       {/* Items section */}

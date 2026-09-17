@@ -251,6 +251,39 @@ export const receiptApi = {
     return apiUpload('POST', '/receipts', file, receipt);
   },
 
+  /** Process + stage images server-side; returns the processed preview URLs
+   *  and any conflicts (image already on another receipt). */
+  async stageImages(
+    files: File[],
+    excludeReceiptId?: string,
+  ): Promise<{
+    staged: { id: string; imageUrl: string; thumbnailUrl: string; fileType?: string; pdfPageCount?: number | null }[];
+    conflicts: { index: number; receiptId: string; supplier?: string | null }[];
+  }> {
+    const authorization = await getAuthHeader();
+    const userId = getScopeUid();
+    const url = `${API_BASE_URL}/users/${userId}/receipts/images/stage`;
+    const formData = new FormData();
+    files.forEach((f) => formData.append('files', f));
+    if (excludeReceiptId) formData.append('exclude_receipt_id', excludeReceiptId);
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Authorization': authorization },
+      body: formData,
+    });
+    if (!response.ok) {
+      let detail = `API error: ${response.status}`;
+      try { const error = await response.json(); detail = error.detail || detail; } catch { /* non-JSON */ }
+      throw new Error(detail);
+    }
+    return response.json();
+  },
+
+  /** Discard a staged (not yet attached) image. */
+  async discardStagedImage(imageId: string): Promise<void> {
+    await apiRequest('DELETE', `/receipts/images/staged/${imageId}`);
+  },
+
   /** Dry-run dedup: returns { conflicts: [{ index, receiptId, supplier }] }
    *  for any of `files` that already belong to another receipt. */
   async checkImages(files: File[], excludeReceiptId?: string): Promise<{ conflicts: { index: number; receiptId: string; supplier?: string | null }[] }> {

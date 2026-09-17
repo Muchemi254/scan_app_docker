@@ -225,6 +225,65 @@ def _persist_prepared_images(receipt_id: str, prepared: List[dict]) -> List[dict
     return out
 
 
+async def _stage_prepared_images(
+    user_id: str, prepared: List[dict], exclude_receipt_id: Optional[str] = None
+) -> dict:
+    """Dedup, write + record each processed upload as a staged image.
+
+    Returns ``{staged: [...], conflicts: [...]}``. Conflicts are images that
+    already belong to another receipt (not written/stored).
+    """
+    import uuid as _uuid
+
+    hashes = [p["sha256"] for p in prepared if p.get("sha256")]
+    existing = await DataService.find_receipts_by_image_hashes(user_id, hashes) if hashes else {}
+
+    staged: List[dict] = []
+    conflicts: List[dict] = []
+    for idx, p in enumerate(prepared):
+        rid = existing.get(p["sha256"])
+        if rid and rid != exclude_receipt_id:
+            supplier = None
+            try:
+                row = await DataService.get_receipt(user_id, rid)
+                supplier = (row or {}).get("supplier")
+            except Exception:
+                pass
+            conflicts.append({"index": idx, "sha256": p["sha256"], "receiptId": rid, "supplier": supplier})
+            continue
+
+        image_id = _uuid.uuid4().hex
+        if p["mime"] == PDF_MIME:
+            filename = save_receipt_image_file(image_id, p["bytes"], PDF_MIME)
+            thumb_name = None
+            try:
+                from app.services.pdf_service import render_first_page
+                thumb = render_first_page(p["bytes"])
+                if thumb:
+                    thumb_name = save_receipt_thumbnail_file(image_id, thumb)
+            except Exception:
+                logger.warning("PDF thumbnail failed for staged %s", image_id, exc_info=True)
+            file_type = PDF_MIME
+        else:
+            filename = save_receipt_image_file(image_id, p["bytes"], "image/jpeg")
+            thumb = generate_thumbnail(p["bytes"], "image/jpeg")
+            thumb_name = save_receipt_thumbnail_file(image_id, thumb) if thumb else None
+            file_type = "image/jpeg"
+
+        await DataService.insert_staged_image(
+            image_id, user_id, filename, thumb_name, file_type,
+            p.get("pdf_page_count"), p["sha256"],
+        )
+        staged.append({
+            "id": image_id,
+            "imageUrl": f"/staged-images/{image_id}",
+            "thumbnailUrl": f"/staged-images/{image_id}?thumb=1",
+            "fileType": file_type,
+            "pdfPageCount": p.get("pdf_page_count"),
+        })
+    return {"staged": staged, "conflicts": conflicts}
+
+
 async def _assert_no_duplicate_images(
     user_id: str, prepared: List[dict], exclude_receipt_id: Optional[str] = None
 ) -> None:
@@ -438,6 +497,45 @@ async def check_images_duplicate(
 
 
 @router.post(
+    "/{userId}/receipts/images/stage",
+    summary="Process + stage uploaded images for the receipt editor"
+)
+async def stage_images(
+    userId: str,
+    files: List[UploadFile] = File(default=[]),
+    exclude_receipt_id: Optional[str] = Form(None),
+    current_user_id: str = Depends(get_current_user_id),
+):
+    """Validate/process uploaded images and return processed preview URLs.
+
+    The image manager modal calls this on pick, so the user sees the SAME
+    processed image that will be stored (not the raw local file) with a
+    loading indicator. Conflicts (image already on another receipt) are
+    reported without storing. Attach later via ``stagedImageIds``.
+    """
+    await verify_user_access(userId, current_user_id)
+    if not files:
+        return {"staged": [], "conflicts": []}
+    prepared = await _prepare_uploads(files)
+    return await _stage_prepared_images(userId, prepared, exclude_receipt_id)
+
+
+@router.delete(
+    "/{userId}/receipts/images/staged/{imageId}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Discard a staged image"
+)
+async def discard_staged_image(
+    userId: str,
+    imageId: str,
+    current_user_id: str = Depends(get_current_user_id),
+):
+    await verify_user_access(userId, current_user_id)
+    await DataService.delete_staged_image_rows([imageId])
+    return None
+
+
+@router.post(
     "/{userId}/receipts",
     response_model=Receipt,
     status_code=status.HTTP_201_CREATED,
@@ -485,6 +583,7 @@ async def create_receipt(
         # Upload image(s) if provided — each becomes its own stored image.
         image_url = parsed.imageUrl
         uploads = _gather_uploads(file, files)
+        staged_ids = list(parsed.stagedImageIds or [])
         images_payload = None
         if uploads:
             prepared = await _prepare_uploads(uploads)
@@ -500,12 +599,21 @@ async def create_receipt(
                     userId, base, p["bytes"], thumb,
                 )
 
+        cap = settings.MAX_RECEIPT_IMAGES
+        if settings.USE_POSTGRES and cap and len(staged_ids) + len(images_payload or []) > cap:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"A receipt can hold at most {cap} images.",
+            )
+
         # Prepare data for storage
         data = parsed.model_dump(exclude_unset=True)
         data["userId"] = userId
         if settings.USE_POSTGRES:
             if images_payload:
                 data["images"] = images_payload
+            if staged_ids:
+                data["stagedImageIds"] = staged_ids
         else:
             if image_url:
                 data["imageUrl"] = image_url
@@ -826,17 +934,22 @@ async def update_receipt(
         current_count = len(current.get("images") or [])
 
         if settings.USE_POSTGRES:
+            staged_ids = list(updates.stagedImageIds or [])
             remaining = current_count - len(remove_ids)
+            prepared = []
             if uploads:
                 prepared = await _prepare_uploads(uploads)
-                cap = settings.MAX_RECEIPT_IMAGES
-                if cap and remaining + len(prepared) > cap:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"A receipt can hold at most {cap} images.",
-                    )
                 await _assert_no_duplicate_images(userId, prepared, exclude_receipt_id=receiptId)
+            cap = settings.MAX_RECEIPT_IMAGES
+            if cap and remaining + len(prepared) + len(staged_ids) > cap:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"A receipt can hold at most {cap} images.",
+                )
+            if prepared:
                 data["images"] = _persist_prepared_images(receiptId, prepared)
+            if staged_ids:
+                data["stagedImageIds"] = staged_ids
             if remove_ids:
                 data["removeImageIds"] = remove_ids
         else:

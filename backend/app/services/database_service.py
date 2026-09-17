@@ -504,7 +504,10 @@ class DatabaseService:
                         "image_sha256": image_sha256,
                     }]
                 await _insert_receipt_images(conn, receipt_id, user_id, images_payload)
-                if images_payload:
+                staged_ids = receipt_data.get("stagedImageIds")
+                if staged_ids:
+                    await promote_staged_images(conn, receipt_id, user_id, staged_ids)
+                if images_payload or staged_ids:
                     # Keep the denormalized cover columns = first image.
                     await sync_receipt_cover(conn, receipt_id)
 
@@ -914,7 +917,10 @@ class DatabaseService:
                         await delete_receipt_image_rows(conn, receipt_id, removed)
                     if new_images:
                         await _insert_receipt_images(conn, receipt_id, user_id, new_images)
-                if removed or new_images or scalar_replace:
+                    staged_ids = receipt_data.get("stagedImageIds")
+                    if staged_ids:
+                        await promote_staged_images(conn, receipt_id, user_id, staged_ids)
+                if removed or new_images or scalar_replace or receipt_data.get("stagedImageIds"):
                     await sync_receipt_cover(conn, receipt_id)
 
                 return True
@@ -2285,6 +2291,173 @@ async def sync_receipt_cover(conn, receipt_id: str) -> None:
             """,
             receipt_id,
         )
+
+
+# ── Staged images (processed, not yet attached to a receipt) ──────────────────
+
+async def insert_staged_image(
+    image_id: str, user_id: str, image_filename: str, thumbnail_filename,
+    file_type: str, pdf_page_count, image_sha256: str,
+) -> None:
+    """Record a processed image in staging + mirror its bytes."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO staged_receipt_images
+                (id, user_id, image_filename, thumbnail_filename, file_type,
+                 pdf_page_count, image_sha256)
+            VALUES ($1,$2,$3,$4,$5,$6,$7)
+            ON CONFLICT (id) DO NOTHING
+            """,
+            image_id, user_id, image_filename, thumbnail_filename,
+            file_type, pdf_page_count, image_sha256,
+        )
+        fn = image_filename
+        if fn:
+            data = _read_disk_file(fn)
+            if data is not None:
+                await conn.execute(
+                    "UPDATE staged_receipt_images SET image_bytes = $1 WHERE id = $2 AND image_bytes IS NULL",
+                    data, image_id,
+                )
+        thumb_fn = thumbnail_filename or (
+            f"{receipt_image_base(fn)}_thumb.jpg" if fn else None
+        )
+        if thumb_fn:
+            data = _read_disk_file(thumb_fn)
+            if data is not None:
+                await conn.execute(
+                    "UPDATE staged_receipt_images SET thumb_bytes = $1 WHERE id = $2 AND thumb_bytes IS NULL",
+                    data, image_id,
+                )
+
+
+async def read_staged_image(image_id: str, thumb: bool = False):
+    """Serve a staged image/thumbnail (disk → byte mirror)."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT image_filename, thumbnail_filename, file_type,
+                   image_bytes, thumb_bytes
+            FROM staged_receipt_images WHERE id = $1
+            """,
+            image_id,
+        )
+    if not row:
+        return (None, None)
+    if thumb:
+        name = row["thumbnail_filename"] or f"{receipt_image_base(row['image_filename'])}_thumb.jpg"
+        data = _read_disk_file(name) if name else None
+        if data:
+            return (data, "image/jpeg")
+        if row["thumb_bytes"] is not None:
+            return (bytes(row["thumb_bytes"]), "image/jpeg")
+        # No thumbnail (small image) → degrade to the full image.
+        if row["file_type"] != "application/pdf":
+            full = _read_disk_file(row["image_filename"]) if row["image_filename"] else None
+            if full:
+                return (full, "image/jpeg")
+            if row["image_bytes"] is not None:
+                return (bytes(row["image_bytes"]), "image/jpeg")
+        return (None, None)
+    data = _read_disk_file(row["image_filename"]) if row["image_filename"] else None
+    if data:
+        return (data, row["file_type"] or "image/jpeg")
+    if row["image_bytes"] is not None:
+        return (bytes(row["image_bytes"]), row["file_type"] or "image/jpeg")
+    return (None, None)
+
+
+async def delete_staged_image_rows(image_ids) -> int:
+    """Delete staged rows + their on-disk files. Returns rows removed."""
+    if not image_ids:
+        return 0
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id, image_filename, thumbnail_filename FROM staged_receipt_images WHERE id = ANY($1::text[])",
+            [str(i) for i in image_ids],
+        )
+        for r in rows:
+            delete_receipt_image_files(str(r["id"]))
+            delete_receipt_image_files_by_name(
+                r["image_filename"],
+                r["thumbnail_filename"] or (f"{receipt_image_base(r['image_filename'])}_thumb.jpg" if r["image_filename"] else None),
+            )
+        res = await conn.execute(
+            "DELETE FROM staged_receipt_images WHERE id = ANY($1::text[])",
+            [str(i) for i in image_ids],
+        )
+    return int(res.split()[-1])
+
+
+async def promote_staged_images(conn, receipt_id: str, user_id: str, image_ids) -> list:
+    """Move staged images onto a receipt (same ids/filenames). Returns the
+    ordered ``receipt_images`` rows promoted."""
+    if not image_ids:
+        return []
+    rows = await conn.fetch(
+        """
+        SELECT id, image_filename, thumbnail_filename, file_type,
+               pdf_page_count, image_sha256, image_bytes, thumb_bytes
+        FROM staged_receipt_images
+        WHERE id = ANY($1::text[]) AND user_id = $2
+        ORDER BY created_at, id
+        """,
+        [str(i) for i in image_ids], user_id,
+    )
+    if not rows:
+        return []
+    promoted = []
+    for r in rows:
+        promoted.append({
+            "id": str(r["id"]),
+            "image_filename": r["image_filename"],
+            "thumbnail_filename": r["thumbnail_filename"],
+            "file_type": r["file_type"],
+            "pdf_page_count": r["pdf_page_count"],
+            "image_sha256": r["image_sha256"],
+            "image_bytes": r["image_bytes"],
+            "thumb_bytes": r["thumb_bytes"],
+        })
+    # Insert into receipt_images preserving the staged id (keeps filenames valid).
+    start = await conn.fetchval(
+        "SELECT COALESCE(MAX(sort_order) + 1, 0) FROM receipt_images WHERE receipt_id = $1",
+        receipt_id,
+    )
+    for offset, p in enumerate(promoted):
+        await conn.execute(
+            """
+            INSERT INTO receipt_images
+                (id, receipt_id, user_id, sort_order, image_filename,
+                 thumbnail_filename, file_type, pdf_page_count, image_sha256,
+                 image_bytes, thumb_bytes)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+            ON CONFLICT (id) DO NOTHING
+            """,
+            p["id"], receipt_id, user_id, int(start) + offset,
+            p["image_filename"], p["thumbnail_filename"], p["file_type"],
+            p["pdf_page_count"], p["image_sha256"],
+            p["image_bytes"], p["thumb_bytes"],
+        )
+    await conn.execute(
+        "DELETE FROM staged_receipt_images WHERE id = ANY($1::text[])",
+        [p["id"] for p in promoted],
+    )
+    return promoted
+
+
+async def sweep_stale_staged_images(max_age_seconds: int = 86400) -> int:
+    """Delete staged images older than ``max_age_seconds`` (default 24h)."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT id FROM staged_receipt_images WHERE created_at < now() - ($1::text || ' seconds')::interval",
+            str(max_age_seconds),
+        )
+    return await delete_staged_image_rows([str(r["id"]) for r in rows])
 
 
 async def _backfill_one(conn, rid: str, col: str, filename: str) -> bool:

@@ -193,6 +193,77 @@ async def test_edit_add_and_remove_images(client):
 
 
 @pytest.mark.asyncio
+async def test_stage_then_attach_images(client):
+    """Add-to-receipt pipeline: process server-side, preview, then attach."""
+    user, headers = await _new_user(client, "stage")
+    uid = user["uid"]
+
+    stage = await client.post(
+        f"/api/v1/users/{uid}/receipts/images/stage",
+        files=[
+            ("files", ("a.jpg", make_jpeg_bytes(), "image/jpeg")),
+            ("files", ("b.jpg", make_jpeg_bytes(color=(20, 40, 60)), "image/jpeg")),
+        ],
+        headers=headers,
+    )
+    assert stage.status_code == 200, stage.text
+    payload = stage.json()
+    assert len(payload["staged"]) == 2, payload
+    assert payload["conflicts"] == []
+    staged_ids = [s["id"] for s in payload["staged"]]
+
+    # The processed preview is served from the staging area.
+    preview = await client.get(
+        f"/api/images/cached?url=%2Fstaged-images%2F{staged_ids[0]}%3Fthumb%3D1"
+    )
+    assert preview.status_code == 200, preview.text
+    assert preview.headers["content-type"].startswith("image/jpeg")
+
+    # Attach the staged images on create.
+    create = await client.post(
+        f"/api/v1/users/{uid}/receipts",
+        data={"receipt_data": '{"supplier": "STAGED CO", "totalAmount": "3.00", "receiptDate": "08/25/2026", "status": "needs_review", "stagedImageIds": ["%s", "%s"]}' % (staged_ids[0], staged_ids[1])},
+        headers=headers,
+    )
+    assert create.status_code == 201, create.text
+    assert create.json()["imageCount"] == 2
+
+    from app.core.database import get_pool
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        left = await conn.fetchval(
+            "SELECT COUNT(*) FROM staged_receipt_images WHERE id = ANY($1::text[])", staged_ids
+        )
+    assert left == 0, "staged rows must be consumed on attach"
+
+
+@pytest.mark.asyncio
+async def test_stage_reports_conflict(client):
+    user, headers = await _new_user(client, "stageconf")
+    uid = user["uid"]
+
+    first = await client.post(
+        f"/api/v1/users/{uid}/receipts",
+        data={"receipt_data": '{"supplier": "ORIG", "totalAmount": "1.00", "receiptDate": "08/25/2026", "status": "needs_review"}'},
+        files={"file": ("d.jpg", make_jpeg_bytes(color=(7, 7, 77)), "image/jpeg")},
+        headers=headers,
+    )
+    rid = first.json()["id"]
+
+    stage = await client.post(
+        f"/api/v1/users/{uid}/receipts/images/stage",
+        files={"files": ("d.jpg", make_jpeg_bytes(color=(7, 7, 77)), "image/jpeg")},
+        headers=headers,
+    )
+    assert stage.status_code == 200, stage.text
+    body = stage.json()
+    assert body["staged"] == []
+    assert len(body["conflicts"]) == 1
+    assert body["conflicts"][0]["receiptId"] == rid
+    assert body["conflicts"][0]["supplier"] == "ORIG"
+
+
+@pytest.mark.asyncio
 async def test_remove_all_images_leaves_no_cover(client):
     user, headers = await _new_user(client, "removeall")
     uid = user["uid"]

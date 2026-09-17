@@ -8,6 +8,7 @@ import AuditTrail from './AuditTrail';
 import type { ReceiptData } from '../types/gemini';
 import { entryTypeLabel } from '../types/gemini';
 import ImageViewer from './ImageViewer';
+import type { ViewerImage } from './ImageViewer';
 import { parseCurrencyToNumber } from '../utils/helpers';
 import { lineTotalOf, sumItemTotals } from '../utils/itemTotals';
 import { receiptStatusLabel } from '../utils/receiptStatus';
@@ -175,7 +176,7 @@ const ReviewPanel = ({
   const [editing, setEditing] = useState(false);
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
-  const [newImages, setNewImages] = useState<File[]>([]);
+  const [stagedImages, setStagedImages] = useState<ViewerImage[]>([]);
   const [removedImageIds, setRemovedImageIds] = useState<string[]>([]);
   const [showUnsavedModal, setShowUnsavedModal] = useState(false);
   const [pendingId, setPendingId] = useState<string | null>(null);
@@ -187,7 +188,7 @@ const ReviewPanel = ({
   const [approveOpen, setApproveOpen] = useState(false);
   const [approveMode, setApproveMode] = useState<'view' | 'edit'>('view');
   const [approveDraft, setApproveDraft] = useState<ReceiptData | null>(null);
-  const [approveDraftImages, setApproveDraftImages] = useState<File[]>([]);
+  const [approveDraftStaged, setApproveDraftStaged] = useState<ViewerImage[]>([]);
   const [approveDraftRemovedIds, setApproveDraftRemovedIds] = useState<string[]>([]);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectNote, setRejectNote] = useState('');
@@ -204,7 +205,7 @@ const ReviewPanel = ({
   // Reset editing state when the selected receipt changes
   useEffect(() => {
     setEditing(false);
-    setNewImages([]);
+    setStagedImages([]);
     setRemovedImageIds([]);
   }, [receipt.id]);
 
@@ -235,10 +236,10 @@ const ReviewPanel = ({
     }
     try {
       setLoading(true);
-      const updated = await receiptApi.update(receipt.id, data, newImages.length ? newImages : undefined, userId);
+      const updated = await receiptApi.update(receipt.id, data, undefined, userId);
       if (useStore) upsert(updated);
       setEditing(false);
-      setNewImages([]);
+      setStagedImages([]);
       setRemovedImageIds([]);
     setRemovedImageIds([]);
       onSaved?.(updated);
@@ -310,7 +311,7 @@ const ReviewPanel = ({
   const handleApprove = () => {
     setActionError(null);
     setApproveDraft(receipt);
-    setApproveDraftImages([]);
+    setApproveDraftStaged([]);
     setApproveDraftRemovedIds([]);
     setApproveMode('view');
     setApproveOpen(true);
@@ -347,11 +348,9 @@ const ReviewPanel = ({
     setActionError(null);
     try {
       setLoading(true);
-      const updated = await receiptApi.update(
-        receipt.id, data, approveDraftImages.length ? approveDraftImages : undefined, userId
-      );
+      const updated = await receiptApi.update(receipt.id, data, undefined, userId);
       setApproveDraft(updated);
-      setApproveDraftImages([]);
+      setApproveDraftStaged([]);
       setApproveDraftRemovedIds([]);
     setApproveDraftRemovedIds([]);
       setApproveMode('view');
@@ -391,7 +390,7 @@ const ReviewPanel = ({
     }
   };
 
-  const imageUrl = newImages.length ? URL.createObjectURL(newImages[0]) : receipt.imageUrl;
+  const imageUrl = receipt.imageUrl;
 
   return (
     <div className="h-full flex flex-col bg-white">
@@ -452,7 +451,7 @@ const ReviewPanel = ({
             <div className="flex-1 overflow-y-auto p-4">
               {approveMode === 'edit' ? (
                 <div className="flex flex-col lg:flex-row lg:h-full gap-4">
-                  {(approveDraftImages.length ? URL.createObjectURL(approveDraftImages[0]) : approveDraft.imageUrl) && (
+                  {approveDraft.imageUrl && (
                     <div className="lg:w-[45%] xl:w-[40%] flex-shrink-0 border rounded bg-gray-50 flex flex-col">
                       <div className="flex-shrink-0 px-3 pt-2 pb-1 text-xs font-semibold text-gray-500 uppercase tracking-wide">
                         Receipt Image
@@ -460,11 +459,11 @@ const ReviewPanel = ({
                       <div className="p-2 flex-1">
                         <ImageViewer
                           images={(approveDraft.images || []).filter((im: any) => !(im.id && approveDraftRemovedIds.includes(im.id)))}
-                          imageUrl={approveDraftImages.length ? URL.createObjectURL(approveDraftImages[0]) : (approveDraft.imageUrl || '')}
+                          imageUrl={approveDraft.imageUrl || ''}
                           altText="Receipt"
                           containerClass="h-40 sm:h-56 lg:h-full lg:min-h-[50vh]"
-                          fileType={approveDraftImages.length ? undefined : approveDraft.fileType}
-                          pdfPageCount={approveDraftImages.length ? undefined : approveDraft.pdfPageCount}
+                          fileType={approveDraft.fileType}
+                          pdfPageCount={approveDraft.pdfPageCount}
                         />
                       </div>
                     </div>
@@ -473,8 +472,8 @@ const ReviewPanel = ({
                     <ReceiptForm
                       initialData={approveDraft}
                       onSubmit={saveApproveDraft}
-                      onImagesChange={(pending, removed) => { setApproveDraftImages(pending); setApproveDraftRemovedIds(removed); }}
-                      pendingImages={approveDraftImages}
+                      onImagesChange={(staged, removed) => { setApproveDraftStaged(staged); setApproveDraftRemovedIds(removed); }}
+                      stagedImages={approveDraftStaged}
                       removedImageIds={approveDraftRemovedIds}
                       loading={loading}
                       isAdmin={isAdmin}
@@ -655,8 +654,8 @@ const ReviewPanel = ({
                     imageUrl={imageUrl}
                     altText="Receipt"
                     containerClass="h-36 sm:h-48 lg:h-full lg:min-h-[50vh]"
-                    fileType={newImages.length ? undefined : receipt.fileType}
-                    pdfPageCount={newImages.length ? undefined : receipt.pdfPageCount}
+                    fileType={receipt.fileType}
+                    pdfPageCount={receipt.pdfPageCount}
                   />
                 </div>
               </div>
@@ -667,8 +666,8 @@ const ReviewPanel = ({
               <ReceiptForm
                 initialData={receipt}
                 onSubmit={handleUpdate}
-                onImagesChange={(pending, removed) => { setNewImages(pending); setRemovedImageIds(removed); }}
-                pendingImages={newImages}
+                onImagesChange={(staged, removed) => { setStagedImages(staged); setRemovedImageIds(removed); }}
+                stagedImages={stagedImages}
                 removedImageIds={removedImageIds}
                 loading={loading}
                 isAdmin={isAdmin}

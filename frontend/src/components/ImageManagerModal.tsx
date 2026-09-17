@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Plus, AlertTriangle, ExternalLink, Trash2 } from 'lucide-react';
+import { X, Plus, AlertTriangle, ExternalLink, Trash2, Loader2 } from 'lucide-react';
 import { receiptApi } from '../services/api';
 import type { ViewerImage } from './ImageViewer';
 
@@ -9,12 +9,16 @@ import type { ViewerImage } from './ImageViewer';
  *
  * A receipt holds 1..N images. This modal is the single place to view the
  * existing images, remove some, and add new files — used from the receipt
- * form so the form itself stays compact. It also runs the server-side
- * duplicate check on pick and surfaces "already used on <supplier>" with a
- * link, so a re-used image is caught before saving.
+ * form so the form itself stays compact.
  *
- * Fully controlled: the parent owns `pending` (newly picked Files) and
- * `removedIds` (existing image ids to delete) and persists them on save.
+ * Adding goes through the SERVER pipeline first: on pick the files are
+ * POSTed to /receipts/images/stage, which validates and processes them
+ * (HEIC→JPEG, resize, thumbnail) and returns processed preview URLs while a
+ * spinner is shown. The user never sees the raw local file. The same
+ * request reports images already used on another receipt (with a link).
+ *
+ * Controlled: the parent owns `staged` (server-processed, unattached) and
+ * `removedIds` and persists them on save.
  */
 export interface ImageConflict {
   index: number;
@@ -26,7 +30,7 @@ const ImageManagerModal = ({
   open,
   onClose,
   existing,
-  pending,
+  staged,
   removedIds,
   onChange,
   maxImages = 5,
@@ -35,69 +39,64 @@ const ImageManagerModal = ({
   open: boolean;
   onClose: () => void;
   existing: ViewerImage[];
-  pending: File[];
+  staged: ViewerImage[];
   removedIds: string[];
-  onChange: (next: { pending: File[]; removedIds: string[] }) => void;
+  onChange: (next: { staged: ViewerImage[]; removedIds: string[] }) => void;
   maxImages?: number;
   excludeReceiptId?: string;
 }) => {
   const [conflicts, setConflicts] = useState<ImageConflict[]>([]);
-  const [checking, setChecking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [processing, setProcessing] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const keptExisting = existing.filter((im) => im.id && !removedIds.includes(im.id));
-  const total = keptExisting.length + pending.length;
+  const keptExisting = existing.filter((im) => !(im.id && removedIds.includes(im.id)));
+  const total = keptExisting.length + staged.length;
   const atMax = total >= maxImages;
 
-  // Object URLs for pending files (revoked on change/unmount).
-  const pendingUrls = useMemo(
-    () => pending.map((f) => URL.createObjectURL(f)),
-    [pending],
-  );
-  useEffect(() => () => pendingUrls.forEach((u) => URL.revokeObjectURL(u)), [pendingUrls]);
-
   useEffect(() => {
-    if (!open) setConflicts([]);
+    if (!open) { setConflicts([]); setError(null); }
   }, [open]);
 
   const handlePick = async (files: File[]) => {
     if (!files.length) return;
-    const room = Math.max(0, maxImages - keptExisting.length - pending.length);
+    const room = Math.max(0, maxImages - keptExisting.length - staged.length);
     const accepted = files.slice(0, room);
-    if (!accepted.length) return;
-
-    setChecking(true);
-    setConflicts([]);
-    let blocked = new Set<number>();
-    try {
-      const res = await receiptApi.checkImages(accepted, excludeReceiptId);
-      const found: ImageConflict[] = res.conflicts || [];
-      setConflicts(found);
-      blocked = new Set(found.map((c) => c.index));
-    } catch {
-      // Fail-open: if the check fails, let the save-time guard catch it.
-    } finally {
-      setChecking(false);
+    if (!accepted.length) {
+      setError(`Maximum ${maxImages} images reached`);
+      return;
     }
-    const allowed = accepted.filter((_, i) => !blocked.has(i));
-    if (allowed.length) onChange({ pending: [...pending, ...allowed], removedIds });
+    setConflicts([]);
+    setError(null);
+    setProcessing(accepted.length);
+    try {
+      const res = await receiptApi.stageImages(accepted, excludeReceiptId);
+      setConflicts(res.conflicts || []);
+      if (res.staged?.length) {
+        onChange({ staged: [...staged, ...res.staged], removedIds });
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to process image(s)');
+    } finally {
+      setProcessing(0);
+    }
   };
 
-  const removePending = (idx: number) =>
-    onChange({ pending: pending.filter((_, i) => i !== idx), removedIds });
+  const discardStaged = async (id?: string | null, idx?: number) => {
+    if (id) receiptApi.discardStagedImage(id).catch(() => {});
+    onChange({ staged: staged.filter((_, i) => i !== idx), removedIds });
+  };
 
   const removeExisting = (id: string, currentlyRemoved: boolean) => {
     const next = currentlyRemoved
       ? removedIds.filter((r) => r !== id)
       : [...removedIds, id];
-    onChange({ pending, removedIds: next });
+    onChange({ staged, removedIds: next });
   };
 
   if (!open) return null;
 
   // Portal to <body> so the modal lives outside the ReceiptForm <form>.
-  // Without this, buttons inside the modal (even type="button") sit in the
-  // form's submit tree and a stray submit can save/close the editor.
   return createPortal(
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-3 sm:p-6" onClick={onClose}>
       <div
@@ -152,23 +151,44 @@ const ImageManagerModal = ({
             </div>
           )}
 
-          {/* Newly added (not yet saved) */}
-          {pending.length > 0 && (
+          {/* Newly staged (processed server-side, not yet saved) */}
+          {staged.length > 0 && (
             <div>
-              <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-2">New — will be added on save</p>
+              <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-2">New — added on save</p>
               <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-                {pending.map((f, i) => (
-                  <div key={`${f.name}-${i}`} className="relative rounded-lg border overflow-hidden bg-gray-50">
-                    <img src={pendingUrls[i]} alt={f.name} className="w-full h-24 object-cover" />
+                {staged.map((im, i) => (
+                  <div key={im.id || i} className="relative rounded-lg border overflow-hidden bg-gray-50">
+                    <img
+                      src={`/api/images/cached?url=${encodeURIComponent(im.thumbnailUrl || im.imageUrl)}&thumb=1`}
+                      alt=""
+                      className="w-full h-24 object-cover"
+                    />
+                    {im.fileType === 'application/pdf' && (
+                      <span className="absolute top-1 left-1 rounded bg-red-500 text-white text-[9px] font-semibold px-1 py-0.5">PDF</span>
+                    )}
                     <button
                       type="button"
-                      onClick={() => removePending(i)}
+                      onClick={() => discardStaged(im.id, i)}
                       className="absolute top-1 right-1 w-6 h-6 flex items-center justify-center rounded-full bg-white/90 text-red-600 hover:bg-white shadow"
                       title="Remove"
                     >
                       <X className="h-3.5 w-3.5" />
                     </button>
-                    <p className="absolute bottom-0 inset-x-0 bg-black/50 text-white text-[9px] truncate px-1 py-0.5">{f.name}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Processing placeholders — one per file being processed */}
+          {processing > 0 && (
+            <div>
+              <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Processing…</p>
+              <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+                {Array.from({ length: processing }).map((_, i) => (
+                  <div key={i} className="rounded-lg border bg-gray-50 h-24 flex flex-col items-center justify-center gap-1.5">
+                    <Loader2 className="h-5 w-5 text-blue-500 animate-spin" />
+                    <span className="text-[10px] text-gray-400">Processing</span>
                   </div>
                 ))}
               </div>
@@ -200,16 +220,20 @@ const ImageManagerModal = ({
             </div>
           )}
 
+          {error && (
+            <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700">{error}</div>
+          )}
+
           {/* Add */}
           <div>
             <button
               type="button"
               onClick={() => inputRef.current?.click()}
-              disabled={atMax || checking}
+              disabled={atMax || processing > 0}
               className="w-full flex items-center justify-center gap-2 px-4 py-3 border-2 border-dashed border-gray-300 rounded-lg text-sm text-gray-600 hover:border-gray-400 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <Plus className="h-4 w-4" />
-              {atMax ? `Maximum ${maxImages} images reached` : checking ? 'Checking…' : 'Add image(s)'}
+              {processing > 0 ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+              {atMax ? `Maximum ${maxImages} images reached` : processing > 0 ? 'Processing…' : 'Add image(s)'}
             </button>
             <input
               ref={inputRef}
@@ -223,7 +247,7 @@ const ImageManagerModal = ({
               }}
             />
             <p className="mt-1.5 text-[11px] text-gray-400">
-              JPEG/PNG/WebP/HEIC or a single PDF. Each image is stored separately.
+              JPEG/PNG/WebP/HEIC or a single PDF. Each image is processed then stored separately.
             </p>
           </div>
         </div>

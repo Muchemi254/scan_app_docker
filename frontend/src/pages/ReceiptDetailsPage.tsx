@@ -5,6 +5,7 @@ import { receiptApi } from '../services/api';
 import { getLocations, getEntryTypes, getTaxPreference } from '../services/referenceData';
 import { useReceiptStore } from '../stores/receiptStore';
 import ReceiptForm from '../components/ReceiptForm';
+import type { ViewerImage } from '../components/ImageViewer';
 import { lineTotalOf, sumItemTotals } from '../utils/itemTotals';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import { toast } from '../stores/toastStore';
@@ -21,7 +22,7 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
   const [receipt, setReceipt] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
-  const [newImages, setNewImages] = useState<File[]>([]);
+  const [stagedImages, setStagedImages] = useState<ViewerImage[]>([]);
   const [removedImageIds, setRemovedImageIds] = useState<string[]>([]);
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
   const [entryTypes, setEntryTypes] = useState<{ id: string; name: string; label: string }[]>([]);
@@ -58,11 +59,11 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
 
     try {
       setLoading(true);
-      const updated = await receiptApi.update(id, updatedData, newImages.length ? newImages : undefined);
+      const updated = await receiptApi.update(id, updatedData);
       upsert(updated); // sync cache
       setReceipt(updated);
       setEditing(false);
-      setNewImages([]);
+      setStagedImages([]);
       setRemovedImageIds([]);
       if (returnTo) {
         navigate(returnTo);
@@ -104,7 +105,7 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
   if (loading) return <div className="flex items-center justify-center min-h-screen"><div>Loading...</div></div>;
   if (!receipt) return <div className="flex items-center justify-center min-h-screen"><div>Receipt not found</div></div>;
 
-  const imageUrl = newImages.length ? URL.createObjectURL(newImages[0]) : receipt.imageUrl;
+  const imageUrl = receipt.imageUrl;
 
   return (
     <div className="w-full px-4 py-4 sm:py-6">
@@ -166,8 +167,8 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
                     imageUrl={imageUrl}
                     altText="Receipt"
                     containerClass="h-48 sm:h-64 lg:h-full lg:min-h-[60vh]"
-                    fileType={newImages.length ? undefined : receipt?.fileType}
-                    pdfPageCount={newImages.length ? undefined : receipt?.pdfPageCount}
+                    fileType={receipt?.fileType}
+                    pdfPageCount={receipt?.pdfPageCount}
                   />
                 </div>
               </div>
@@ -176,8 +177,8 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
               <ReceiptForm
                 initialData={receipt}
                 onSubmit={handleUpdate}
-                onImagesChange={(pending, removed) => { setNewImages(pending); setRemovedImageIds(removed); }}
-                pendingImages={newImages}
+                onImagesChange={(staged, removed) => { setStagedImages(staged); setRemovedImageIds(removed); }}
+                stagedImages={stagedImages}
                 removedImageIds={removedImageIds}
                 loading={loading}
                 locations={locations}
