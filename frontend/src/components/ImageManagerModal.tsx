@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { X, Plus, AlertTriangle, ExternalLink, Trash2 } from 'lucide-react';
 import { receiptApi } from '../services/api';
 import type { ViewerImage } from './ImageViewer';
@@ -94,7 +95,10 @@ const ImageManagerModal = ({
 
   if (!open) return null;
 
-  return (
+  // Portal to <body> so the modal lives outside the ReceiptForm <form>.
+  // Without this, buttons inside the modal (even type="button") sit in the
+  // form's submit tree and a stray submit can save/close the editor.
+  return createPortal(
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-3 sm:p-6" onClick={onClose}>
       <div
         className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col"
@@ -107,7 +111,7 @@ const ImageManagerModal = ({
               {total} of {maxImages} image{maxImages !== 1 ? 's' : ''} — a long receipt can be several photos
             </p>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded hover:bg-gray-100 text-gray-500" title="Close">
+          <button type="button" onClick={onClose} className="p-1.5 rounded hover:bg-gray-100 text-gray-500" title="Close">
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -134,6 +138,7 @@ const ImageManagerModal = ({
                         <span className="absolute top-1 left-1 rounded bg-red-500 text-white text-[9px] font-semibold px-1 py-0.5">PDF</span>
                       )}
                       <button
+                        type="button"
                         onClick={() => im.id && removeExisting(im.id, removed)}
                         className="absolute top-1 right-1 w-6 h-6 flex items-center justify-center rounded-full bg-white/90 text-red-600 hover:bg-white shadow"
                         title={removed ? 'Undo remove' : 'Remove image'}
@@ -156,6 +161,7 @@ const ImageManagerModal = ({
                   <div key={`${f.name}-${i}`} className="relative rounded-lg border overflow-hidden bg-gray-50">
                     <img src={pendingUrls[i]} alt={f.name} className="w-full h-24 object-cover" />
                     <button
+                      type="button"
                       onClick={() => removePending(i)}
                       className="absolute top-1 right-1 w-6 h-6 flex items-center justify-center rounded-full bg-white/90 text-red-600 hover:bg-white shadow"
                       title="Remove"
@@ -197,6 +203,7 @@ const ImageManagerModal = ({
           {/* Add */}
           <div>
             <button
+              type="button"
               onClick={() => inputRef.current?.click()}
               disabled={atMax || checking}
               className="w-full flex items-center justify-center gap-2 px-4 py-3 border-2 border-dashed border-gray-300 rounded-lg text-sm text-gray-600 hover:border-gray-400 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -223,6 +230,7 @@ const ImageManagerModal = ({
 
         <div className="px-4 py-3 border-t flex justify-end">
           <button
+            type="button"
             onClick={onClose}
             className="px-4 py-1.5 bg-blue-600 text-white rounded text-sm font-medium hover:bg-blue-700"
           >
@@ -230,7 +238,8 @@ const ImageManagerModal = ({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 };
 
