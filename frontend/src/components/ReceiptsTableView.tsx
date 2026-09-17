@@ -26,7 +26,7 @@ export const RECEIPT_TABLE_COLUMNS: ReceiptTableColumn[] = [
   { key: 'invoiceNumber', label: 'Invoice #', sortBy: 'invoice_number', default: true },
   { key: 'entryType', label: 'Type', sortBy: 'entry_type', default: false },
   { key: 'location', label: 'Location', sortBy: 'location', default: false },
-  { key: 'itemCount', label: 'Items', sortBy: null, default: false, align: 'right' },
+  { key: 'itemCount', label: 'Items', sortBy: 'item_count', default: false, align: 'right' },
   { key: 'kraPin', label: 'Seller PIN', sortBy: 'kra_pin', default: false },
   { key: 'buyerKraPin', label: 'Buyer PIN', sortBy: 'buyer_kra_pin', default: false },
   { key: 'cuInvoice', label: 'CU Invoice', sortBy: 'cu_invoice', default: false },
@@ -275,35 +275,16 @@ export default function ReceiptsTableView({
             {onColumnFilter && (
               <tr className="border-b border-gray-200 bg-white">
                 {columnDefs.map(col => {
-                  const isBlank = columnFilters?.[col.key] === '__BLANK__';
                   return (
                     <th key={col.key} className={`px-1 py-1 ${COLUMN_WIDTHS[col.key] || ''}`}>
-                      {isBlank ? (
-                        <button
-                          onClick={() => onColumnFilter(col.key, '')}
-                          className="w-full px-1 py-0.5 text-[10px] leading-tight bg-blue-100 text-blue-700 border border-blue-300 rounded hover:bg-blue-200 flex items-center justify-center gap-1"
-                          title="Clear blanks filter"
-                        >
-                          blanks ×
-                        </button>
-                      ) : (
-                        <div className="flex gap-1">
-                          <input
-                            type="text"
-                            placeholder={`Filter ${col.label}`}
-                            value={columnFilters?.[col.key] || ''}
-                            onChange={e => onColumnFilter(col.key, e.target.value)}
-                            className="flex-1 min-w-0 px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
-                          />
-                          <button
-                            onClick={() => onColumnFilter(col.key, '__BLANK__')}
-                            title={`Show only blank ${col.label}`}
-                            className="px-1.5 py-1 text-[11px] font-medium border border-gray-300 rounded bg-white hover:bg-gray-50 text-gray-500 flex-shrink-0"
-                          >
-                            ∅
-                          </button>
-                        </div>
-                      )}
+                      <input
+                        type="text"
+                        placeholder={`Filter ${col.label}`}
+                        title="Type ?? to show only blanks"
+                        value={columnFilters?.[col.key] || ''}
+                        onChange={e => onColumnFilter(col.key, e.target.value)}
+                        className="w-full min-w-0 px-2 py-1 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      />
                     </th>
                   );
                 })}

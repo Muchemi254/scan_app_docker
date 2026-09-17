@@ -200,9 +200,8 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
       const scope = activeGroup ?? batchFilter;
       const batchTitle = scope && scope !== '__all__' ? (scope === 'Ungrouped' ? '__ungrouped__' : scope) : undefined;
       const cf = columnFilters;
-      const blankKeys = Object.entries(cf).filter(([, v]) => v === '__BLANK__').map(([k]) => k);
-      const serverFilters: any = { hasImage: true };
-      for (const [k, v] of Object.entries(cf)) if (v !== '__BLANK__') serverFilters[k] = v;
+      const { params: cfParams, blankKeys } = serverParamsFromColumnFilters(cf);
+      const serverFilters: any = { hasImage: true, ...cfParams };
       if (batchTitle) serverFilters.batchTitle = batchTitle;
       const filterBlanks = (rows: any[]) => blankKeys.length ? rows.filter((r: any) => blankKeys.every(k => isBlankCellValue(cellValue(r, k)))) : rows;
       if (searchQuery.trim()) {

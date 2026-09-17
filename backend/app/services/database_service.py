@@ -125,6 +125,8 @@ _RECEIPT_SORT_COLUMNS = {
     "buyer_kra_pin": "buyer_kra_pin",
     "cu_invoice": "cu_invoice",
     "file_type": "file_type",
+    "item_count": "(SELECT COUNT(*) FROM line_items li WHERE li.receipt_id = receipts.id)",
+    "itemCount": "(SELECT COUNT(*) FROM line_items li WHERE li.receipt_id = receipts.id)",
 }
 
 

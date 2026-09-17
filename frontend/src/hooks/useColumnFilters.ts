@@ -11,7 +11,9 @@ import { cellValue, isBlankCellValue } from '../components/ReceiptsTableView';
 //
 // Pages adopt it incrementally without changing displayed data.
 
-export const BLANK_SENTINEL = '__BLANK__';
+export const BLANK_SENTINEL = '??';
+// Keep old sentinel for backward compat (e.g. bookmarked URLs/filters)
+const isBlankSentinel = (v: string) => v === '??' || v === '__BLANK__';
 
 export function useColumnFilters() {
   const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
@@ -36,7 +38,7 @@ export function filterRowsClient<T>(rows: T[], columnFilters: Record<string, str
   return rows.filter(r => {
     for (const [k, raw] of Object.entries(columnFilters)) {
       const val = cellValue(r as any, k);
-      if (raw === BLANK_SENTINEL) {
+      if (isBlankSentinel(raw)) {
         if (!isBlankCellValue(val)) return false;
       } else if (!String(val).toLowerCase().includes(String(raw).toLowerCase())) {
         return false;
@@ -76,12 +78,12 @@ export function serverParamsFromColumnFilters(columnFilters: Record<string, stri
   const params: Record<string, string> = {};
   const blankKeys: string[] = [];
   for (const [k, v] of Object.entries(columnFilters)) {
-    if (v === BLANK_SENTINEL) blankKeys.push(k);
+    if (isBlankSentinel(v)) blankKeys.push(k);
     else if (v) params[k] = v;
   }
   return { params, blankKeys };
 }
 
 export function isBlankColumnFilter(columnFilters: Record<string, string>, key: string): boolean {
-  return columnFilters[key] === BLANK_SENTINEL;
+  return isBlankSentinel(columnFilters[key] ?? '');
 }
