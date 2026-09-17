@@ -164,6 +164,7 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
                     altText="Receipt"
                     containerClass="h-48 sm:h-64 lg:h-full lg:min-h-[60vh]"
                     fileType={newImages.length ? undefined : receipt?.fileType}
+                    pdfPageCount={newImages.length ? undefined : receipt?.pdfPageCount}
                   />
                 </div>
               </div>
@@ -200,6 +201,7 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
                   altText="Receipt"
                   containerClass="h-56 sm:h-80 md:h-96"
                   fileType={receipt.fileType}
+                  pdfPageCount={receipt.pdfPageCount}
                 />
               </div>
             )}

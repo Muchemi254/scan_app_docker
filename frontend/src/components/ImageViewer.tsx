@@ -5,13 +5,19 @@ const ImageViewer = ({
   altText,
   containerClass = 'h-56 sm:h-72 md:h-96',
   fileType,
+  pdfPageCount,
 }: {
   imageUrl: string;
   altText: string;
   containerClass?: string;
   fileType?: string;
+  pdfPageCount?: number | null;
 }) => {
-  const isPdf = fileType === 'application/pdf';
+  // Combined multi-image receipts are stored as a multi-page PDF — they must
+  // render in the PDF <iframe>, not as an <img>. fileType is the source of
+  // truth, but pdfPageCount is a robust fallback for older rows where the
+  // type wasn't persisted.
+  const isPdf = fileType === 'application/pdf' || (typeof pdfPageCount === 'number' && pdfPageCount > 0);
   const [rotation, setRotation] = useState(0);
   const [zoom, setZoom] = useState(1);
   const [isFullscreen, setIsFullscreen] = useState(false);

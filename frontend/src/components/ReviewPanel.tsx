@@ -41,6 +41,7 @@ const ReceiptSummary = ({ data, showImage = true }: { data: ReceiptData; showIma
           altText="Receipt"
           containerClass="h-44 sm:h-60"
           fileType={data.fileType}
+          pdfPageCount={data.pdfPageCount}
         />
       </div>
     )}
@@ -453,6 +454,7 @@ const ReviewPanel = ({
                           altText="Receipt"
                           containerClass="h-40 sm:h-56 lg:h-full lg:min-h-[50vh]"
                           fileType={approveDraftImages.length ? undefined : approveDraft.fileType}
+                          pdfPageCount={approveDraftImages.length ? undefined : approveDraft.pdfPageCount}
                         />
                       </div>
                     </div>
@@ -641,6 +643,7 @@ const ReviewPanel = ({
                     altText="Receipt"
                     containerClass="h-36 sm:h-48 lg:h-full lg:min-h-[50vh]"
                     fileType={newImages.length ? undefined : receipt.fileType}
+                    pdfPageCount={newImages.length ? undefined : receipt.pdfPageCount}
                   />
                 </div>
               </div>
@@ -673,6 +676,7 @@ const ReviewPanel = ({
                   altText="Receipt"
                   containerClass="h-56 sm:h-80 md:h-96"
                   fileType={receipt.fileType}
+                  pdfPageCount={receipt.pdfPageCount}
                 />
               </div>
             )}

@@ -421,7 +421,7 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
                   </button>
                 </div>
                 <div className="p-4">
-                  <ImageViewer imageUrl={selectedReceipt.imageUrl} altText={selectedReceipt.supplier || 'Receipt'} containerClass="min-h-[50vh] max-h-[70vh]" fileType={selectedReceipt.fileType} />
+                  <ImageViewer imageUrl={selectedReceipt.imageUrl} altText={selectedReceipt.supplier || 'Receipt'} containerClass="min-h-[50vh] max-h-[70vh]" fileType={selectedReceipt.fileType} pdfPageCount={selectedReceipt.pdfPageCount} />
                 </div>
               </div>
             </div>
@@ -715,6 +715,7 @@ const GalleryPage = ({ userId }: { userId: string | null }) => {
                 altText={selectedReceipt.supplier || 'Receipt'}
                 containerClass="min-h-[50vh] max-h-[70vh]"
                 fileType={selectedReceipt.fileType}
+                pdfPageCount={selectedReceipt.pdfPageCount}
               />
             </div>
             <div className="px-5 py-3 border-t bg-gray-50 flex flex-wrap gap-4 text-sm">

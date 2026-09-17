@@ -169,7 +169,7 @@ async def get_cached_image(url: str, thumb: Optional[bool] = Query(None), w: Opt
         if content:
             if media_type == "application/pdf":
                 h = hashlib.sha256(content).hexdigest()[:16]
-                return Response(content=content, media_type=media_type, headers={"Cache-Control": "public, max-age=86400", "X-Content-Type-Options": "nosniff", "Content-Disposition": "inline", "ETag": f'"{h}"'})
+                return Response(content=content, media_type=media_type, headers={"Cache-Control": "public, max-age=86400", "X-Content-Type-Options": "nosniff", "Content-Disposition": "inline", "ETag": f'"{h}"', "X-Frame-Options": "SAMEORIGIN", "Content-Security-Policy": "frame-ancestors 'self'"})
             # HEIC handling
             if content[:12] and content[4:8] == b'ftyp' and (b'heic' in content[:32] or b'heif' in content[:32] or b'mif1' in content[:32]):
                 try:
