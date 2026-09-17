@@ -54,7 +54,7 @@ async def test_batch_engine_persists_and_dedups(client, monkeypatch):
     user_id = user["uid"]
 
     # Mock the AI call — returns a fresh receipt per image.
-    async def fake_extract_batch(images, api_key, model_id, provider, user_id=None):
+    async def fake_extract_batch(images, api_key, model_id, provider, user_id=None, industry_id=None):
         return [
             ReceiptCreate.model_validate(sample_receipt(invoice=f"INV-{i}"))
             for i in range(len(images))

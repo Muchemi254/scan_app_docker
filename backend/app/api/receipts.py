@@ -15,7 +15,7 @@ POST   /api/v1/users/{userId}/receipts/summary      - Generate AI summary
 import logging
 import os
 from datetime import date
-from typing import Optional
+from typing import List, Optional
 import json
 from fastapi import APIRouter, Depends, File, Form, UploadFile, HTTPException, status, Query
 from app.core.config import settings
@@ -99,6 +99,74 @@ def _check_pdf_pages(contents: bytes) -> int:
         ) from e
 
 
+def _gather_uploads(file: Optional[UploadFile], files: Optional[List[UploadFile]]) -> List[UploadFile]:
+    """Merge the legacy single `file` field and the multi `files` field.
+
+    Existing clients send `file`; multi-image clients send `files`. Either or
+    both may arrive — order is `file` first, then `files`.
+    """
+    uploads: List[UploadFile] = []
+    if file is not None:
+        uploads.append(file)
+    if files:
+        uploads.extend(files)
+    return uploads
+
+
+async def _prepare_uploads(uploads: List[UploadFile]) -> tuple:
+    """Read + normalize a receipt's upload(s).
+
+    Returns ``(processed_bytes, mime_type, pdf_page_count)``.
+
+    - one file: unchanged behavior — image optimized to JPEG, or a PDF kept raw
+      (page cap enforced)
+    - multiple files: each must be an image; they are combined, in order, into
+      ONE multi-page PDF so the receipt holds every page. ``pdf_page_count`` is
+      the number of images combined.
+    """
+    prepared: List[tuple] = []  # (bytes, mime)
+    for f in uploads:
+        if not f.content_type or f.content_type not in _UPLOAD_ALLOWED:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unsupported file type: {f.content_type}",
+            )
+        contents = await f.read()
+        if len(contents) > settings.MAX_UPLOAD_SIZE:
+            raise HTTPException(status_code=413, detail="File too large")
+        if _is_pdf_upload(contents, f.content_type):
+            _check_pdf_pages(contents)
+            prepared.append((contents, PDF_MIME))
+        else:
+            processed, ptype = process_image(contents, f.content_type or "image/jpeg")
+            prepared.append((processed, ptype))
+
+    if not prepared:
+        raise HTTPException(status_code=400, detail="No file uploaded")
+
+    if len(prepared) == 1:
+        return prepared[0][0], prepared[0][1], None
+
+    # Multiple files → combine into one multi-page PDF (one image per page).
+    if any(mime == PDF_MIME for _, mime in prepared):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Multiple images can be combined into one receipt, but a PDF cannot be merged with other files",
+        )
+    cap = settings.MAX_PDF_PAGES
+    if cap and len(prepared) > cap:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Too many images to combine — maximum supported is {cap}",
+        )
+    from app.services.pdf_service import images_to_pdf
+    try:
+        pdf_bytes = images_to_pdf([b for b, _ in prepared])
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    return pdf_bytes, PDF_MIME, len(prepared)
+
+
 # ============================================================================
 # EXTRACT & CREATE ENDPOINTS
 # ============================================================================
@@ -163,7 +231,8 @@ async def batch_extract_receipts(
 )
 async def extract_receipt_from_image(
     userId: str,
-    file: UploadFile = File(...),
+    file: Optional[UploadFile] = File(None),
+    files: List[UploadFile] = File(default=[]),
     industry_id: Optional[str] = Form(None),
     current_user_id: str = Depends(get_current_user_id),
 ):
@@ -189,27 +258,12 @@ async def extract_receipt_from_image(
     await verify_user_access(userId, current_user_id)
 
     try:
-        # Validate file type (HEIC/HEIF accepted — converted server-side;
-        # PDFs accepted — provider-native extraction)
-        if not file.content_type or file.content_type not in _UPLOAD_ALLOWED:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Unsupported file type: {file.content_type}"
-            )
+        # One file → image or PDF; multiple images → combined into one PDF
+        # (so a receipt that spans several photos extracts as one receipt).
+        uploads = _gather_uploads(file, files)
+        processed, processed_type, _page_count = await _prepare_uploads(uploads)
 
-        # Read file
-        contents = await file.read()
-        if len(contents) > settings.MAX_UPLOAD_SIZE:
-            raise HTTPException(status_code=413, detail="File too large")
-
-        if _is_pdf_upload(contents, file.content_type):
-            _check_pdf_pages(contents)
-            processed, processed_type = contents, PDF_MIME
-        else:
-            # Optimize: convert HEIC→JPEG, resize, compress
-            processed, processed_type = process_image(contents, file.content_type or "image/jpeg")
-
-        # Convert to base64 for Gemini
+        # Convert to base64 for the provider
         import base64
         base64_data = base64.standard_b64encode(processed).decode()
 
@@ -240,11 +294,14 @@ async def create_receipt(
     userId: str,
     receipt_data: str = Form(...),
     file: Optional[UploadFile] = File(None),
+    files: List[UploadFile] = File(default=[]),
     current_user_id: str = Depends(get_current_user_id),
 ):
     """
     Create a new receipt.
     receipt_data: JSON-encoded ReceiptCreate (sent as a single form field).
+    Send one file via `file`, or several images via `files` (combined into one
+    multi-page PDF so one receipt can hold multiple images).
     """
     await verify_user_access(userId, current_user_id)
 
@@ -272,43 +329,33 @@ async def create_receipt(
         import uuid as _uuid
         receipt_id = str(_uuid.uuid4())
 
-        # Upload image if provided
+        # Upload image(s) if provided
         image_url = parsed.imageUrl
         image_filename = None
         thumbnail_filename = None
         file_type = None
         pdf_page_count = None
-        if file:
-            file_contents = await file.read()
-            if len(file_contents) > settings.MAX_UPLOAD_SIZE:
-                raise HTTPException(status_code=413, detail="File too large")
-
-            is_pdf = _is_pdf_upload(file_contents, file.content_type)
-            if is_pdf:
-                pdf_page_count = _check_pdf_pages(file_contents)
+        uploads = _gather_uploads(file, files)
+        if uploads:
+            processed, processed_type, combined_pages = await _prepare_uploads(uploads)
 
             if settings.USE_POSTGRES:
-                if is_pdf:
-                    image_filename = save_pdf(receipt_id, file_contents)
-                    thumb_name = save_pdf_thumbnail(receipt_id, file_contents)
+                if processed_type == PDF_MIME:
+                    image_filename = save_pdf(receipt_id, processed)
+                    thumb_name = save_pdf_thumbnail(receipt_id, processed)
                     if thumb_name:
                         thumbnail_filename = thumb_name
                     file_type = PDF_MIME
+                    pdf_page_count = combined_pages or _check_pdf_pages(processed)
                 else:
-                    processed, _ = process_image(
-                        file_contents, file.content_type or "image/jpeg"
-                    )
-                    thumb = generate_thumbnail(file_contents, file.content_type or "image/jpeg")
+                    thumb = generate_thumbnail(processed, processed_type or "image/jpeg")
                     image_filename = save_image(receipt_id, processed)
                     if thumb:
                         save_thumbnail(receipt_id, thumb)
                     file_type = "image/jpeg"
             else:
                 # Legacy firestore path — images only (PDF parity deferred)
-                processed, _ = process_image(
-                    file_contents, file.content_type or "image/jpeg"
-                )
-                thumb = generate_thumbnail(file_contents, file.content_type or "image/jpeg")
+                thumb = generate_thumbnail(processed, processed_type or "image/jpeg")
                 base = f"receipt_{int(datetime.utcnow().timestamp())}"
                 image_url, _ = await StorageService.upload_receipt_images(
                     userId, base, processed, thumb,
@@ -578,9 +625,12 @@ async def update_receipt(
     receiptId: str,
     receipt_data: str = Form(...),
     file: Optional[UploadFile] = File(None),
+    files: List[UploadFile] = File(default=[]),
     current_user_id: str = Depends(get_current_user_id),
 ):
-    """Update a receipt. receipt_data: JSON-encoded ReceiptUpdate form field."""
+    """Update a receipt. receipt_data: JSON-encoded ReceiptUpdate form field.
+    Send a replacement image via `file`, or several images via `files`
+    (combined into one multi-page PDF)."""
     await verify_user_access(userId, current_user_id)
 
     try:
@@ -632,49 +682,39 @@ async def update_receipt(
             if not (location or "").strip():
                 raise location_required_for_processed()
 
-        # Upload new image if provided
+        # Upload new image(s) if provided
         image_url = current.get("imageUrl")
         thumbnail_filename = None
         file_type = None
         pdf_page_count = None
-        if file:
-            file_contents = await file.read()
-            if len(file_contents) > settings.MAX_UPLOAD_SIZE:
-                raise HTTPException(status_code=413, detail="File too large")
-
-            is_pdf = _is_pdf_upload(file_contents, file.content_type)
-            if is_pdf:
-                pdf_page_count = _check_pdf_pages(file_contents)
+        uploads = _gather_uploads(file, files)
+        if uploads:
+            processed, processed_type, combined_pages = await _prepare_uploads(uploads)
 
             if settings.USE_POSTGRES:
-                if is_pdf:
-                    image_filename = save_pdf(receiptId, file_contents)
-                    thumb_name = save_pdf_thumbnail(receiptId, file_contents)
+                if processed_type == PDF_MIME:
+                    image_filename = save_pdf(receiptId, processed)
+                    thumb_name = save_pdf_thumbnail(receiptId, processed)
                     if thumb_name:
                         thumbnail_filename = thumb_name
                     file_type = PDF_MIME
+                    pdf_page_count = combined_pages or _check_pdf_pages(processed)
                 else:
-                    processed, _ = process_image(
-                        file_contents, file.content_type or "image/jpeg"
-                    )
-                    thumb = generate_thumbnail(file_contents, file.content_type or "image/jpeg")
+                    thumb = generate_thumbnail(processed, processed_type or "image/jpeg")
                     image_filename = save_image(receiptId, processed)
                     if thumb:
                         save_thumbnail(receiptId, thumb)
                     file_type = "image/jpeg"
             else:
                 base = f"receipt_{int(datetime.utcnow().timestamp())}"
-                processed, _ = process_image(
-                    file_contents, file.content_type or "image/jpeg"
-                )
-                thumb = generate_thumbnail(file_contents, file.content_type or "image/jpeg")
+                thumb = generate_thumbnail(processed, processed_type or "image/jpeg")
                 image_url, _ = await StorageService.upload_receipt_images(
                     userId, base, processed, thumb,
                 )
 
         # Prepare update data
         data = updates.model_dump(exclude_unset=True)
-        if file:
+        if uploads:
             if settings.USE_POSTGRES:
                 data["image_filename"] = image_filename
                 if file_type:

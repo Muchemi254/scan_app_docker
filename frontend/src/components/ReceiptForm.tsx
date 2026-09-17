@@ -18,7 +18,7 @@ const ReceiptForm = ({
 }: {
   initialData: any;
   onSubmit: (data: any) => void;
-  onImageChange: (file: File | null) => void;
+  onImageChange: (files: File[]) => void;
   loading: boolean;
   isAdmin?: boolean;
   locations?: { id: string; name: string }[];
@@ -664,11 +664,15 @@ const ReceiptForm = ({
           />
         </div>
         <div>
-          <label className="block text-xs font-medium text-gray-600 mb-0.5">Receipt Image / PDF</label>
+          <label className="block text-xs font-medium text-gray-600 mb-0.5">
+            Receipt Image(s) / PDF
+            <span className="ml-1 font-normal text-gray-400">(select 2+ images to combine into one receipt)</span>
+          </label>
           <input
             type="file"
+            multiple
             accept="image/*,.pdf,application/pdf"
-            onChange={(e) => onImageChange(e.target.files?.[0] || null)}
+            onChange={(e) => onImageChange(Array.from(e.target.files || []))}
             className="w-full px-2 py-1 border rounded text-sm"
           />
         </div>

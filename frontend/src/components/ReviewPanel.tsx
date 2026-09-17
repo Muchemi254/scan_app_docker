@@ -173,7 +173,7 @@ const ReviewPanel = ({
   const [editing, setEditing] = useState(false);
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
-  const [newImage, setNewImage] = useState<File | null>(null);
+  const [newImages, setNewImages] = useState<File[]>([]);
   const [showUnsavedModal, setShowUnsavedModal] = useState(false);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
@@ -184,7 +184,7 @@ const ReviewPanel = ({
   const [approveOpen, setApproveOpen] = useState(false);
   const [approveMode, setApproveMode] = useState<'view' | 'edit'>('view');
   const [approveDraft, setApproveDraft] = useState<ReceiptData | null>(null);
-  const [approveDraftImage, setApproveDraftImage] = useState<File | null>(null);
+  const [approveDraftImages, setApproveDraftImages] = useState<File[]>([]);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [rejectNote, setRejectNote] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
@@ -200,7 +200,7 @@ const ReviewPanel = ({
   // Reset editing state when the selected receipt changes
   useEffect(() => {
     setEditing(false);
-    setNewImage(null);
+    setNewImages([]);
   }, [receipt.id]);
 
   useEffect(() => {
@@ -230,10 +230,10 @@ const ReviewPanel = ({
     }
     try {
       setLoading(true);
-      const updated = await receiptApi.update(receipt.id, data, newImage || undefined, userId);
+      const updated = await receiptApi.update(receipt.id, data, newImages.length ? newImages : undefined, userId);
       if (useStore) upsert(updated);
       setEditing(false);
-      setNewImage(null);
+      setNewImages([]);
       onSaved?.(updated);
       toast.success('Receipt updated', 'Changes saved successfully');
     } catch (error) {
@@ -303,7 +303,7 @@ const ReviewPanel = ({
   const handleApprove = () => {
     setActionError(null);
     setApproveDraft(receipt);
-    setApproveDraftImage(null);
+    setApproveDraftImages([]);
     setApproveMode('view');
     setApproveOpen(true);
   };
@@ -340,10 +340,10 @@ const ReviewPanel = ({
     try {
       setLoading(true);
       const updated = await receiptApi.update(
-        receipt.id, data, approveDraftImage || undefined, userId
+        receipt.id, data, approveDraftImages.length ? approveDraftImages : undefined, userId
       );
       setApproveDraft(updated);
-      setApproveDraftImage(null);
+      setApproveDraftImages([]);
       setApproveMode('view');
       onSaved?.(updated);
       toast.success('Receipt updated', 'Draft saved');
@@ -381,7 +381,7 @@ const ReviewPanel = ({
     }
   };
 
-  const imageUrl = newImage ? URL.createObjectURL(newImage) : receipt.imageUrl;
+  const imageUrl = newImages.length ? URL.createObjectURL(newImages[0]) : receipt.imageUrl;
 
   return (
     <div className="h-full flex flex-col bg-white">
@@ -442,17 +442,17 @@ const ReviewPanel = ({
             <div className="flex-1 overflow-y-auto p-4">
               {approveMode === 'edit' ? (
                 <div className="flex flex-col lg:flex-row lg:h-full gap-4">
-                  {(approveDraftImage ? URL.createObjectURL(approveDraftImage) : approveDraft.imageUrl) && (
+                  {(approveDraftImages.length ? URL.createObjectURL(approveDraftImages[0]) : approveDraft.imageUrl) && (
                     <div className="lg:w-[45%] xl:w-[40%] flex-shrink-0 border rounded bg-gray-50 flex flex-col">
                       <div className="flex-shrink-0 px-3 pt-2 pb-1 text-xs font-semibold text-gray-500 uppercase tracking-wide">
                         Receipt Image
                       </div>
                       <div className="p-2 flex-1">
                         <ImageViewer
-                          imageUrl={approveDraftImage ? URL.createObjectURL(approveDraftImage) : (approveDraft.imageUrl || '')}
+                          imageUrl={approveDraftImages.length ? URL.createObjectURL(approveDraftImages[0]) : (approveDraft.imageUrl || '')}
                           altText="Receipt"
                           containerClass="h-40 sm:h-56 lg:h-full lg:min-h-[50vh]"
-                          fileType={approveDraftImage ? undefined : approveDraft.fileType}
+                          fileType={approveDraftImages.length ? undefined : approveDraft.fileType}
                         />
                       </div>
                     </div>
@@ -461,7 +461,7 @@ const ReviewPanel = ({
                     <ReceiptForm
                       initialData={approveDraft}
                       onSubmit={saveApproveDraft}
-                      onImageChange={setApproveDraftImage}
+                      onImageChange={setApproveDraftImages}
                       loading={loading}
                       isAdmin={isAdmin}
                       locations={locations}
@@ -640,7 +640,7 @@ const ReviewPanel = ({
                     imageUrl={imageUrl}
                     altText="Receipt"
                     containerClass="h-36 sm:h-48 lg:h-full lg:min-h-[50vh]"
-                    fileType={newImage ? undefined : receipt.fileType}
+                    fileType={newImages.length ? undefined : receipt.fileType}
                   />
                 </div>
               </div>
@@ -651,7 +651,7 @@ const ReviewPanel = ({
               <ReceiptForm
                 initialData={receipt}
                 onSubmit={handleUpdate}
-                onImageChange={setNewImage}
+                onImageChange={setNewImages}
                 loading={loading}
                 isAdmin={isAdmin}
                 locations={locations}

@@ -8,7 +8,7 @@ import ReceiptForm from '../components/ReceiptForm';
 const PostReceiptPage = ({ userId }: { userId: string | null }) => {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
-  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imageFiles, setImageFiles] = useState<File[]>([]);
   const { add } = useReceiptStore();
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
   const [entryTypes, setEntryTypes] = useState<{ id: string; name: string; label: string }[]>([]);
@@ -28,7 +28,7 @@ const PostReceiptPage = ({ userId }: { userId: string | null }) => {
     try {
       const created = await receiptApi.create(
         { ...data, status: 'needs_review' },
-        imageFile || undefined
+        imageFiles.length ? imageFiles : undefined
       );
       add(created);
       navigate('/receipts');
@@ -48,7 +48,7 @@ const PostReceiptPage = ({ userId }: { userId: string | null }) => {
       <ReceiptForm
         initialData={{}}
         onSubmit={handleSubmit}
-        onImageChange={(file) => setImageFile(file)}
+        onImageChange={setImageFiles}
         loading={loading}
         locations={locations}
         entryTypes={entryTypes}

@@ -56,7 +56,7 @@ async def test_batch_task_completed_when_all_saved(client, monkeypatch):
     try:
         entries = _entries(2)
 
-        async def fake_extract_batch(images, api_key, model_id, provider, user_id=None):
+        async def fake_extract_batch(images, api_key, model_id, provider, user_id=None, industry_id=None):
             from app.schemas.receipt import ReceiptCreate
             return [ReceiptCreate.model_validate(sample_receipt(invoice=f"INV-{i}")) for i in range(len(images))]
 

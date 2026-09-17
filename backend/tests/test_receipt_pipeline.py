@@ -54,7 +54,7 @@ async def test_full_authenticated_pipeline(client, monkeypatch):
     assert resp.json()["provider"] == "gemini"
 
     # ── 4. Extract receipt data (AI provider mocked — offline) ──────────
-    async def fake_extract(base64_data, mime_type, user_id):
+    async def fake_extract(base64_data, mime_type, user_id, industry_id=None):
         return ReceiptCreate.model_validate(sample_receipt())
 
     monkeypatch.setattr("app.api.receipts.extract_receipt_data", fake_extract)

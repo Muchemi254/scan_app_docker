@@ -14,12 +14,14 @@ Endpoints:
 """
 
 import hashlib
+import json
 import logging
 import os
+from collections import defaultdict
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi import status as http_status
 from pydantic import BaseModel
 
@@ -118,6 +120,7 @@ async def start_processing(
     userId: str,
     batchId: str,
     files: List[UploadFile] = File(...),
+    groups: Optional[str] = Form(None),
     current_user_id: str = Depends(get_current_user_id),
 ):
     """
@@ -128,6 +131,11 @@ async def start_processing(
     optimized images on disk, and marks every surviving item `prepared`.
     Nothing is sent to AI — the user decides what to dispatch (per group,
     per item, or all) via POST .../dispatch, now or weeks later.
+
+    ``groups`` (optional): JSON array of ints, same length/order as ``files``.
+    Files sharing a group id are combined, in order, into ONE multi-page PDF
+    (one receipt spanning several images). Absent/omitted → each file is its
+    own receipt (unchanged behavior).
     """
     if userId != current_user_id:
         raise HTTPException(status_code=403, detail="Access denied")
@@ -200,8 +208,75 @@ async def start_processing(
             )
             continue
 
-    # Pass 2: single DB lookup for duplicate hashes
-    hashes = [s["sha256"] for s in staged]
+    # ── Grouping: files sharing a group id become ONE multi-page PDF receipt ──
+    # `groups` is a JSON int array aligned to `files` (and therefore to the
+    # scan_session_items indexes). Omitted/!len mismatch → one receipt per file.
+    group_ids: List[int] = []
+    if groups:
+        try:
+            parsed = json.loads(groups)
+            if isinstance(parsed, list) and len(parsed) == len(files):
+                group_ids = [int(x) for x in parsed]
+        except (ValueError, TypeError):
+            logger.warning("Ignoring malformed groups payload for batch %s", batchId)
+    if not group_ids:
+        group_ids = list(range(len(files)))
+
+    by_idx = {s["idx"]: s for s in staged}
+    groups_map: dict = defaultdict(list)
+    for s in staged:
+        groups_map[group_ids[s["idx"]]].append(s)
+
+    # Build one "unit" per receipt: a single file, or a merged multi-image PDF.
+    units: List[dict] = []
+    from app.services.pdf_service import images_to_pdf
+
+    for _gid, members in groups_map.items():
+        members.sort(key=lambda s: s["idx"])
+        mergeable = len(members) > 1 and not any(m["mime"] == "application/pdf" for m in members)
+        if not mergeable:
+            # Singletons (and any group containing a PDF) stay one receipt each.
+            for m in members:
+                units.append({
+                    "members": [m], "fname": m["fname"], "mime": m["mime"],
+                    "sha256": m["sha256"],
+                })
+            continue
+
+        try:
+            member_bytes = []
+            for m in members:
+                with open(os.path.join(batch_dir, m["fname"]), "rb") as f:
+                    member_bytes.append(f.read())
+            combined = images_to_pdf(member_bytes)
+        except Exception as e:
+            logger.error("Failed to combine group %s in batch %s: %s", _gid, batchId, e)
+            # Fall back to one receipt per file rather than failing the batch.
+            for m in members:
+                units.append({
+                    "members": [m], "fname": m["fname"], "mime": m["mime"],
+                    "sha256": m["sha256"],
+                })
+            continue
+
+        combined_name = f"{members[0]['idx']:04d}.pdf"
+        with open(os.path.join(batch_dir, combined_name), "wb") as outf:
+            outf.write(combined)
+        # Drop the individual member files — the combined PDF replaces them.
+        for m in members:
+            try:
+                os.remove(os.path.join(batch_dir, m["fname"]))
+            except OSError:
+                pass
+        units.append({
+            "members": members,
+            "fname": combined_name,
+            "mime": "application/pdf",
+            "sha256": hashlib.sha256(combined).hexdigest(),
+        })
+
+    # Pass 2: single DB lookup for duplicate hashes (combined units included)
+    hashes = [u["sha256"] for u in units]
     existing = await DataService.find_receipts_by_image_hashes(userId, hashes)
 
     # Pass 3: mark dupes, hold the rest as `prepared`. No AI is dispatched
@@ -209,32 +284,49 @@ async def start_processing(
     # per item, or all). Everything is durable, so a held session can be
     # resumed days or weeks later without re-uploading.
     prepared_count = 0
-    for s in staged:
-        if s["sha256"] in existing:
-            existing_id = existing[s["sha256"]]
-            # Remove the just-saved temp file — we won't process it
-            try:
-                os.remove(os.path.join(batch_dir, s["fname"]))
-            except OSError:
-                pass
+    for u in units:
+        members = u["members"]
+        primary = members[0]
+
+        if u["sha256"] in existing:
+            existing_id = existing[u["sha256"]]
+            for m in members:
+                try:
+                    os.remove(os.path.join(batch_dir, m["fname"]))
+                except OSError:
+                    pass
             await batch_service.update_item(
-                userId, batchId, s["idx"], "duplicate",
+                userId, batchId, primary["idx"], "duplicate",
                 stage="done",
                 receipt_id=existing_id,
                 message="Already scanned — linked to existing receipt",
             )
+            for m in members[1:]:
+                await batch_service.update_item(
+                    userId, batchId, m["idx"], "duplicate",
+                    stage="done", receipt_id=existing_id,
+                    message="Already scanned — combined with another image",
+                )
+            continue
+
+        if prepared_count >= GROUP_SIZE:
+            group_index = prepared_count // GROUP_SIZE
         else:
-            if prepared_count >= GROUP_SIZE:
-                group_index = prepared_count // GROUP_SIZE
-            else:
-                group_index = 0
-            await batch_service.set_prepared(
-                userId, batchId, s["idx"],
-                image_filename=s["fname"], mime=s["mime"],
-                sha256=s["sha256"], orig_filename=s["orig_filename"],
-                group_index=group_index,
+            group_index = 0
+        await batch_service.set_prepared(
+            userId, batchId, primary["idx"],
+            image_filename=u["fname"], mime=u["mime"],
+            sha256=u["sha256"], orig_filename=primary["orig_filename"],
+            group_index=group_index,
+        )
+        # Extra images were folded into the primary's combined PDF.
+        for m in members[1:]:
+            await batch_service.update_item(
+                userId, batchId, m["idx"], "duplicate",
+                stage="done",
+                message=f"Combined into one receipt with image {primary['idx']}",
             )
-            prepared_count += 1
+        prepared_count += 1
 
     group_count = 0 if prepared_count == 0 else (
         1 if prepared_count <= GROUP_SIZE

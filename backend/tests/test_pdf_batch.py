@@ -131,7 +131,7 @@ async def test_worker_chunk_converts_pdf_to_per_page_parts(monkeypatch, tmp_path
 
     captured = {}
 
-    async def fake_batch(files, api_key, model_id, provider, user_id=None):
+    async def fake_batch(files, api_key, model_id, provider, user_id=None, industry_id=None):
         captured["files"] = files
         return [ReceiptCreate.model_validate(_receipt_dict())]
 

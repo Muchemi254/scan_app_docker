@@ -40,6 +40,17 @@ single uploads.
 - **Multiple receipts inside one PDF** (e.g. three scanned receipts merged
   into one file) is deferred — the extractor takes the primary/dominant
   receipt and the limitation is surfaced in the review UI.
+- **Multiple images = one receipt.** A receipt that spans several photos is
+  uploaded as 2+ images and the server combines them, in order, into ONE
+  multi-page PDF (`pdf_service.images_to_pdf`), so the existing multi-page
+  pipeline stores/extracts it as a single receipt. Supported in:
+  - the manual form (`ReceiptForm` multi-file picker → `POST/PUT /receipts`,
+    `/receipts/extract` with repeated `files`),
+  - the batch scanner (`/batches/{batchId}/process` `groups` JSON: files
+    sharing a group id are combined; the extra `scan_session_items` rows are
+    marked `duplicate` and only the combined primary is dispatched).
+  Combining is images-only (a PDF cannot be merged with other files), and is
+  bounded by `MAX_PDF_PAGES`.
 - Scanned PDFs (no text layer) with the DeepSeek provider → clear error
   "scanned PDF requires a vision provider (Gemini/OpenRouter/Qwen)".
 

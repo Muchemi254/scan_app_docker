@@ -61,6 +61,9 @@ const ScannerPage = ({ userId }: { userId: string | null }) => {
   // New-scan form state
   const [batchTitle, setBatchTitle] = useState('');
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  // Receipt group per file: files sharing a group number are combined into one
+  // multi-page PDF receipt (a receipt that spans several photos).
+  const [groupByFile, setGroupByFile] = useState<Map<File, number>>(new Map());
   const [formError, setFormError] = useState('');
 
   const totalSize = selectedFiles.reduce((acc, file) => acc + file.size, 0);
@@ -114,11 +117,22 @@ const ScannerPage = ({ userId }: { userId: string | null }) => {
 
         setUploadPhase({ chunkIndex: ci, totalChunks: chunks.length, percent: 0, totalFiles: chunk.length });
 
+        // Map the global receipt-group numbers onto this chunk's files and
+        // renumber to 0..k so the backend sees compact ids. Same group =
+        // one receipt (images combined, in order, into one multi-page PDF).
+        const idMap = new Map<number, number>();
+        const groups = chunk.map(f => {
+          const g = groupByFile.get(f) ?? 0;
+          if (!idMap.has(g)) idMap.set(g, idMap.size);
+          return idMap.get(g)!;
+        });
+        const hasGrouping = new Set(groups).size < groups.length;
+
         const { batchId } = await batchApi.create(chunkTitle, chunk.map(f => f.name), selectedIndustry);
         try {
           await batchApi.process(batchId, chunk, (percent) => {
             setUploadPhase(p => p ? { ...p, percent } : p);
-          });
+          }, hasGrouping ? groups : undefined);
         } catch (uploadErr) {
           await batchApi.dismiss(batchId).catch(() => {});
           throw uploadErr;
@@ -136,6 +150,7 @@ const ScannerPage = ({ userId }: { userId: string | null }) => {
     } finally {
       setUploadPhase(null);
       setSelectedFiles([]);
+      setGroupByFile(new Map());
       setBatchTitle('');
       setDuplicates(new Map());
     }
@@ -204,6 +219,18 @@ const ScannerPage = ({ userId }: { userId: string | null }) => {
                       const files = Array.from(e.target.files);
                       setSelectedFiles(files);
                       setDuplicates(detectDuplicates(files));
+                      // Assign each new file its own receipt group; existing
+                      // assignments are preserved across re-selections.
+                      setGroupByFile(prev => {
+                        const next = new Map<File, number>();
+                        let maxGroup = -1;
+                        for (const g of prev.values()) maxGroup = Math.max(maxGroup, g);
+                        for (const f of files) {
+                          if (prev.has(f)) next.set(f, prev.get(f)!);
+                          else next.set(f, ++maxGroup);
+                        }
+                        return next;
+                      });
                       setFormError('');
                     }
                   }}
@@ -243,6 +270,11 @@ const ScannerPage = ({ userId }: { userId: string | null }) => {
                             if (!keep.has(fp)) keep.set(fp, f);
                           }
                           setSelectedFiles(Array.from(keep.values()));
+                          setGroupByFile(prev => {
+                            const next = new Map<File, number>();
+                            for (const f of keep.values()) if (prev.has(f)) next.set(f, prev.get(f)!);
+                            return next;
+                          });
                           setDuplicates(new Map());
                         }}
                         className="px-2 py-0.5 bg-amber-200 text-amber-800 rounded hover:bg-amber-300 font-medium"
@@ -257,6 +289,36 @@ const ScannerPage = ({ userId }: { userId: string | null }) => {
                     ℹ️ {selectedFiles.length} files ({formatFileSize(totalSize)}) — will be split into {chunkCount} sub-batches.
                     Each appears as its own session in Scans.
                   </p>
+                )}
+                {selectedFiles.length > 1 && (
+                  <div className="mt-2 border border-gray-200 rounded">
+                    <div className="px-2 py-1 bg-gray-50 text-[11px] text-gray-600 rounded-t">
+                      Receipt # — files sharing a number are combined into <strong>one receipt</strong> (e.g. a long receipt photographed in parts). Leave sequential for separate receipts.
+                    </div>
+                    <div className="max-h-44 overflow-y-auto divide-y">
+                      {selectedFiles.map((f, i) => (
+                        <div key={`${f.name}-${i}`} className="flex items-center gap-2 px-2 py-1 text-xs">
+                          <input
+                            type="number"
+                            min={1}
+                            value={(groupByFile.get(f) ?? i) + 1}
+                            onChange={ev => {
+                              const v = Math.max(1, Number(ev.target.value) || 1) - 1;
+                              setGroupByFile(prev => {
+                                const n = new Map(prev);
+                                n.set(f, v);
+                                return n;
+                              });
+                            }}
+                            className="w-14 px-1 py-0.5 border rounded text-center"
+                            title="Receipt group number"
+                          />
+                          <span className="truncate flex-1 text-gray-700">{f.name}</span>
+                          <span className="text-gray-400 flex-shrink-0">{formatFileSize(f.size)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 )}
               </div>
 

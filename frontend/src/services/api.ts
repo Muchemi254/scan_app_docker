@@ -129,7 +129,7 @@ async function apiGlobalRequest<T>(
 async function apiUpload<T>(
   method: string,
   endpoint: string,
-  file?: File,
+  file?: File | File[] | null,
   data?: any,
   ownerUid?: string
 ): Promise<T> {
@@ -139,9 +139,14 @@ async function apiUpload<T>(
 
   const formData = new FormData();
 
-  // Add file if provided
-  if (file) {
-    formData.append('file', file);
+  // Add file(s) if provided. A single file is sent as `file` (legacy); two or
+  // more images are sent as repeated `files` so the server combines them into
+  // one multi-page PDF (one receipt across multiple images).
+  const fileList = Array.isArray(file) ? file : file ? [file] : [];
+  if (fileList.length === 1) {
+    formData.append('file', fileList[0]);
+  } else if (fileList.length > 1) {
+    fileList.forEach((f) => formData.append('files', f));
   }
 
   // Serialize all data fields as a single JSON string so nested objects
@@ -184,12 +189,14 @@ export const receiptApi = {
    * Extract receipt data from image using Gemini AI
    * Returns extracted data without saving
    */
-  async extract(file: File, industry_id?: string): Promise<any> {
+  async extract(file: File | File[], industry_id?: string): Promise<any> {
     const authorization = await getAuthHeader();
     const userId = getScopeUid();
     const url = `${API_BASE_URL}/users/${userId}/receipts/extract`;
     const formData = new FormData();
-    formData.append('file', file);
+    const fileList = Array.isArray(file) ? file : [file];
+    if (fileList.length === 1) formData.append('file', fileList[0]);
+    else fileList.forEach((f) => formData.append('files', f));
     if (industry_id) formData.append('industry_id', industry_id);
     const response = await fetch(url, {
       method: 'POST',
@@ -240,7 +247,7 @@ export const receiptApi = {
    * Create new receipt
    * Optionally upload image in same request
    */
-  async create(receipt: any, file?: File): Promise<any> {
+  async create(receipt: any, file?: File | File[]): Promise<any> {
     return apiUpload('POST', '/receipts', file, receipt);
   },
 
@@ -330,7 +337,7 @@ export const receiptApi = {
    * Update receipt (partial update)
    * Optionally upload new image
    */
-  async update(receiptId: string, updates: any, file?: File, ownerUid?: string): Promise<any> {
+  async update(receiptId: string, updates: any, file?: File | File[], ownerUid?: string): Promise<any> {
     return apiUpload('PUT', `/receipts/${receiptId}`, file, updates, ownerUid);
   },
 
@@ -507,11 +514,13 @@ export const batchApi = {
     return apiRequest('POST', '/batches', { batchTitle, filenames, industry_id });
   },
 
-  /** Upload all files and start backend processing. Returns immediately. */
+  /** Upload all files and start backend processing. Returns immediately.
+   *  `groups` (optional) aligns to `files`: same group id = one receipt. */
   async process(
     batchId: string, 
     files: File[], 
-    onProgress?: (percent: number) => void
+    onProgress?: (percent: number) => void,
+    groups?: number[]
   ): Promise<any> {
     const authorization = await getAuthHeader();
     const userId = getScopeUid();
@@ -519,6 +528,9 @@ export const batchApi = {
 
     const form = new FormData();
     files.forEach(f => form.append('files', f));
+    if (groups && groups.length === files.length) {
+      form.append('groups', JSON.stringify(groups));
+    }
 
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();

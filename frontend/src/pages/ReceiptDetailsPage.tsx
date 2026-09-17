@@ -21,7 +21,7 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
   const [receipt, setReceipt] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
-  const [newImage, setNewImage] = useState<File | null>(null);
+  const [newImages, setNewImages] = useState<File[]>([]);
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
   const [entryTypes, setEntryTypes] = useState<{ id: string; name: string; label: string }[]>([]);
   const [defaultTaxRate, setDefaultTaxRate] = useState(16);
@@ -57,11 +57,11 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
 
     try {
       setLoading(true);
-      const updated = await receiptApi.update(id, updatedData, newImage || undefined);
+      const updated = await receiptApi.update(id, updatedData, newImages.length ? newImages : undefined);
       upsert(updated); // sync cache
       setReceipt(updated);
       setEditing(false);
-      setNewImage(null);
+      setNewImages([]);
       if (returnTo) {
         navigate(returnTo);
         return;
@@ -102,7 +102,7 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
   if (loading) return <div className="flex items-center justify-center min-h-screen"><div>Loading...</div></div>;
   if (!receipt) return <div className="flex items-center justify-center min-h-screen"><div>Receipt not found</div></div>;
 
-  const imageUrl = newImage ? URL.createObjectURL(newImage) : receipt.imageUrl;
+  const imageUrl = newImages.length ? URL.createObjectURL(newImages[0]) : receipt.imageUrl;
 
   return (
     <div className="w-full px-4 py-4 sm:py-6">
@@ -163,7 +163,7 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
                     imageUrl={imageUrl}
                     altText="Receipt"
                     containerClass="h-48 sm:h-64 lg:h-full lg:min-h-[60vh]"
-                    fileType={newImage ? undefined : receipt?.fileType}
+                    fileType={newImages.length ? undefined : receipt?.fileType}
                   />
                 </div>
               </div>
@@ -172,7 +172,7 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
               <ReceiptForm
                 initialData={receipt}
                 onSubmit={handleUpdate}
-                onImageChange={setNewImage}
+                onImageChange={setNewImages}
                 loading={loading}
                 locations={locations}
                 entryTypes={entryTypes}

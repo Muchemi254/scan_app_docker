@@ -41,7 +41,7 @@ async def _new_user(client):
 async def test_extract_pdf_returns_extraction(client, monkeypatch):
     user, headers = await _new_user(client)
 
-    async def fake_extract(base64_data, mime_type, user_id):
+    async def fake_extract(base64_data, mime_type, user_id, industry_id=None):
         assert mime_type == "application/pdf"
         return ReceiptCreate.model_validate(sample_receipt())
 
@@ -148,7 +148,7 @@ async def test_pdf_size_cap_rejected(client, monkeypatch):
 async def test_jpeg_upload_still_works(client, monkeypatch):
     user, headers = await _new_user(client)
 
-    async def fake_extract(base64_data, mime_type, user_id):
+    async def fake_extract(base64_data, mime_type, user_id, industry_id=None):
         assert mime_type == "image/jpeg"
         return ReceiptCreate.model_validate(sample_receipt())
 

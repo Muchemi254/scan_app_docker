@@ -115,3 +115,40 @@ def assert_within_page_cap(pdf_bytes: bytes, cap: Optional[int] = None) -> int:
             "Split the document or upload pages separately."
         )
     return count
+
+
+def images_to_pdf(image_bytes_list: List[bytes]) -> bytes:
+    """Combine one or more images into a single multi-page PDF.
+
+    One image becomes one PDF page, in the given order — this is how a
+    receipt that spans several photos is stored as ONE receipt (the PDF
+    multi-page pipeline then feeds every page to the AI as one document).
+    Raises ValueError if the list is empty or an image can't be decoded.
+    """
+    from PIL import Image
+
+    if not image_bytes_list:
+        raise ValueError("No images to combine")
+
+    pages = []
+    for idx, raw in enumerate(image_bytes_list):
+        try:
+            img = Image.open(io.BytesIO(raw))
+            if img.mode not in ("RGB",):
+                img = img.convert("RGB")
+            pages.append(img)
+        except Exception as e:
+            raise ValueError(f"Could not read image {idx + 1} for PDF combine: {e}") from e
+
+    buf = io.BytesIO()
+    try:
+        pages[0].save(
+            buf,
+            format="PDF",
+            save_all=True,
+            append_images=pages[1:],
+            resolution=150.0,
+        )
+    except Exception as e:
+        raise ValueError(f"Could not build combined PDF: {e}") from e
+    return buf.getvalue()
