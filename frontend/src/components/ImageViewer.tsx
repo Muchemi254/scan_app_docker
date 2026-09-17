@@ -50,7 +50,14 @@ const ImageViewer = ({
   // First request: server fetches from Firebase → caches → returns.
   // After prefetch or second view: instant from Redis (no network call).
   // HEIC images are auto-detected and converted server-side.
-  const displayUrl = `/api/images/cached?url=${encodeURIComponent(imageUrl)}`;
+  //
+  // CACHE_BUST: the PDF/image response is cacheable (max-age=86400), so a
+  // browser that cached an earlier response with the old
+  // `X-Frame-Options: DENY` header kept refusing to frame the PDF even after
+  // the server was fixed. Changing the query string changes the cache key and
+  // forces a fresh response — bump this when the embed headers change.
+  const CACHE_BUST = 'v=2';
+  const displayUrl = `/api/images/cached?url=${encodeURIComponent(imageUrl)}&${CACHE_BUST}`;
 
   const handleRotate = () => {
     setRotation(prev => (prev + 90) % 360);
@@ -85,7 +92,9 @@ const ImageViewer = ({
   };
 
   const handleOpenInNewTab = () => {
-    window.open(imageUrl, '_blank', 'noopener,noreferrer');
+    // Open the API proxy URL, not the bare /receipt-images path — the latter
+    // is not an API route and nginx would serve the SPA index instead.
+    window.open(displayUrl, '_blank', 'noopener,noreferrer');
   };
 
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -168,7 +177,7 @@ const ImageViewer = ({
   // ── PDF receipts: render inline via iframe (browser-native viewer) ────
   // Zoom/pan don't apply to documents; show open/download actions instead.
   if (isPdf) {
-    const pdfDisplayUrl = `/api/images/cached?url=${encodeURIComponent(imageUrl)}`;
+    const pdfDisplayUrl = `/api/images/cached?url=${encodeURIComponent(imageUrl)}&${CACHE_BUST}`;
     const pdfFrame = (
       <div className="border rounded overflow-hidden bg-gray-50">
         <div className={`relative w-full ${containerClass} bg-gray-100`}>
