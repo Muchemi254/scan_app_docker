@@ -41,8 +41,9 @@ async def fetch_referenced() -> set[str]:
         thumb = row["thumbnail_filename"]
         if thumb:
             wanted.add(thumb)
-        elif name.endswith(".jpg"):
-            wanted.add(name[: -len(".jpg")] + "_thumb.jpg")
+        elif name.endswith(".jpg") or name.endswith(".pdf"):
+            # PDF receipts (incl. combined multi-image) use {id}_thumb.jpg too.
+            wanted.add(name.rsplit(".", 1)[0] + "_thumb.jpg")
     return wanted
 
 

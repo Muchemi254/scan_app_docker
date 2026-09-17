@@ -5,7 +5,8 @@ Backup format (tar.gz):
     backup/
       data.json         # All receipts, items, settings, tasks, review_batches
       images/
-        {receipt_id}.jpg
+        {receipt_id}.jpg          # single-image receipt
+        {receipt_id}.pdf          # uploaded or combined multi-image receipt
         {receipt_id}_thumb.jpg
       manifest.json     # version, timestamp, user_id, counts, checksums
 
@@ -432,40 +433,67 @@ async def import_user_data(
                 img_fn = _remap_filename(r.get("image_filename"), id_map)
                 thumb_fn = _remap_filename(r.get("thumbnail_filename"), id_map)
 
+                # Older backups predate file_type; infer it from the filename
+                # so restored PDF receipts (incl. combined multi-image ones)
+                # are served/opened as PDFs, not as broken <img> URLs.
+                file_type = r.get("file_type")
+                if not file_type and (img_fn or "").lower().endswith(".pdf"):
+                    file_type = "application/pdf"
+
                 await conn.execute("""
-                    INSERT INTO receipts (id, user_id, status, supplier, total_amount,
-                        tax_amount, receipt_date, category, invoice_number, kra_pin,
-                        cu_invoice, batch_title, image_filename, thumbnail_filename,
-                        legacy_image_url, scanned_at, created_at, updated_at)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+                    INSERT INTO receipts (id, user_id, status, entry_type, supplier,
+                        total_amount, tax_amount, receipt_date, category, category_id,
+                        industry_id, invoice_number, kra_pin, buyer_kra_pin, cu_invoice,
+                        batch_title, location, tax_rate, image_filename, thumbnail_filename,
+                        legacy_image_url, file_type, pdf_page_count, scanned_at,
+                        created_at, updated_at)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
+                            $17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
                     ON CONFLICT (id) DO UPDATE SET
+                        status = EXCLUDED.status,
+                        entry_type = EXCLUDED.entry_type,
                         supplier = EXCLUDED.supplier,
                         total_amount = EXCLUDED.total_amount,
                         tax_amount = EXCLUDED.tax_amount,
                         receipt_date = EXCLUDED.receipt_date,
                         category = EXCLUDED.category,
+                        category_id = EXCLUDED.category_id,
+                        industry_id = EXCLUDED.industry_id,
                         invoice_number = EXCLUDED.invoice_number,
                         kra_pin = EXCLUDED.kra_pin,
+                        buyer_kra_pin = EXCLUDED.buyer_kra_pin,
                         cu_invoice = EXCLUDED.cu_invoice,
                         batch_title = EXCLUDED.batch_title,
+                        location = EXCLUDED.location,
+                        tax_rate = EXCLUDED.tax_rate,
                         image_filename = EXCLUDED.image_filename,
                         thumbnail_filename = EXCLUDED.thumbnail_filename,
                         legacy_image_url = EXCLUDED.legacy_image_url,
+                        file_type = EXCLUDED.file_type,
+                        pdf_page_count = EXCLUDED.pdf_page_count,
                         updated_at = NOW()
                 """, new_rid, user_id,
                     r.get("status", "processed"),
+                    r.get("entry_type") or "expense",
                     r.get("supplier", ""),
                     Decimal(str(r.get("total_amount", "0"))),
                     Decimal(str(r["tax_amount"])) if r.get("tax_amount") else None,
                     _parse_date(r.get("receipt_date")),
                     r.get("category"),
+                    r.get("category_id"),
+                    r.get("industry_id"),
                     r.get("invoice_number"),
                     r.get("kra_pin"),
+                    r.get("buyer_kra_pin"),
                     r.get("cu_invoice"),
                     r.get("batch_title"),
+                    r.get("location"),
+                    Decimal(str(r["tax_rate"])) if r.get("tax_rate") is not None else None,
                     img_fn,
                     thumb_fn,
                     r.get("legacy_image_url"),
+                    file_type,
+                    r.get("pdf_page_count"),
                     _parse_datetime(r.get("scanned_at")),
                     _parse_datetime(r.get("created_at")),
                     _parse_datetime(r.get("updated_at")),

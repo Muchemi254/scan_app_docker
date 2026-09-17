@@ -285,6 +285,75 @@ async def test_import_round_trips_receipts_with_datetimes(client):
             pass
 
 
+async def test_backup_roundtrip_preserves_pdf_metadata(client):
+    """A PDF receipt (incl. combined multi-image ones) must keep file_type and
+    pdf_page_count across export → import, or it is served as a broken image."""
+    import os
+
+    import asyncpg
+
+    from app.core.config import settings
+    from app.services.backup_service import export_user_data, import_user_data
+    from app.services.pdf_service import images_to_pdf
+    from tests.conftest import TEST_DATABASE_URL
+    from tests.helpers import make_jpeg_bytes
+
+    admin_headers = await _admin(client)
+    uid = (await _user(client, admin_headers, "bkpPdf@pytest.local"))["uid"]
+    rid = "pdfrt_r1"
+
+    os.makedirs(settings.IMAGE_STORAGE_DIR, exist_ok=True)
+    pdf_path = os.path.join(settings.IMAGE_STORAGE_DIR, f"{rid}.pdf")
+    with open(pdf_path, "wb") as f:
+        f.write(images_to_pdf([make_jpeg_bytes(), make_jpeg_bytes(color=(1, 2, 3))]))
+
+    conn = await asyncpg.connect(TEST_DATABASE_URL)
+    try:
+        await conn.execute(
+            "INSERT INTO receipts (id, user_id, supplier, total_amount, receipt_date, "
+            "status, image_filename, file_type, pdf_page_count) "
+            "VALUES ($1, $2, 'PDF Co', 10.0, CURRENT_DATE, 'processed', $3, "
+            "'application/pdf', 2)",
+            rid, uid, f"{rid}.pdf",
+        )
+    finally:
+        await conn.close()
+
+    exported = await export_user_data(uid)
+    try:
+        assert exported["counts"]["receipts"] == 1
+
+        # Wipe the row + file, then restore from the archive alone.
+        os.remove(pdf_path)
+        conn = await asyncpg.connect(TEST_DATABASE_URL)
+        try:
+            await conn.execute("DELETE FROM receipts WHERE id = $1", rid)
+        finally:
+            await conn.close()
+
+        stats = await import_user_data(uid, exported["path"], conflict="overwrite")
+        assert stats["receipts"] == 1, stats
+
+        conn = await asyncpg.connect(TEST_DATABASE_URL)
+        try:
+            row = await conn.fetchrow(
+                "SELECT image_filename, file_type, pdf_page_count FROM receipts WHERE id = $1",
+                rid,
+            )
+        finally:
+            await conn.close()
+
+        assert row["image_filename"] == f"{rid}.pdf"
+        assert row["file_type"] == "application/pdf"
+        assert row["pdf_page_count"] == 2
+        assert os.path.exists(pdf_path), "PDF bytes must be restored to disk"
+    finally:
+        try:
+            os.remove(exported["path"])
+        except OSError:
+            pass
+
+
 async def _make_receipt_with_image(uid, rid, supplier="SUP A", total=10.0):
     """Insert a receipt + line item + a real image file into the test dirs."""
     import os

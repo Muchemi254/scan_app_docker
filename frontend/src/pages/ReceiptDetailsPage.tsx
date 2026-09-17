@@ -199,6 +199,7 @@ const ReceiptDetailsPage = ({ userId }: { userId: string | null }) => {
                   imageUrl={receipt.imageUrl}
                   altText="Receipt"
                   containerClass="h-56 sm:h-80 md:h-96"
+                  fileType={receipt.fileType}
                 />
               </div>
             )}

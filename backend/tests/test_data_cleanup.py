@@ -244,6 +244,53 @@ async def test_sweep_keeps_live_users_files_and_removes_only_orphans(client):
     assert not os.path.exists(orphan_bk)
 
 
+async def test_purge_removes_pdf_receipt_files(client):
+    """PDF receipts (incl. combined multi-image ones) store {id}.pdf — purge
+    must remove it alongside the thumbnail."""
+    uid = await _make_user(client, "purgepdf@pytest.local")
+    rid = uuid.uuid4().hex[:8]
+    c = await _conn()
+    try:
+        await c.execute(
+            "INSERT INTO receipts (id, user_id, supplier, receipt_date, "
+            "image_filename, file_type, pdf_page_count) "
+            "VALUES ($1, $2, 'PDF Co', '2026-08-01', $3, 'application/pdf', 2)",
+            rid, uid, f"{rid}.pdf",
+        )
+    finally:
+        await c.close()
+
+    pdf = os.path.join(settings.IMAGE_STORAGE_DIR, f"{rid}.pdf")
+    thumb = os.path.join(settings.IMAGE_STORAGE_DIR, f"{rid}_thumb.jpg")
+    open(pdf, "wb").write(b"%PDF-1.4")
+    open(thumb, "wb").write(b"jpeg")
+
+    from app.services.data_cleanup_service import purge_user_data
+    stats = await purge_user_data(uid)
+
+    assert not os.path.exists(pdf), "purge must delete the stored PDF"
+    assert not os.path.exists(thumb)
+    assert stats["removed_images"] == 2
+
+
+async def test_sweep_removes_orphan_pdf_files(client):
+    uid = await _make_user(client, "orphanpdf@pytest.local")
+    seeded = await _seed_user_data(uid, with_review=False, with_errors=False, with_audit=False)
+
+    orphan_pdf = os.path.join(settings.IMAGE_STORAGE_DIR, "deadbeef.pdf")
+    open(orphan_pdf, "wb").write(b"%PDF-1.4")
+    _age(orphan_pdf)
+
+    from app.services.data_cleanup_service import cleanup_orphaned_data
+    import app.core.config as cfg
+    cfg.settings.ENABLE_ORPHAN_IMAGE_FILE_DELETE = True
+    stats = await cleanup_orphaned_data()
+
+    assert not os.path.exists(orphan_pdf), "orphan PDF must be swept"
+    assert os.path.exists(_receipt_image(seeded["rid"]))  # live files kept
+    assert stats["orphan_image_files_removed"] >= 1
+
+
 async def test_force_user_cleanup_purges_even_without_orphan_sweep(client):
     """force_user_cleanup (fired right after a delete) removes everything
     for that user, including a FRESH backup tarball whose row was already

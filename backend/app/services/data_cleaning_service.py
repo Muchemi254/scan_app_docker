@@ -301,6 +301,10 @@ def suggest_total_mismatches(
             "n_items": len(items),
             "imageUrl": r.get("imageUrl") or "",
             "thumbnailUrl": r.get("thumbnailUrl") or r.get("imageUrl") or "",
+            # Carry the stored type so the frontend viewer opens PDF receipts
+            # (incl. combined multi-image ones) in the PDF viewer, not <img>.
+            "fileType": r.get("fileType"),
+            "pdfPageCount": r.get("pdfPageCount"),
             "items": [
                 {
                     "name": i.get("name", ""),

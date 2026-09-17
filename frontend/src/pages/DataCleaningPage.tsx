@@ -37,7 +37,7 @@ const DataCleaningPage = ({ userId }: { userId: string | null }) => {
   const [result, setResult] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [detailMode, setDetailMode] = useState<'all' | 'item'>('all');
-  const [compareImage, setCompareImage] = useState<{ url: string; label: string } | null>(null);
+  const [compareImage, setCompareImage] = useState<{ url: string; label: string; fileType?: string } | null>(null);
   const [dismissing, setDismissing] = useState<string | null>(null);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -513,7 +513,7 @@ const DataCleaningPage = ({ userId }: { userId: string | null }) => {
                       <input type="checkbox" checked={isSelected} onChange={() => toggleAction(actionId)} className="h-4 w-4 rounded border-gray-300 text-blue-600" />
                       <button onClick={() => toggleGroup(actionId)} className="p-0.5 hover:bg-gray-100 rounded">{isExpanded ? <ChevronDown className="h-3.5 w-3.5 text-gray-400" /> : <ChevronRight className="h-3.5 w-3.5 text-gray-400" />}</button>
                       {thumb ? (
-                        <button onClick={() => setCompareImage({ url: m.imageUrl || thumb, label: m.supplier })} className="h-16 w-16 rounded border border-gray-200 overflow-hidden flex-shrink-0 bg-gray-100 hover:border-blue-400">
+                        <button onClick={() => setCompareImage({ url: m.imageUrl || thumb, label: m.supplier, fileType: (m as any).fileType })} className="h-16 w-16 rounded border border-gray-200 overflow-hidden flex-shrink-0 bg-gray-100 hover:border-blue-400">
                           <img src={proxiedImageUrl(thumb)} alt="" className="w-full h-full object-cover" loading="lazy" />
                         </button>
                       ) : (
@@ -577,7 +577,7 @@ const DataCleaningPage = ({ userId }: { userId: string | null }) => {
           <div className="relative max-w-2xl w-full max-h-[90vh]" onClick={e => e.stopPropagation()}>
             <button onClick={() => setCompareImage(null)} className="absolute -top-8 right-0 text-white/70 hover:text-white text-sm flex items-center gap-1"><X className="h-4 w-4" /> Close</button>
             <p className="text-white/80 text-sm mb-2 truncate">{compareImage.label}</p>
-            <ImageViewer imageUrl={compareImage.url} altText="Receipt" containerClass="min-h-[50vh] max-h-[80vh]" />
+            <ImageViewer imageUrl={compareImage.url} altText="Receipt" containerClass="min-h-[50vh] max-h-[80vh]" fileType={compareImage.fileType} />
           </div>
         </div>
       )}

@@ -70,10 +70,14 @@ def _unlink(path: str) -> bool:
 
 
 def _remove_receipt_images(receipt_ids: list[str]) -> int:
-    """Delete <receipt_id>.jpg + <receipt_id>_thumb.jpg for each id."""
+    """Delete a receipt's stored image/PDF + thumbnail for each id.
+
+    Covers ``.jpg`` (single image), ``.pdf`` (uploaded or combined
+    multi-image receipts) and the ``_thumb.jpg`` thumbnail.
+    """
     removed = 0
     for rid in receipt_ids:
-        for name in (f"{rid}.jpg", f"{rid}_thumb.jpg"):
+        for name in (f"{rid}.jpg", f"{rid}.pdf", f"{rid}_thumb.jpg"):
             removed += _unlink(os.path.join(settings.IMAGE_STORAGE_DIR, name))
     return removed
 
@@ -190,10 +194,11 @@ async def _sweep_orphan_backup_files() -> int:
 async def _sweep_orphan_image_files() -> int:
     """Delete top-level, orphan receipt image files in IMAGE_STORAGE_DIR.
 
-    Only `<something>.jpg` / `<something>_thumb.jpg` directly in the storage
-    dir (per-receipt images) are considered; filename-prefixed temp dirs are
-    handled separately. Files referenced by any live receipt or session item
-    are never touched.
+    Only `<something>.jpg` / `<something>.pdf` / `<something>_thumb.jpg`
+    directly in the storage dir (per-receipt files, incl. combined
+    multi-image PDFs) are considered; filename-prefixed temp dirs are handled
+    separately. Files referenced by any live receipt or session item are never
+    touched.
 
     Mass-deletion guard: if the DB reference model comes back empty (e.g. an
     RLS/context quirk hides every row) or we'd remove far more files than the
@@ -202,12 +207,17 @@ async def _sweep_orphan_image_files() -> int:
     """
     referenced = set()
     for r in await _fetch(
-        "SELECT image_filename FROM receipts WHERE image_filename IS NOT NULL"
+        "SELECT image_filename, thumbnail_filename FROM receipts "
+        "WHERE image_filename IS NOT NULL"
     ):
         name = r["image_filename"]
         referenced.add(name)
-        if name.endswith(".jpg"):
-            referenced.add(name[: -len(".jpg")] + "_thumb.jpg")
+        thumb = r["thumbnail_filename"]
+        if thumb:
+            referenced.add(thumb)
+        if name.endswith(".jpg") or name.endswith(".pdf"):
+            base = name.rsplit(".", 1)[0]
+            referenced.add(base + "_thumb.jpg")
     for r in await _fetch(
         "SELECT image_filename FROM scan_session_items WHERE image_filename IS NOT NULL"
     ):
@@ -220,7 +230,11 @@ async def _sweep_orphan_image_files() -> int:
         path = os.path.join(settings.IMAGE_STORAGE_DIR, entry)
         if not os.path.isfile(path):
             continue  # subdirs (temp dirs) handled by _sweep_stale_temp_dirs
-        if not (entry.endswith(".jpg") or entry.endswith("_thumb.jpg")):
+        if not (
+            entry.endswith(".jpg")
+            or entry.endswith("_thumb.jpg")
+            or entry.endswith(".pdf")
+        ):
             continue
         if entry in referenced:
             continue
