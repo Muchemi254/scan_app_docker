@@ -12,6 +12,9 @@ export interface ReceiptTableColumn {
   align?: 'left' | 'right';
 }
 
+  // Sweet-spot widths: short fields get fixed narrow cols (no waste),
+  // long free-text fields get fluid min/max so short names stay tight and
+  // long names truncate with a hover title instead of blowing out the table.
 export const RECEIPT_TABLE_COLUMNS: ReceiptTableColumn[] = [
   { key: 'receiptDate', label: 'Date', sortBy: 'receipt_date', default: true },
   { key: 'supplier', label: 'Supplier', sortBy: 'supplier', default: true },
@@ -29,6 +32,28 @@ export const RECEIPT_TABLE_COLUMNS: ReceiptTableColumn[] = [
   { key: 'cuInvoice', label: 'CU Invoice', sortBy: 'cu_invoice', default: false },
   { key: 'fileType', label: 'PDF', sortBy: 'file_type', default: false },
 ];
+
+// Width classes per column key — compact but not cramped.
+// Fixed cols (date/amounts/status) get an exact w-* so they never stretch;
+// fluid cols (supplier/category/batch/…) get min/max so short names stay
+// tight and long names truncate at a sensible max instead of pushing the table.
+const COLUMN_WIDTHS: Record<string, string> = {
+  receiptDate: 'w-[86px] min-w-[86px] max-w-[86px]',
+  supplier: 'min-w-[110px] max-w-[165px] w-[145px]',
+  totalAmount: 'w-[82px] min-w-[82px] max-w-[82px]',
+  taxAmount: 'w-[72px] min-w-[72px] max-w-[72px]',
+  category: 'min-w-[105px] max-w-[145px] w-[125px]',
+  status: 'w-[88px] min-w-[88px] max-w-[88px]',
+  batchTitle: 'min-w-[95px] max-w-[135px] w-[115px]',
+  invoiceNumber: 'min-w-[100px] max-w-[130px] w-[115px]',
+  entryType: 'w-[88px] min-w-[88px] max-w-[88px]',
+  location: 'min-w-[95px] max-w-[130px] w-[110px]',
+  itemCount: 'w-[52px] min-w-[52px] max-w-[52px]',
+  kraPin: 'w-[106px] min-w-[106px] max-w-[106px]',
+  buyerKraPin: 'w-[106px] min-w-[106px] max-w-[106px]',
+  cuInvoice: 'min-w-[115px] max-w-[142px] w-[128px]',
+  fileType: 'w-[54px] min-w-[54px] max-w-[54px]',
+};
 
 export const RECEIPT_TABLE_DEFAULT_COLUMNS = RECEIPT_TABLE_COLUMNS
   .filter(c => c.default)
@@ -216,15 +241,20 @@ export default function ReceiptsTableView({
         {topRight}
       </div>
 
-      {/* Table */}
+      {/* Table — widths via COLUMN_WIDTHS keep short names tight and long names truncated */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-x-auto">
-        <table className="w-full text-sm min-w-[720px]">
+        <table className="w-full text-sm min-w-[680px]">
+          <colgroup>
+            {columnDefs.map(col => (
+              <col key={col.key} className={COLUMN_WIDTHS[col.key] || ''} />
+            ))}
+          </colgroup>
           <thead>
             <tr className="border-b border-gray-200 bg-gray-50">
               {columnDefs.map(col => (
                 <th
                   key={col.key}
-                  className={`px-3 py-2.5 text-xs font-semibold text-gray-600 whitespace-nowrap ${
+                  className={`px-2 py-2 text-xs font-semibold text-gray-600 whitespace-nowrap ${COLUMN_WIDTHS[col.key] || ''} ${
                     col.align === 'right' ? 'text-right' : 'text-left'
                   } ${col.sortBy ? 'cursor-pointer select-none hover:text-blue-600' : ''}`}
                   onClick={() => headerClick(col)}
@@ -247,7 +277,7 @@ export default function ReceiptsTableView({
                 {columnDefs.map(col => {
                   const isBlank = columnFilters?.[col.key] === '__BLANK__';
                   return (
-                    <th key={col.key} className="px-1 py-1">
+                    <th key={col.key} className={`px-1 py-1 ${COLUMN_WIDTHS[col.key] || ''}`}>
                       {isBlank ? (
                         <button
                           onClick={() => onColumnFilter(col.key, '')}
@@ -306,15 +336,18 @@ export default function ReceiptsTableView({
                     return (
                       <td
                         key={col.key}
-                        className={`px-3 py-2 text-gray-700 whitespace-nowrap ${col.align === 'right' ? 'text-right tabular-nums' : ''}`}
+                        className={`px-2 py-1.5 text-gray-700 ${COLUMN_WIDTHS[col.key] || ''} ${col.align === 'right' ? 'text-right tabular-nums' : 'text-left'}`}
+                        title={isPdf ? v : v || undefined}
                       >
-                        {isPdf ? (
+                        <div className="truncate">
+                          {isPdf ? (
                           <span className="inline-flex rounded bg-red-500 text-white text-[10px] font-semibold px-1.5 py-0.5">
                             {v}
                           </span>
                         ) : (
-                          v || <span className="text-gray-300">—</span>
+                          v ? <span className="truncate block" title={v}>{v}</span> : <span className="text-gray-300">—</span>
                         )}
+                        </div>
                       </td>
                     );
                   })}
