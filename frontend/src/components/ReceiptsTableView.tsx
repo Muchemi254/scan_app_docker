@@ -38,7 +38,8 @@ export const RECEIPT_TABLE_COLUMNS: ReceiptTableColumn[] = [
 // fluid cols (supplier/category/batch/…) get min/max so short names stay
 // tight and long names truncate at a sensible max instead of pushing the table.
 const COLUMN_WIDTHS: Record<string, string> = {
-  receiptDate: 'w-[86px] min-w-[86px] max-w-[86px]',
+  // Full MM/DD/YYYY fits without truncation (10 chars + px-2 padding).
+  receiptDate: 'w-[108px] min-w-[108px] max-w-[108px]',
   supplier: 'min-w-[110px] max-w-[165px] w-[145px]',
   totalAmount: 'w-[82px] min-w-[82px] max-w-[82px]',
   taxAmount: 'w-[72px] min-w-[72px] max-w-[72px]',
